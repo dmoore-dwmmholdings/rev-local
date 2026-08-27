@@ -90,6 +90,10 @@ mod changes {
             started_at: Some(at(3)),
             finished_at: None,
             transcript_path: None,
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
             created_at: at(3),
         }
     }
@@ -453,6 +457,106 @@ mod changes {
             .await
             .expect_err("a failure with no error must be refused");
         assert!(matches!(error, StoreError::Corrupt { .. }), "got {error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_truncated_run_records_what_it_did_not_see() {
+        // SPEC §18: "a review that saw 60% of the diff must never look like a review
+        // that saw all of it." Before RL-1304 this lived only in the in-memory
+        // ChangeContext and died with the process, so the UI had nothing to show.
+        let (_dir, pool, _, change_id) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let store = RunStore::new(&pool);
+
+        let mut run = a_run(change_id, 1, RunStatus::Done);
+        run.truncated = true;
+        run.omitted_files = vec![
+            "generated/mod_198.rs".to_owned(),
+            "generated/mod_199.rs".to_owned(),
+            "generated/mod_200.rs".to_owned(),
+        ];
+
+        let back = store
+            .get(
+                store
+                    .insert(&run)
+                    .await
+                    .unwrap_or_else(|e| panic!("insert: {e}"))
+                    .id,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("get: {e}"));
+
+        assert!(back.truncated);
+        assert_eq!(
+            back.omitted_files.len(),
+            3,
+            "§9.4: the omitted list is stored IN FULL, not as a count"
+        );
+        assert!(back
+            .omitted_files
+            .contains(&"generated/mod_200.rs".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn a_run_claiming_truncation_with_no_omitted_files_is_refused() {
+        // Claiming something was dropped without saying what is the silent cap §18
+        // exists to prevent — and it is worse than not claiming it, because the UI
+        // would show a truncation warning with nothing behind it.
+        let (_dir, pool, _, change_id) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let mut run = a_run(change_id, 1, RunStatus::Done);
+        run.truncated = true;
+
+        let error = RunStore::new(&pool)
+            .insert(&run)
+            .await
+            .expect_err("a truncated run with no omitted files must be refused");
+        assert!(matches!(error, StoreError::Corrupt { .. }), "got {error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_runs_verdict_is_stored_rather_than_recomputed() {
+        // §10.2's verdict is a HISTORICAL FACT — what was posted. Recomputing it
+        // from findings would change retroactively as findings are suppressed or
+        // superseded, so a run that requested changes would silently become one that
+        // approved, and the audit trail would disagree with what GitHub shows.
+        let (_dir, pool, _, change_id) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let runs = RunStore::new(&pool);
+        let findings = FindingStore::new(&pool);
+
+        let mut run = a_run(change_id, 1, RunStatus::Done);
+        run.verdict = Some(revlocal_core::Verdict::RequestChanges);
+        run.summary = Some("Two defects, one blocking.".to_owned());
+        let stored = runs
+            .insert(&run)
+            .await
+            .unwrap_or_else(|e| panic!("insert: {e}"));
+
+        let finding = findings
+            .insert(&a_finding(stored.id, "fp-blocking"))
+            .await
+            .unwrap_or_else(|e| panic!("insert finding: {e}"));
+
+        // Suppress the only blocking finding. A recomputed verdict would now be
+        // `approve`; the stored one must not move.
+        findings
+            .set_state(finding.id, revlocal_core::FindingState::Suppressed)
+            .await
+            .unwrap_or_else(|e| panic!("suppress: {e}"));
+
+        let back = runs
+            .get(stored.id)
+            .await
+            .unwrap_or_else(|e| panic!("get: {e}"));
+        assert_eq!(
+            back.verdict,
+            Some(revlocal_core::Verdict::RequestChanges),
+            "suppressing a finding must not rewrite history"
+        );
+        assert_eq!(
+            back.summary.as_deref(),
+            Some("Two defects, one blocking."),
+            "the engine's summary outlives the transcript, which retention prunes"
+        );
     }
 
     #[tokio::test]

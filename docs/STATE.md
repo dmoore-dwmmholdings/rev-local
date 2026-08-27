@@ -1,16 +1,14 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-1304
+- current_item: RL-309
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs --test github_pr_discover
-- last_gate_result: PASS — exit 0, 16 passed.
-- next_action: **RECOMMENDED NEXT: RL-1304 (REVL-114)** — audit §5's DDL against
-    §§6–12 in one pass. Three amendments have come from that same gap already, each
-    costing a migration + sqlx prepare + SPEC edit + ADR *after* the surrounding code
-    was written. §9.4's `truncated` / omitted-file list looks like the next one, and
-    RL-309 (truncation) is imminent. Filed at `high`; the backlog's own next item by
-    priority is RL-309 (REVL-38). Also outstanding in M4: REVL-113 (RL-305b).
+- last_gate_command: cargo test -p revlocal-store
+- last_gate_result: PASS — exit 0, 68 passed.
 - last_visual: n/a
+- next_action: RL-309 (REVL-38) — diff truncation. The schema is already there:
+    `run.truncated` and `run.omitted_files_json` landed in RL-1304, and
+    `Run::is_consistent` already refuses a truncated run with an empty omitted list.
+    Also outstanding in M4: REVL-113 (RL-305b).
 
 ## counting tests
 
@@ -218,6 +216,13 @@ line to change if a decision comes back differently.
 The spec has been changed once, under the SPEC §5 implementation note ("if you must
 deviate, do it — but record why in docs/adr/ and update this section in the same
 commit").
+
+- **Five columns added in ONE migration (`0004`)** by the §5 audit (`RL-1304`, ADR
+  0016), rather than one at a time while implementing: `run.truncated`,
+  `run.omitted_files_json`, `run.verdict`, `run.summary`,
+  `publish_action.next_attempt_at`. Plus two `RepoConfig` fields §7.3 required and
+  §13.2 lacked: `webhook_enabled`, `webhook_secret_ref`. **ADR 0016 also lists what
+  was deliberately NOT added, so the next audit does not re-litigate it.**
 
 - **`repo.github_transport TEXT`** added in migration `0003` (`RL-307`, ADR 0015).
   §6.3 says the selected transport is "stored on the repo row" and §5 had nowhere to

@@ -203,13 +203,21 @@ impl<'a> RunStore<'a> {
         let started = run.started_at.map(format_time);
         let finished = run.finished_at.map(format_time);
         let created = format_time(run.created_at);
+        let truncated = i64::from(run.truncated);
+        let omitted =
+            serde_json::to_string(&run.omitted_files).map_err(|e| StoreError::Corrupt {
+                column: "run.omitted_files_json",
+                detail: e.to_string(),
+            })?;
+        let verdict = run.verdict.map(|v| v.as_str());
 
         let id = sqlx::query!(
             "INSERT INTO run
                (change_id, attempt, status, engine, depth, trigger, skip_reason, error,
                 degraded, tokens_in, tokens_out, cost_usd, started_at, finished_at,
-                transcript_path, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                transcript_path, created_at, truncated, omitted_files_json, verdict,
+                summary)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
             change_id,
             attempt,
@@ -227,6 +235,10 @@ impl<'a> RunStore<'a> {
             finished,
             run.transcript_path,
             created,
+            truncated,
+            omitted,
+            verdict,
+            run.summary,
         )
         .fetch_one(self.pool)
         .await
@@ -251,7 +263,8 @@ impl<'a> RunStore<'a> {
         let row = sqlx::query!(
             "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,
                     error, degraded, tokens_in, tokens_out, cost_usd, started_at,
-                    finished_at, transcript_path, created_at
+                    finished_at, transcript_path, created_at, truncated,
+                    omitted_files_json, verdict, summary
              FROM run WHERE id = ?",
             raw
         )
@@ -287,6 +300,23 @@ impl<'a> RunStore<'a> {
                 .map(|t| parse_time("run.finished_at", &t))
                 .transpose()?,
             transcript_path: row.transcript_path,
+            truncated: row.truncated != 0,
+            omitted_files: row
+                .omitted_files_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|e| StoreError::Corrupt {
+                    column: "run.omitted_files_json",
+                    detail: e.to_string(),
+                })?
+                .unwrap_or_default(),
+            verdict: row
+                .verdict
+                .as_deref()
+                .map(|v| parse_enum::<revlocal_core::Verdict>("run.verdict", v))
+                .transpose()?,
+            summary: row.summary,
             created_at: parse_time("run.created_at", &row.created_at)?,
         })
     }

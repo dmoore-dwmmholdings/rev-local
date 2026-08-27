@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,\n                    error, degraded, tokens_in, tokens_out, cost_usd, started_at,\n                    finished_at, transcript_path, created_at\n             FROM run WHERE id = ?",
+  "query": "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,\n                    error, degraded, tokens_in, tokens_out, cost_usd, started_at,\n                    finished_at, transcript_path, created_at, truncated,\n                    omitted_files_json, verdict, summary\n             FROM run WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -189,6 +189,50 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "name": "truncated",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "truncated"
+          }
+        }
+      },
+      {
+        "name": "omitted_files_json",
+        "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "omitted_files_json"
+          }
+        }
+      },
+      {
+        "name": "verdict",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "summary",
+        "ordinal": 20,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "summary"
+          }
+        }
       }
     ],
     "parameters": {
@@ -211,8 +255,12 @@
       true,
       true,
       true,
-      false
+      false,
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "115607038744e00eb2702caf6a0d2661a39f2ae5811ec393de70a9cdaaf3eae3"
+  "hash": "bbd2d523b724081d4224a0f3fd47405eb76d98165c50bbc506a91979269b8e35"
 }

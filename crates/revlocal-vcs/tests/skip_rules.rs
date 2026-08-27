@@ -504,6 +504,10 @@ mod skip_rules {
                 started_at: None,
                 finished_at: Some(at),
                 transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
                 created_at: at,
             })
             .await

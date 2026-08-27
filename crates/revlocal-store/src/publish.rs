@@ -183,6 +183,51 @@ impl<'a> PublishActionStore<'a> {
         Ok(())
     }
 
+    /// Record when this action may next be attempted (SPEC §11.6).
+    ///
+    /// Stored rather than held in memory so a restart does not make every pending
+    /// action immediately due — which would defeat backoff at exactly the moment it
+    /// matters, since a restart often follows the burst of failures that caused it.
+    pub async fn schedule_retry(&self, id: PublishActionId, at: Timestamp) -> Result<()> {
+        let raw = id.get();
+        let when = format_time(at);
+        let affected = sqlx::query!(
+            "UPDATE publish_action SET next_attempt_at = ? WHERE id = ?",
+            when,
+            raw
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "publish_action",
+                key: format!("id={raw}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// When this action may next be attempted, if a retry is scheduled.
+    pub async fn next_attempt_at(&self, id: PublishActionId) -> Result<Option<Timestamp>> {
+        let raw = id.get();
+        let row = sqlx::query!(
+            "SELECT next_attempt_at FROM publish_action WHERE id = ?",
+            raw
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::NotFound {
+            entity: "publish_action",
+            key: format!("id={raw}"),
+        })?;
+
+        row.next_attempt_at
+            .map(|t| parse_time("publish_action.next_attempt_at", &t))
+            .transpose()
+    }
+
     /// Every action belonging to one run, in creation order.
     pub async fn list_for_run(&self, run_id: RunId) -> Result<Vec<PublishAction>> {
         let raw = run_id.get();

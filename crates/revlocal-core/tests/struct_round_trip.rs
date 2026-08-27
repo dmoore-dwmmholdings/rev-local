@@ -88,6 +88,10 @@ fn a_run() -> Run {
         started_at: Some(at()),
         finished_at: Some(at()),
         transcript_path: None,
+        truncated: false,
+        omitted_files: Vec::new(),
+        verdict: None,
+        summary: None,
         degraded: None,
         created_at: at(),
     }

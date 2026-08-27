@@ -53,6 +53,15 @@ pub struct RepoConfig {
     ///
     /// Load-bearing for risk: publishing is high risk, a draft is low (SPEC §12.3).
     pub trama_publish: bool,
+    /// Whether the webhook listener is enabled for this repo (SPEC §7.3).
+    ///
+    /// Off by default and opt-in per repo, as §7.3 requires: a listener bound
+    /// without the user asking is a port they did not open.
+    pub webhook_enabled: bool,
+    /// Keychain entry holding this repo's webhook secret (SPEC §7.3, §13.1).
+    ///
+    /// A **reference**, never the secret. §13.1: secrets are never in this file.
+    pub webhook_secret_ref: Option<String>,
     /// Whether `request_changes` produces a failing check (SPEC §11.3).
     pub block_on_findings: bool,
     /// Whether the app may submit a GitHub `APPROVE` review.
@@ -116,6 +125,8 @@ impl Default for RepoConfig {
             andare_key_regex: r"[A-Z][A-Z0-9]+-\d+".to_owned(),
             trama_space: None,
             trama_publish: false,
+            webhook_enabled: false,
+            webhook_secret_ref: None,
             block_on_findings: false,
             allow_approve: false,
             merge_detect_regex: r"(?i)\b(merge|reintegrat\w+)\b.*\b(branches?/[\w./-]+)".to_owned(),

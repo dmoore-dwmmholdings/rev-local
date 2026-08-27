@@ -230,6 +230,11 @@ CREATE TABLE run (
   skip_reason       TEXT,
   error             TEXT,
   degraded          TEXT,                    -- why output was salvaged (§8.2); NULL = clean
+  truncated         INTEGER NOT NULL DEFAULT 0,  -- §9.4/§18: the diff was reduced
+  omitted_files_json TEXT,                   -- §9.4: the omitted list, in full
+  verdict           TEXT                     -- §10.2; the verdict as posted, not recomputed
+                      CHECK (verdict IN ('approve','comment','request_changes')),
+  summary           TEXT,                    -- §8.3 engine summary, <= 1200 chars
   tokens_in         INTEGER NOT NULL DEFAULT 0,
   tokens_out        INTEGER NOT NULL DEFAULT 0,
   cost_usd          REAL,
@@ -281,6 +286,7 @@ CREATE TABLE publish_action (
   status            TEXT NOT NULL CHECK (status IN
                       ('pending','awaiting_approval','approved','rejected','sent','failed','skipped_dry_run')),
   attempts          INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at   TEXT,                    -- §11.6 backoff; survives a restart
   response_json     TEXT,
   external_ref      TEXT,                    -- issue key, PR review id, page id/url
   error             TEXT,
@@ -993,6 +999,8 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
   "andare_key_regex": "[A-Z][A-Z0-9]+-\\d+",
   "trama_space": "ENG",
   "trama_publish": false,
+  "webhook_enabled": false,             // §7.3: off by default, explicit opt-in per repo
+  "webhook_secret_ref": null,           // keychain reference, never the secret itself
   "block_on_findings": false,
   "allow_approve": false,
   "merge_detect_regex": "(?i)\\b(merge|reintegrat\\w+)\\b.*\\b(branches?/[\\w./-]+)"

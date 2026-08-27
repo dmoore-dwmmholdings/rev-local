@@ -133,6 +133,8 @@ url = "https://trama.example.com/mcp"
   "andare_min_severity": "high",
   "andare_key_regex": "[A-Z][A-Z0-9]+-\\d+",
   "trama_publish": false,
+  "webhook_enabled": false,
+  "webhook_secret_ref": null,
   "block_on_findings": false,
   "allow_approve": false,
   "merge_detect_regex": "(?i)\\b(merge|reintegrat\\w+)\\b.*\\b(branches?/[\\w./-]+)"

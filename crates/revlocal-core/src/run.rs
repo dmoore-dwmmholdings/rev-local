@@ -1,6 +1,6 @@
 //! The `run` table and token accounting (SPEC §5, §8).
 
-use crate::{ChangeId, Depth, EngineKind, RunId, RunStatus, Timestamp, TriggerSource};
+use crate::{ChangeId, Depth, EngineKind, RunId, RunStatus, Timestamp, TriggerSource, Verdict};
 use serde::{Deserialize, Serialize};
 
 /// One execution of the pipeline against one change (`run`, SPEC §3).
@@ -37,6 +37,30 @@ pub struct Run {
     pub finished_at: Option<Timestamp>,
     /// Path to the raw engine stdout on disk. Pruned by retention (SPEC §5.1).
     pub transcript_path: Option<String>,
+    /// Whether the diff was reduced before the engine saw it (SPEC §9.4).
+    ///
+    /// SPEC §18: "a review that saw 60% of the diff must never look like a review
+    /// that saw all of it." This is what stops that, so it is stored on the run
+    /// rather than living only in the in-memory context.
+    pub truncated: bool,
+    /// What was left out, **in full** (SPEC §9.4).
+    ///
+    /// §9.4: "Truncation must never silently hide a file: the omitted file list is
+    /// always included in full." A count would not satisfy that; the names are the
+    /// point.
+    pub omitted_files: Vec<String>,
+    /// The verdict this review reached (SPEC §10.2).
+    ///
+    /// Stored rather than recomputed from findings. It is a **historical fact** —
+    /// what was posted — and recomputing it would change retroactively as findings
+    /// are suppressed or superseded, so a run that requested changes would silently
+    /// become one that approved.
+    pub verdict: Option<Verdict>,
+    /// The engine's own summary (SPEC §8.3), at most 1200 characters.
+    ///
+    /// Not derivable from anything else, and it outlives the transcript, which
+    /// retention prunes after 30 days (§5.1).
+    pub summary: Option<String>,
     /// Why the engine output had to be salvaged, when it did.
     ///
     /// `Some` exactly when a step of the §8.2 fallback ladder was used. Typed as a
@@ -62,7 +86,10 @@ impl Run {
     pub fn is_consistent(&self) -> bool {
         let skip_ok = (self.status == RunStatus::Skipped) == self.skip_reason.is_some();
         let error_ok = (self.status == RunStatus::Failed) == self.error.is_some();
-        skip_ok && error_ok
+        // §9.4/§18: a truncated run must say WHAT was omitted. Claiming truncation
+        // with an empty list is the silent cap the rule exists to prevent.
+        let truncation_ok = !self.truncated || !self.omitted_files.is_empty();
+        skip_ok && error_ok && truncation_ok
     }
 }
 

@@ -78,6 +78,10 @@ mod publish {
                 started_at: Some(at(2)),
                 finished_at: None,
                 transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
                 created_at: at(2),
             })
             .await?;
@@ -368,6 +372,45 @@ mod publish {
                 .unwrap_or_else(|e| panic!("query: {e}")),
             0,
             "one repo's burst must not escalate another's actions"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backoff_deadline_survives_a_restart() {
+        // §11.6: 5 attempts with exponential backoff. `attempts` alone cannot say
+        // WHEN the next attempt is due, so without this every pending action becomes
+        // due the instant the process restarts — and the backoff that exists to stop
+        // rev-local hammering a rate-limited target is defeated by exactly the event
+        // most likely to follow a burst of failures.
+        let (dir, pool, _, run_id) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let store = PublishActionStore::new(&pool);
+
+        let action = store
+            .insert(&an_action(run_id, "andare", "k"))
+            .await
+            .unwrap_or_else(|e| panic!("insert: {e}"));
+
+        store
+            .schedule_retry(action.id, at(5))
+            .await
+            .unwrap_or_else(|e| panic!("schedule: {e}"));
+
+        let path = dir.path().join("rev-local.db");
+        pool.close().await;
+
+        // Reopen, as a restart would.
+        let reopened = revlocal_store::open(&path)
+            .await
+            .unwrap_or_else(|e| panic!("reopen: {e}"));
+        let due = PublishActionStore::new(&reopened)
+            .next_attempt_at(action.id)
+            .await
+            .unwrap_or_else(|e| panic!("read: {e}"));
+
+        assert_eq!(
+            due,
+            Some(at(5)),
+            "the backoff deadline must survive a restart"
         );
     }
 
