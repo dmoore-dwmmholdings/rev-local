@@ -22,20 +22,11 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// what turns it into a short wait instead of a `database is locked` error.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Anything that can go wrong reaching the database.
-#[derive(Debug, thiserror::Error)]
-pub enum StoreError {
-    /// The database rejected a statement or could not be reached.
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
+mod error;
+mod repos;
 
-    /// A migration could not be applied or reverted.
-    #[error("migration error: {0}")]
-    Migrate(#[from] sqlx::migrate::MigrateError),
-}
-
-/// The store's result alias.
-pub type Result<T, E = StoreError> = std::result::Result<T, E>;
+pub use error::{Result, StoreError};
+pub use repos::{CursorStore, RepoStore};
 
 /// A pool of connections to one rev-local database.
 pub type Pool = sqlx::SqlitePool;

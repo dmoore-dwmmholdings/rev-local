@@ -50,13 +50,19 @@ mod migrations {
         )
     }
 
-    async fn column_names(pool: &Pool, table: &str) -> Result<Vec<String>, sqlx::Error> {
-        Ok(sqlx::query(&format!("PRAGMA table_info({table})"))
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|row| row.get::<String, _>("name"))
-            .collect())
+    async fn column_names(pool: &Pool, table: &'static str) -> Result<Vec<String>, sqlx::Error> {
+        // PRAGMA does not accept a bind parameter, so the table name has to be
+        // interpolated. `table` is a `&'static str` from this file's own
+        // constants — never user input — which is the audit sqlx 0.9's
+        // `AssertSqlSafe` asks for.
+        Ok(
+            sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(|row| row.get::<String, _>("name"))
+                .collect(),
+        )
     }
 
     #[tokio::test]

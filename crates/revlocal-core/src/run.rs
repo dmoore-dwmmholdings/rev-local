@@ -107,3 +107,204 @@ impl Usage {
         self.cost_usd.is_some()
     }
 }
+
+/// A run status change that the lifecycle does not allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a run cannot move from `{from}` to `{to}`")]
+pub struct IllegalTransition {
+    /// The status the run is in.
+    pub from: RunStatus,
+    /// The status that was requested.
+    pub to: RunStatus,
+}
+
+impl RunStatus {
+    /// The statuses a run may move to from here (SPEC §5, §9.1).
+    ///
+    /// The pipeline is mostly linear, with three ways out of any active stage:
+    /// failure, cancellation (the kill switch, §12.1), and — before the engine
+    /// runs — a skip.
+    ///
+    /// Terminal statuses have no successors. That is the property worth having:
+    /// a finished run cannot be quietly restarted in place, so its history stays
+    /// readable. A retry is a new run with a higher `attempt`, which is why
+    /// `(change_id, attempt)` is the unique key rather than `change_id`.
+    pub const fn allowed_next(self) -> &'static [Self] {
+        match self {
+            Self::Queued => &[
+                Self::Preparing,
+                Self::Skipped,
+                Self::Cancelled,
+                Self::Failed,
+            ],
+            Self::Preparing => &[
+                Self::Reviewing,
+                Self::Skipped,
+                Self::Failed,
+                Self::Cancelled,
+            ],
+            Self::Reviewing => &[Self::Synthesizing, Self::Failed, Self::Cancelled],
+            Self::Synthesizing => &[Self::Publishing, Self::Done, Self::Failed, Self::Cancelled],
+            // Publishing reaches awaiting_approval when a high-risk action is
+            // queued to the inbox (§12.4), and done when every action resolved.
+            Self::Publishing => &[
+                Self::AwaitingApproval,
+                Self::Done,
+                Self::Failed,
+                Self::Cancelled,
+            ],
+            // An approval decision sends it back to publishing; a rejection of
+            // everything outstanding finishes it.
+            Self::AwaitingApproval => &[Self::Publishing, Self::Done, Self::Cancelled],
+            Self::Done | Self::Failed | Self::Skipped | Self::Cancelled => &[],
+        }
+    }
+
+    /// Whether a run may move from this status to `next`.
+    pub fn can_transition_to(self, next: Self) -> bool {
+        self.allowed_next().contains(&next)
+    }
+
+    /// Check a transition, naming both ends when it is refused.
+    pub fn check_transition(self, next: Self) -> Result<(), IllegalTransition> {
+        if self.can_transition_to(next) {
+            Ok(())
+        } else {
+            Err(IllegalTransition {
+                from: self,
+                to: next,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_happy_path_through_the_pipeline_is_walkable() {
+        let path = [
+            RunStatus::Queued,
+            RunStatus::Preparing,
+            RunStatus::Reviewing,
+            RunStatus::Synthesizing,
+            RunStatus::Publishing,
+            RunStatus::Done,
+        ];
+        for pair in path.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            assert!(from.can_transition_to(to), "{from} -> {to} must be allowed");
+        }
+    }
+
+    #[test]
+    fn a_finished_run_cannot_be_restarted_in_place() {
+        // The acceptance criterion's example, and the reason `(change_id,
+        // attempt)` is the unique key: a retry is a new run, so the history of
+        // what was tried survives.
+        let error = RunStatus::Done
+            .check_transition(RunStatus::Reviewing)
+            .expect_err("done -> reviewing must be refused");
+        assert_eq!(error.from, RunStatus::Done);
+        assert_eq!(error.to, RunStatus::Reviewing);
+        assert!(error.to_string().contains("done"), "{error}");
+        assert!(error.to_string().contains("reviewing"), "{error}");
+    }
+
+    #[test]
+    fn every_terminal_status_is_a_dead_end() {
+        for status in RunStatus::ALL {
+            if status.is_terminal() {
+                assert!(
+                    status.allowed_next().is_empty(),
+                    "{status} is terminal but has successors"
+                );
+                for next in RunStatus::ALL {
+                    assert!(!status.can_transition_to(*next), "{status} -> {next}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminality_and_the_transition_table_agree() {
+        // Two independent statements of the same fact; if they disagree, one of
+        // them is a bug rather than a redundancy.
+        for status in RunStatus::ALL {
+            assert_eq!(
+                status.is_terminal(),
+                status.allowed_next().is_empty(),
+                "{status}: is_terminal() and allowed_next() disagree"
+            );
+        }
+    }
+
+    #[test]
+    fn every_active_status_can_be_cancelled() {
+        // SPEC §12.1: the kill switch cancels every token and drains the queues.
+        // A stage that cannot be cancelled would survive it.
+        for status in RunStatus::ALL {
+            if !status.is_terminal() {
+                assert!(
+                    status.can_transition_to(RunStatus::Cancelled),
+                    "{status} must be cancellable by the kill switch"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_run_cannot_be_skipped_once_the_engine_has_started() {
+        // Skipping means "not reviewed" (§9.4). After `reviewing`, tokens have
+        // been spent, so the honest terminal states are done, failed or cancelled.
+        assert!(RunStatus::Queued.can_transition_to(RunStatus::Skipped));
+        assert!(RunStatus::Preparing.can_transition_to(RunStatus::Skipped));
+        for started in [
+            RunStatus::Reviewing,
+            RunStatus::Synthesizing,
+            RunStatus::Publishing,
+        ] {
+            assert!(
+                !started.can_transition_to(RunStatus::Skipped),
+                "{started} -> skipped would report spent tokens as not reviewed"
+            );
+        }
+    }
+
+    #[test]
+    fn an_approval_decision_returns_the_run_to_publishing() {
+        // §12.4: an approved action still has to be sent.
+        assert!(RunStatus::AwaitingApproval.can_transition_to(RunStatus::Publishing));
+        assert!(RunStatus::AwaitingApproval.can_transition_to(RunStatus::Done));
+    }
+
+    #[test]
+    fn no_status_transitions_to_itself() {
+        // A self-transition would let a stage silently "restart" without an
+        // attempt increment, which is exactly what the unique key prevents.
+        for status in RunStatus::ALL {
+            assert!(!status.can_transition_to(*status), "{status} -> {status}");
+        }
+    }
+
+    #[test]
+    fn no_status_can_go_backwards_through_the_pipeline() {
+        // Declaration order of the non-terminal statuses is the pipeline order.
+        let pipeline = [
+            RunStatus::Queued,
+            RunStatus::Preparing,
+            RunStatus::Reviewing,
+            RunStatus::Synthesizing,
+            RunStatus::Publishing,
+        ];
+        for (index, from) in pipeline.iter().enumerate() {
+            for earlier in &pipeline[..index] {
+                assert!(
+                    !from.can_transition_to(*earlier),
+                    "{from} must not go back to {earlier}"
+                );
+            }
+        }
+    }
+}

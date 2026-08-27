@@ -67,6 +67,15 @@ jobs:
       - name: Create log directory
         run: mkdir -p artifacts/logs artifacts/gui
 
+      # SQLX_OFFLINE is set in .cargo/config.toml, so the macros read the
+      # committed .sqlx metadata and CI needs no database. This asserts the
+      # metadata is actually present — a missing .sqlx would otherwise fail with
+      # a confusing "set DATABASE_URL" error rather than naming the real problem.
+      - name: Check sqlx offline metadata is committed
+        run: |
+          test -d crates/revlocal-store/.sqlx \
+            || { echo "crates/revlocal-store/.sqlx is missing; run: cargo sqlx prepare"; exit 1; }
+
       - name: cargo fmt
         run: |
           set -o pipefail

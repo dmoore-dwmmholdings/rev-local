@@ -1,13 +1,11 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-109
-- item_status: not_started
-- last_gate_command: cargo test -p revlocal-store migrations
-- last_gate_result: PASS — exit 0, 12 passed.
+- current_item: RL-109b
+- item_status: in_progress
+- last_gate_command: cargo test -p revlocal-store
+- last_gate_result: PASS — exit 0, 24 passed (12 migrations + 12 repos).
 - last_visual: n/a
-- next_action: RL-109 (REVL-22) — store repositories (CRUD) for every entity. First
-    decide compile-time-checked `query!` + committed `.sqlx/` vs runtime `query()`;
-    see the note at the end of ADR 0008.
+- next_action: RL-109b (REVL-110) — change upsert, run transitions, finding by fingerprint
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1

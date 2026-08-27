@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cursor (repo_id, scope, value, updated_at)\n             VALUES (?, ?, ?, ?)\n             ON CONFLICT (repo_id, scope) DO UPDATE\n               SET value = excluded.value, updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "27360883fa324804509ad32b80a48b87c5e3c30b2df106b8fb005c79bd24b937"
+}

@@ -9,6 +9,7 @@ authors.workspace = true
 description = "SQLite persistence: migrations, entity repositories, audit log and budget ledger."
 
 [dependencies]
+chrono = { workspace = true }
 revlocal-core = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }

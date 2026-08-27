@@ -58,4 +58,4 @@ pub use risk::{
     classify, ActionIntent, CheckConclusion, RiskAssessment, RiskInputs, RiskReason,
     DEFAULT_BURST_THRESHOLD,
 };
-pub use run::{Run, Usage};
+pub use run::{IllegalTransition, Run, Usage};
