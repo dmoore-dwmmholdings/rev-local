@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-506b (REVL-117)
+- current_item: RL-507 (REVL-52)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-cli review
-- last_gate_result: PASS — 8 tests, 8 passed; workspace 605 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-daemon determinism
+- last_gate_result: PASS — 7 tests, 7 passed; workspace 612 passed / 0 failed
 - last_visual: n/a
-- next_action: REVL-52 — M6 exit gate
+- next_action: confirm M6 is complete, run the §4 checkpoint, write the Trama build log for M4/M5/M6
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -614,3 +614,39 @@ command.
 ## M6 is feature-complete pending its exit gate
 
 RL-501..506 all closed with observed gates. REVL-52 (the M6 exit gate) is next.
+
+## the determinism audit found nothing — so the work was making it a rule
+
+Zero `HashMap`/`HashSet` in any library crate. `Extra` (unknown config keys) is a
+`BTreeMap`; the only `read_dir` is inside a guard test. The property already held.
+
+So RL-507's real deliverable is the **source guard** that keeps it holding.
+Behavioural determinism tests are weak here on their own: a `HashMap` with three
+entries iterates consistently often enough to pass for months and fail in someone
+else's CI. The guard scans five crates and cannot be satisfied by luck.
+
+It strips `//` comments (prose about the rule is not a violation), walks directories
+sorted (a guard reporting in filesystem order would itself be nondeterministic), and
+has a self-test feeding it one file it must reject and one it must accept.
+
+## a golden pasted from the code it tests pins the bug too
+
+The four fingerprint goldens were **independently recomputed from §10.3's text** by a
+separate implementation before being committed. All four agreed.
+
+Worth stating as a rule: **a golden captured from the implementation only freezes
+current behaviour.** If the algorithm were wrong, the golden would guarantee it stayed
+wrong — and for fingerprints that means every stored suppression silently breaking on
+the day it is fixed.
+
+## why five repetitions, not two
+
+An ordering that differs between two hash instances agrees by chance roughly half the
+time with four items. Two runs compared once is a coin flip dressed as a test.
+
+## a criterion openly deferred beats one that looks covered
+
+RL-507's criterion names "publish plans" and there is no plan builder — §11 is M7. The
+test asserts the *input* to the plan and says so in its own doc comment rather than
+quietly counting the criterion as met. The source guard already covers
+`revlocal-publish`, so the builder cannot introduce the problem when it lands.
