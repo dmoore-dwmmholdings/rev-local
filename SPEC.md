@@ -306,7 +306,8 @@ CREATE TABLE budget_ledger (
   runs              INTEGER NOT NULL DEFAULT 0,
   tokens_in         INTEGER NOT NULL DEFAULT 0,
   tokens_out        INTEGER NOT NULL DEFAULT 0,
-  cost_usd          REAL NOT NULL DEFAULT 0,
+  cost_usd          REAL NOT NULL DEFAULT 0,   -- sum of the costs actually reported
+  cost_complete     INTEGER NOT NULL DEFAULT 1, -- 0 if any run reported no cost (§18)
   UNIQUE (repo_id, day)
 );
 ```

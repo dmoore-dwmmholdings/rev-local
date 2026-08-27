@@ -192,6 +192,7 @@ fn every_domain_struct_round_trips_through_json() {
             day: "2026-08-27".into(),
             runs: 3,
             usage: Usage::default(),
+            known_cost_usd: 0.0,
         }),
     ];
 
@@ -358,6 +359,7 @@ fn budget_exhaustion_pauses_rather_than_being_read_as_headroom() {
             tokens_out: 100,
             cost_usd: None,
         },
+        known_cost_usd: 0.0,
     };
     assert!(
         entry.runs_exhausted(10),
@@ -365,6 +367,14 @@ fn budget_exhaustion_pauses_rather_than_being_read_as_headroom() {
     );
     assert!(entry.tokens_exhausted(1_000));
     assert!(!entry.tokens_exhausted(1_001));
+
+    // The cost side cannot answer, and "cannot tell" must not read as "fine".
+    assert!(!entry.cost_is_complete());
+    assert_eq!(
+        entry.cost_exhausted(10.0),
+        None,
+        "an unmeasured day must not report headroom it has not been shown to have"
+    );
 }
 
 #[test]

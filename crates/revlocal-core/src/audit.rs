@@ -40,7 +40,20 @@ pub struct BudgetLedgerEntry {
     /// How many runs executed that day.
     pub runs: u32,
     /// Tokens and cost spent that day.
+    ///
+    /// `usage.cost_usd` is `Some` **only when every run that day reported a
+    /// price**. A day with even one unpriced run reports `None`, so a cost budget
+    /// cannot read an unmeasured day as a cheap one (decision D10, SPEC §18). The
+    /// costs that *were* reported are still available as
+    /// [`known_cost_usd`](Self::known_cost_usd) — the number is not discarded,
+    /// it just is not allowed to masquerade as the total.
     pub usage: Usage,
+
+    /// The sum of the costs that were actually reported that day.
+    ///
+    /// Equal to `usage.cost_usd` when the day is complete; a lower bound on the
+    /// real spend when it is not.
+    pub known_cost_usd: f64,
 }
 
 impl BudgetLedgerEntry {
@@ -55,5 +68,30 @@ impl BudgetLedgerEntry {
     /// Whether this day's spend has reached `limit` total tokens.
     pub const fn tokens_exhausted(&self, limit: u64) -> bool {
         self.usage.total_tokens() >= limit
+    }
+
+    /// Whether this day's cost is fully known.
+    pub const fn cost_is_complete(&self) -> bool {
+        self.usage.cost_is_complete()
+    }
+
+    /// Whether this day's spend has reached a cost `limit`.
+    ///
+    /// Returns `None` when the day's cost is incomplete and the known portion has
+    /// not already passed the limit: the honest answer is "cannot tell", and D10
+    /// says an exhausted-or-unknown budget pauses rather than proceeding. A caller
+    /// that treated `None` as "not exhausted" would be doing exactly what §18
+    /// forbids, which is why this is not a `bool`.
+    pub fn cost_exhausted(&self, limit: f64) -> Option<bool> {
+        if self.known_cost_usd >= limit {
+            // Already over on the costs we do know about; the unknown remainder
+            // can only make that more true.
+            return Some(true);
+        }
+        if self.cost_is_complete() {
+            Some(false)
+        } else {
+            None
+        }
     }
 }

@@ -1,12 +1,13 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-109c
-- item_status: in_progress
+- current_item: RL-110
+- item_status: not_started
 - last_gate_command: cargo test -p revlocal-store
-- last_gate_result: PASS — exit 0, 43 passed (12 migrations + 12 repos + 19 changes).
+- last_gate_result: PASS — exit 0, 58 passed (12 migrations + 12 repos + 19 changes + 15 publish).
 - last_visual: n/a
-- next_action: RL-109c (REVL-111) — publish_action idempotency, audit append, budget
-    ledger increment, plus the two queries REVL-18's risk model needs
+- next_action: RL-110 (REVL-23) — audit log and budget ledger. The repositories exist;
+    this is the guard on top. Per ADR 0010, `cost_exhausted(..) == None` must be a STOP,
+    not a go.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -81,6 +82,13 @@ line to change if a decision comes back differently.
 The spec has been changed once, under the SPEC §5 implementation note ("if you must
 deviate, do it — but record why in docs/adr/ and update this section in the same
 commit").
+
+- **`budget_ledger.cost_complete INTEGER NOT NULL DEFAULT 1`** added in migration
+  `0002` (`RL-109c`, ADR 0010). §5 declared `cost_usd REAL NOT NULL DEFAULT 0` while
+  §8.1 types an engine's cost as optional; folding an unreported cost in as `0.0`
+  makes an unmeasured day look free. `cost_usd` now sums only reported costs and the
+  flag says whether anything was missing. **`BudgetLedgerEntry::cost_exhausted`
+  returns `Option<bool>` — the daemon's BudgetGuard must treat `None` as a stop.**
 
 - **SPEC §13.2's in-repo override rule** rewritten (`RL-107b`, ADR 0007). The section
   stated the rule by example ("repo-local wins for scope/ignores, never for autonomy or

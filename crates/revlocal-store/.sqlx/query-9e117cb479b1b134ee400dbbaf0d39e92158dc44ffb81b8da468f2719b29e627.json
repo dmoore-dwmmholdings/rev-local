@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE publish_action\n             SET status = ?, external_ref = ?, response_json = ?, error = ?,\n                 attempts = attempts + 1, sent_at = COALESCE(?, sent_at)\n             WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "9e117cb479b1b134ee400dbbaf0d39e92158dc44ffb81b8da468f2719b29e627"
+}

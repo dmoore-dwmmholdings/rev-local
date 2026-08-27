@@ -24,10 +24,12 @@ pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 mod changes;
 mod error;
+mod publish;
 mod repos;
 
 pub use changes::{ChangeStore, FindingStore, RunStore};
 pub use error::{Result, StoreError};
+pub use publish::{AuditStore, BudgetLedgerStore, PublishActionStore};
 pub use repos::{CursorStore, RepoStore};
 
 /// A pool of connections to one rev-local database.

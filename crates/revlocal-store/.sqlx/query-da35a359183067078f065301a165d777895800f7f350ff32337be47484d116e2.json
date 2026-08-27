@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) FROM publish_action pa\n             JOIN run r ON r.id = pa.run_id\n             JOIN change c ON c.id = r.change_id\n             WHERE c.repo_id = ? AND pa.status = ? AND pa.sent_at >= ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "COUNT(*)",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "da35a359183067078f065301a165d777895800f7f350ff32337be47484d116e2"
+}
