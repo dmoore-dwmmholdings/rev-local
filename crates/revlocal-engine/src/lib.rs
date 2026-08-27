@@ -5,6 +5,7 @@
 pub mod engine;
 pub mod ladder;
 pub mod mock;
+pub mod runner;
 pub mod schema;
 pub mod supervise;
 pub mod template;
@@ -18,6 +19,7 @@ pub use ladder::{
     RESULT_FILE,
 };
 pub use mock::{MockBehaviour, MockEngine};
+pub use runner::{CliEngine, PROMPT_FILE};
 pub use schema::{
     validate, DroppedFinding, SchemaError, ValidatedResult, RESULT_SCHEMA_V1,
     SUPPORTED_SCHEMA_VERSION,

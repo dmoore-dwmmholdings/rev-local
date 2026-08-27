@@ -1,13 +1,15 @@
 # Build state
 - current_milestone: M5
-- current_item: RL-407
-- item_status: not_started
-- last_gate_command: cargo test -p revlocal-engine env_denylist
-- last_gate_result: PASS — exit 0, 12 passed (0 before renaming — see below).
+- current_item: RL-408
+- item_status: blocked
+- last_gate_command: cargo test -p revlocal-engine runners
+- last_gate_result: PASS — exit 0, 12 passed.
 - last_visual: n/a
-- next_action: RL-407 (REVL-44). Still outstanding: REVL-113 (RL-305b). The ladder
-    takes `Option<&dyn RepairPass>` — spending tokens on a repair is the BUDGET
-    GUARD's decision, so the runner must pass `None` when there is none left.
+- next_action: RL-408 (REVL-45) is the Codex spike and `codex` is NOT installed — it
+    is blocked (blocker 2 in BUILD_PROMPT). Take the next unblocked item instead.
+    **Recommended: REVL-115 (RL-409)** — budgets are currently unenforceable against a
+    real engine, silently; see `silent caps found` below. Also outstanding:
+    REVL-113 (RL-305b).
 
 ## a gate that selected nothing
 
@@ -69,6 +71,24 @@ Current total: **308 passing, 0 failing.**
    Everything else proceeds — the mock engine covers the inner loop.
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
+
+## silent caps found
+
+Places where an unmeasured value reads as a benign one. SPEC §18 forbids the class;
+these are the instances found so far.
+
+- **Cost** (`RL-109c`, ADR 0010) — fixed. `budget_ledger.cost_complete` plus
+  `cost_exhausted -> Option<bool>`.
+- **Tokens** (`RL-407`, **REVL-115 open**) — §8.1 requires `EngineOutcome.usage` but
+  §8.3's `result.json` has **no usage field**, so a real engine's runner has nothing
+  to report and returns `Usage::default()` — *zero*. A run that spent 40,000 tokens
+  records none, and a 2,000,000-token daily budget is never reached. **Every existing
+  test passes with this gap present, because the mock engine reports tokens and the
+  real thing does not.** ADR 0010's "tokens are always known" is wrong and REVL-115
+  corrects it.
+
+  The pattern worth carrying: *when a fixture is more honest than the real thing, the
+  tests cannot see the gap.*
 
 ## criteria not met as written
 
