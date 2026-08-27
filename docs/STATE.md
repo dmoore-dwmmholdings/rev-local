@@ -1,14 +1,13 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-306
+- current_item: RL-307
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs skip_rules
-- last_gate_result: PASS — exit 0, 17 passed.
+- last_gate_command: cargo test -p revlocal-vcs --test git_materialize_is_readonly
+- last_gate_result: PASS — exit 0, 8 passed.
 - last_visual: n/a
-- next_action: RL-306 (REVL-35) — materialize a change into a scratch worktree. Two
-    things are owed here: M4's gate requires the fixture working tree byte-identical
-    afterwards, and §9.4's "generated-file markers" skip is deferred to this item
-    because it needs file CONTENT, which only materialization has (ADR 0014).
+- next_action: RL-307 (REVL-36) — GitHub adapter. Also outstanding in M4: REVL-113
+    (RL-305b, the generated-file marker skip) now that materialization exists to
+    supply file content.
 
 ## counting tests
 
@@ -145,6 +144,12 @@ a check must *fail* on bad input, the failure was produced deliberately and obse
 
 Rules that hold because a test fails when they are broken, not because everyone
 remembers them. Each was observed failing.
+
+- **Materializing never mutates the repository under review** (`RL-306`). Asserted
+  over *every* fixture commit by capturing HEAD, tree hash, `status --porcelain`,
+  branches, stash, `worktree list` and the index before and after, and separately
+  against a repo with uncommitted work and an untracked file. A review that stashed
+  someone's work-in-progress at 3am would be worse than no review.
 
 - **Only `git::cmd` may spawn `git`** (`RL-302`). A second call site is not a style
   problem — it is a call site with no timeout and no prompt suppression, and it will
