@@ -22,6 +22,7 @@ mod change;
 mod enums;
 mod error;
 mod finding;
+pub mod fingerprint;
 pub mod ids;
 mod publish;
 mod repo;
@@ -43,6 +44,7 @@ pub use enums::{
 };
 pub use error::{DomainError, ParseEnumError, Result};
 pub use finding::{Finding, Suppression, LOW_CONFIDENCE_THRESHOLD, TITLE_MAX_CHARS};
+pub use fingerprint::{fingerprint, normalize_path, normalize_title, FINGERPRINT_HEX_LEN};
 pub use ids::{AuditId, ChangeId, FindingId, PublishActionId, RepoId, RunId, SuppressionId};
 pub use publish::{CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
 pub use repo::{Cursor, Repo};

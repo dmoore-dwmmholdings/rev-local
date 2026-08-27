@@ -1,15 +1,15 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-106
+- current_item: RL-107
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-core risk::
+- last_gate_command: cargo test -p revlocal-core fingerprint
 - last_gate_result: PASS — exit 0, 14 passed.
 - last_visual: n/a
-- next_action: RL-106 (REVL-19) — finding fingerprint algorithm (SPEC §10.3)
+- next_action: RL-107 (REVL-20) — configuration load, merge and validation (SPEC §13)
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
-- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105]
+- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105, RL-106]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -43,6 +43,17 @@ a check must *fail* on bad input, the failure was produced deliberately and obse
   `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
   force a transitive arrival, observed `revlocal-core -> tokio-util (normal) ->
   tokio (normal)`. Manifest restored, `git diff` empty, test green again.
+
+## frozen_by_golden_vectors
+
+Changing these silently corrupts data already stored. Each has committed vectors that
+fail loudly on drift; regenerating them is a **data migration**, not a test update.
+
+- **Finding fingerprints** (`RL-106`, SPEC §10.3). 6 vectors in
+  `crates/revlocal-core/src/fingerprint.rs`, cross-checked against an independent
+  implementation written from the spec text. A normalization change re-fingerprints
+  every stored finding, which means every one re-files as new. Write an ADR and plan
+  the migration before touching `normalize_title` or `normalize_path`.
 
 ## spec_gaps_resolved_by_principle
 
