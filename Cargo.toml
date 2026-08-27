@@ -37,6 +37,10 @@ globset = "0.4"
 handlebars = "6"
 tar = "0.4"
 nix = { version = "0.29", default-features = false, features = ["signal"] }
+# rustls, not native-tls: no OpenSSL to find at build time on three platforms, and
+# no system trust store to differ between them. Trama is a remote server, so TLS is
+# not optional.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "http2"] }
 jsonschema = { version = "0.33", default-features = false }
 clap = { version = "4.5", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }

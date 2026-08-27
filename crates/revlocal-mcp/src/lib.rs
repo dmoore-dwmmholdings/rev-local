@@ -6,9 +6,13 @@
 //! version we do not, and may name its tools whatever it likes. None of those is
 //! allowed to take the daemon down with it.
 
+pub mod http;
 pub mod protocol;
 pub mod stdio;
 
+pub use http::{
+    parse_sse, HttpClient, HttpEndpoint, HttpError, NoSecrets, SecretResolver, SESSION_HEADER,
+};
 pub use protocol::{
     Content, InitializeResult, Notification, Request, Response, RpcError, ServerInfo, Tool,
     ToolResult, PROTOCOL_VERSION,

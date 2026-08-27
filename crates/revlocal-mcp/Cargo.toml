@@ -10,6 +10,7 @@ description = "MCP client over stdio and streamable HTTP, with tool discovery."
 
 [dependencies]
 revlocal-core = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -19,7 +20,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 nix = { workspace = true, features = ["signal", "process"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
 
 [lints]
 workspace = true
