@@ -6,7 +6,7 @@
 - last_gate_command: cargo test -p revlocal-daemon determinism
 - last_gate_result: PASS — 7 tests, 7 passed; workspace 612 passed / 0 failed
 - last_visual: n/a
-- next_action: confirm M6 is complete, run the §4 checkpoint, write the Trama build log for M4/M5/M6
+- next_action: REVL-118 (RL-508) — the 200-file fixture is 12x too small to truncate; M6 stays open until its exit gate is observed passing
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -650,3 +650,45 @@ RL-507's criterion names "publish plans" and there is no plan builder — §11 i
 test asserts the *input* to the plan and says so in its own doc comment rather than
 quietly counting the criterion as met. The source guard already covers
 `revlocal-publish`, so the builder cannot introduce the problem when it lands.
+
+## M6 IS NOT CLOSED — its exit gate was run and failed
+
+Every M6 story (RL-501..507) has an observed passing gate. **The milestone's own §17
+exit gate does not pass**, and it was only discovered by running it rather than
+inferring it from the story gates.
+
+```
+part 1 (planted bug):  status=done, findings=2   PASS
+part 2 (200 files):    depth=summary             PASS
+                       truncated=false           FAIL
+```
+
+The `large_200_files` fixture writes 200 files of **two lines each** — a 44,662-byte
+diff against a 524,288-byte default budget. About 12× too small for either §9.4 cap to
+fire. `build.sh:179` claims the step exists "for depth selection **and truncation**";
+it has only ever done the first.
+
+`pipeline_e2e`'s truncation test passes because it lowers the budget to 4,000. Sound
+as a unit test — but it means **§9.4's default path has never run end to end**, which
+is exactly what §17's gate exists to catch. Filed as **REVL-118**.
+
+## the lesson: a milestone gate is not the sum of its story gates
+
+Seven stories, seven observed passing gates, and the milestone still fails. The story
+gates each tested their stage with config chosen to exercise that stage. The exit gate
+tests the *default* configuration on the *real* fixture, and nothing else did.
+
+**Run the milestone's own gate, as written, before calling a milestone done.** Do not
+infer it.
+
+## checkpoint (BUILD_LOOP §4), observed this iteration
+
+- `cargo test --workspace` → 612 passed, 0 failed
+- `fixtures/build.sh` twice into separate dirs → manifests byte-identical
+- engine-live: `claude` present, `codex` absent (informational before M14)
+
+## Trama build log is behind
+
+M0–M3 pages exist. **M4, M5 and M6 have no page.** BUILD_PROMPT requires one per
+milestone close. M6 is not closed yet, but M4 and M5 are — those two are overdue and
+should be written before M6's.
