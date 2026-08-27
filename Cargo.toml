@@ -42,6 +42,7 @@ thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
+trybuild = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }

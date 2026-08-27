@@ -1,11 +1,12 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-103
-- item_status: not_started
-- last_gate_command: cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && (act -j test 2>/dev/null || echo 'verify in CI')
-- last_gate_result: PASS — exit 0. 10 tests passed. See `ci_green_unobserved` below.
+- current_item: RL-103b
+- item_status: in_progress
+- last_gate_command: cargo test -p revlocal-core
+- last_gate_result: PASS — exit 0. 13 tests + 3 doctests, 0 failed.
 - last_visual: n/a
-- next_action: RL-103 — domain types in revlocal-core (SPEC §5)
+- next_action: RL-103b (REVL-108) — the domain structs: Repo, Cursor, Change, DiffStat,
+    FileDiff, Run, Usage, Finding, Suppression, PublishAction, AuditEntry, BudgetLedgerEntry
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -33,6 +34,19 @@
    Everything else proceeds — the mock engine covers the inner loop.
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
+
+## RL-103 was split
+
+RL-103 covered 21 types across SPEC §3 and §5 — more than one iteration. Split per
+BUILD_PROMPT: the enums and newtype ids landed as the first half; the structs are
+**REVL-108 / RL-103b**, a subtask of REVL-16. REVL-16 stays `In Progress` and closes
+when RL-103b lands, since its criterion "every type in SPEC §3 and §5 is represented"
+is not yet true.
+
+Landed: 14 enums (`RepoKind`, `EngineKind`, `AutonomyMode`, `ChangeKind`, `RunStatus`,
+`Depth`, `TriggerSource`, `Severity`, `Category`, `FindingState`, `Capability`,
+`PublishActionStatus`, `RiskClass`, `Verdict`) and 7 newtype ids, plus `ParseEnumError`
+/ `DomainError`. See ADR 0004.
 
 ## ci_green_unobserved
 

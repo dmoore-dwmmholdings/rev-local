@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `RunId: From<i64>` is not satisfied
+  --> tests/ui/id_does_not_convert_via_into.rs:10:24
+   |
+10 |     let _ = cancel(raw.into());
+   |                        ^^^^ the trait `From<i64>` is not implemented for `RunId`
+   |
+   = note: required for `i64` to implement `Into<RunId>`
