@@ -6,6 +6,7 @@ pub mod depth;
 pub mod logging;
 pub mod prompt;
 pub mod state_machine;
+pub mod truncation;
 
 pub use logging::{
     init as init_logging, LoggingError, LoggingHandle, RedactingJsonLayer, RedactingVisitor,

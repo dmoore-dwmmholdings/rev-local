@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-503 (REVL-48)
+- current_item: RL-504 (REVL-49)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-daemon depth
-- last_gate_result: PASS — 26 tests selected, 26 passed; workspace 530 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-daemon truncation
+- last_gate_result: PASS — 24 tests selected, 24 passed; workspace 550 passed / 0 failed
 - last_visual: n/a
-- next_action: RL-504 (REVL-49) — diff truncation per §9.4, using max_file_diff_bytes / max_total_diff_bytes added in RL-502
+- next_action: RL-505 (REVL-50) — finding normalization per §9.5
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -448,3 +448,34 @@ Worth generalising: when two spec rules fire on the same input, ask which failur
 trailing comments I copied over from SPEC.md — JSON has no comments. Cheap catch, but
 the reason it works is that the document is *parsed*, not eyeballed: the test would
 equally catch a default that drifts from the spec's stated one.
+
+## two test-setup bugs of the same shape (RL-504)
+
+Both failures on the first run of the truncation gate were my *test arithmetic*, not
+the code. Worth recording because the shape recurs:
+
+1. I sized budgets as `each * n`, assuming every generated diff section was the same
+   length. They are not — the path appears three times in a section header, so
+   `README.md` and `tests/engine_test.rs` differ by tens of bytes. The test passed a
+   different boundary than the one it claimed to. Fixed by computing budgets from the
+   real section lengths.
+2. I set a per-file cap low enough that *both* files became stat lines, which made
+   room, so nothing was omitted and the assertion about omission never got its case.
+
+**A test whose setup computes a boundary from an assumption about the code under test
+is testing the assumption.** Derive the boundary from the actual artefact.
+
+## negative cases observed (RL-504)
+
+- Stop pushing to `omitted_files` → 9 of 24 fail. The breadth is the point: the
+  omitted list is load-bearing in nearly every assertion, including the cross-module
+  one that renders it into the prompt.
+- Reverse the interest sort → 3 fail, including the mixed-commit criterion.
+- Skip the `file.binary` branch → exactly the 2 binary tests fail.
+
+## a cross-module assertion worth keeping
+
+`truncation_omitted_files_reach_the_rendered_prompt` runs truncate → build_context →
+render and asserts every omitted name appears in the **rendered prompt**. Criterion 2
+says "named in the prompt", and asserting it on `TruncationOutcome` alone would have
+been asserting it on the wrong artefact — the struct is not what the engine reads.
