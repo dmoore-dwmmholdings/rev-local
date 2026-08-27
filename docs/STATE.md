@@ -1,13 +1,13 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-303b
-- item_status: in_progress
+- current_item: RL-304
+- item_status: not_started
 - last_gate_command: cargo test -p revlocal-vcs --test git_discover
-- last_gate_result: PASS — exit 0, 17 passed.
+- last_gate_result: PASS — exit 0, 25 passed.
 - last_visual: n/a
-- next_action: RL-303b (REVL-112) — fetch/prune and force-push `history_rewritten`
-    handling. Reset the cursor to the MERGE-BASE, not the branch root: resetting to
-    root would re-review every surviving commit and re-file every finding.
+- next_action: RL-304 (REVL-33) — materialize a change into a scratch worktree. The
+    scratch lifecycle (RL-301) and the git wrapper (RL-302) both exist; M4's gate
+    requires the fixture working tree to be byte-identical afterwards.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1

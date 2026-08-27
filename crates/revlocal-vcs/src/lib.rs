@@ -20,5 +20,5 @@ pub use adapter::{
     ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem, ProbeReport, Result,
     VcsAdapter, VcsError,
 };
-pub use git::{GitError, GitOutput, GitRunner};
+pub use git::{CursorState, DiscoveryEvent, GitError, GitOutput, GitRunner};
 pub use scratch::{RunOutcome, ScratchDir};

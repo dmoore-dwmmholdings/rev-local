@@ -20,7 +20,7 @@ mod git_discover {
     }
 
     #[derive(Debug, Clone, Deserialize)]
-    struct Manifest {
+    pub(super) struct Manifest {
         commits: Vec<CommitEntry>,
     }
 
@@ -30,14 +30,14 @@ mod git_discover {
         /// Returns a sentinel rather than panicking: helpers are not `#[test]`
         /// fns, so the unwrap/expect/panic ban applies to them (ADR 0003). A
         /// missing role fails the assertion that used it, naming the role.
-        fn sha(&self, role: &str) -> String {
+        pub(super) fn sha(&self, role: &str) -> String {
             self.commits.iter().find(|c| c.role == role).map_or_else(
                 || format!("<no commit with role {role}>"),
                 |c| c.sha.clone(),
             )
         }
 
-        fn role_of(&self, sha: &str) -> String {
+        pub(super) fn role_of(&self, sha: &str) -> String {
             self.commits
                 .iter()
                 .find(|c| c.sha == sha)
@@ -54,7 +54,7 @@ mod git_discover {
     /// Build a fresh fixture and return its directory and manifest.
     ///
     /// Returns `Result`; helpers are not `#[test]` fns (ADR 0003).
-    fn fixture() -> Result<(TempDir, PathBuf, Manifest), String> {
+    pub(super) fn fixture() -> Result<(TempDir, PathBuf, Manifest), String> {
         let dir = TempDir::new().map_err(|e| format!("temp dir: {e}"))?;
         let root = workspace_root();
 
@@ -526,6 +526,327 @@ mod git_discover {
         assert!(
             String::from_utf8_lossy(&status.stdout).trim().is_empty(),
             "discovery dirtied the repository under review"
+        );
+    }
+}
+
+// --- RL-303b: fetch and recovery from a rewritten history --------------------
+
+mod git_discover_recovery {
+    use super::git_discover as base;
+    use revlocal_vcs::git::{
+        classify_cursor, discover_branch, fetch, has_remote, CursorState, DiscoveryEvent,
+        FetchOutcome,
+    };
+    use revlocal_vcs::GitRunner;
+    use std::path::Path;
+    use std::process::Command;
+
+    /// Run a git command in `dir`, failing loudly.
+    ///
+    /// Test-local; the choke-point rule covers production code, and this is
+    /// arranging a repository rather than reviewing one.
+    fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .map_err(|e| format!("git {args:?}: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
+    #[tokio::test]
+    async fn git_discover_fetch_is_skipped_for_a_repo_with_no_remote() {
+        // The fixture has none, and a local-only repository is not an error. Treating
+        // it as one would stop reviewing repositories that work perfectly well.
+        let (_dir, repo, _manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let runner = GitRunner::new();
+
+        assert!(!has_remote(&runner, &repo)
+            .await
+            .unwrap_or_else(|e| panic!("{e}")));
+
+        let (outcome, events) = fetch(&runner, &repo)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(outcome, FetchOutcome::NoRemote);
+        assert_eq!(
+            events.len(),
+            1,
+            "a skipped fetch must say so, not pass silently"
+        );
+        assert!(matches!(events[0], DiscoveryEvent::FetchSkipped { .. }));
+        assert_eq!(events[0].audit_kind(), "fetch_skipped");
+    }
+
+    #[tokio::test]
+    async fn git_discover_fetch_prunes_a_branch_deleted_upstream() {
+        // Without --prune, an abandoned release/* branch stays in the watched set
+        // forever and discovery keeps walking a ref nobody has touched in a year.
+        let (dir, _repo, _manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let bare = dir.path().join("git-bare");
+        let clone = dir.path().join("clone");
+
+        git(
+            dir.path(),
+            &[
+                "clone",
+                "--quiet",
+                &bare.display().to_string(),
+                &clone.display().to_string(),
+            ],
+        )
+        .unwrap_or_else(|e| panic!("clone: {e}"));
+
+        let runner = GitRunner::new();
+        assert!(has_remote(&runner, &clone)
+            .await
+            .unwrap_or_else(|e| panic!("{e}")));
+
+        let before = git(&clone, &["branch", "-r", "--format=%(refname:short)"])
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(before.contains("origin/release/pager-tweak"), "{before}");
+
+        // Delete it upstream, then fetch.
+        git(&bare, &["branch", "-D", "release/pager-tweak"]).unwrap_or_else(|e| panic!("{e}"));
+        let (outcome, events) = fetch(&runner, &clone)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(outcome, FetchOutcome::Fetched);
+        assert!(events.is_empty());
+
+        let after = git(&clone, &["branch", "-r", "--format=%(refname:short)"])
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            !after.contains("origin/release/pager-tweak"),
+            "the deleted branch was not pruned: {after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_discover_a_healthy_cursor_is_classified_valid() {
+        let (_dir, repo, manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let runner = GitRunner::new();
+
+        let cursor = manifest.sha("lockfile_only");
+        let state = classify_cursor(&runner, &repo, "main", Some(&cursor))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(state, CursorState::Valid(cursor.clone()));
+        assert_eq!(state.effective(), Some(cursor.as_str()));
+        assert!(
+            state.event("main").is_none(),
+            "nothing to audit about a normal cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_discover_no_cursor_is_fresh_not_an_error() {
+        let (_dir, repo, _manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let runner = GitRunner::new();
+
+        let state = classify_cursor(&runner, &repo, "main", None)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(state, CursorState::Fresh);
+        assert_eq!(state.effective(), None);
+    }
+
+    #[tokio::test]
+    async fn git_discover_a_force_push_is_detected_and_audited() {
+        // SPEC §6.2: on force-push, record `history_rewritten`, reset the cursor to
+        // the merge-base, and re-discover forward.
+        let (_dir, repo, manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let runner = GitRunner::new();
+
+        // The cursor is at the tip before the rewrite.
+        let old_cursor = manifest.sha("clean_final");
+        let fork_point = manifest.sha("large_200_files");
+
+        // Rewrite: drop the last few commits and put a different one in their place.
+        git(&repo, &["reset", "--hard", "--quiet", &fork_point]).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(repo.join("rewritten.txt"), "different history")
+            .unwrap_or_else(|e| panic!("write: {e}"));
+        git(&repo, &["add", "-A"]).unwrap_or_else(|e| panic!("{e}"));
+        git(
+            &repo,
+            &[
+                "commit",
+                "--quiet",
+                "--no-gpg-sign",
+                "-m",
+                "Rewritten history",
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let state = classify_cursor(&runner, &repo, "main", Some(&old_cursor))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        match &state {
+            CursorState::Rewritten {
+                old_cursor: old,
+                merge_base,
+            } => {
+                assert_eq!(old, &old_cursor);
+                assert_eq!(
+                    merge_base, &fork_point,
+                    "the merge-base is the newest commit both histories still share"
+                );
+            }
+            other => panic!("expected a rewrite, got {other:?}"),
+        }
+
+        let event = state
+            .event("main")
+            .unwrap_or_else(|| panic!("a rewrite must be audited"));
+        assert_eq!(event.audit_kind(), "history_rewritten");
+        match event {
+            DiscoveryEvent::HistoryRewritten {
+                branch,
+                old_cursor: old,
+                reset_to,
+            } => {
+                assert_eq!(branch, "main");
+                assert_eq!(
+                    old, old_cursor,
+                    "the event must record where the cursor WAS"
+                );
+                assert_eq!(reset_to, fork_point, "and where it was reset to");
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn git_discover_a_rewrite_does_not_re_review_the_commits_that_survived() {
+        // The trap. Resetting to the branch root instead of the merge-base would
+        // re-review every commit that survived the rewrite and re-file every finding
+        // on them — a rebase would spam the tracker.
+        let (_dir, repo, manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let runner = GitRunner::new();
+
+        let old_cursor = manifest.sha("clean_final");
+        let fork_point = manifest.sha("large_200_files");
+
+        git(&repo, &["reset", "--hard", "--quiet", &fork_point]).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(repo.join("rewritten.txt"), "different history")
+            .unwrap_or_else(|e| panic!("write: {e}"));
+        git(&repo, &["add", "-A"]).unwrap_or_else(|e| panic!("{e}"));
+        git(
+            &repo,
+            &[
+                "commit",
+                "--quiet",
+                "--no-gpg-sign",
+                "-m",
+                "Rewritten history",
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let state = classify_cursor(&runner, &repo, "main", Some(&old_cursor))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let found = discover_branch(&runner, &repo, "main", state.effective(), 1000)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let roles: Vec<String> = found
+            .iter()
+            .map(|c| manifest.role_of(&c.external_id))
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "only the new commit is unreviewed; got {roles:?}"
+        );
+        assert!(
+            !roles
+                .iter()
+                .any(|r| r == "initial" || r == "planted_bug_off_by_one"),
+            "commits that survived the rewrite must not be re-discovered: {roles:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_discover_a_cursor_whose_object_is_gone_does_not_fail_discovery() {
+        // After a rewrite and a gc, the cursor may not resolve at all. Discovery for
+        // the whole repository must not die because of it.
+        let (_dir, repo, _manifest) = base::fixture().unwrap_or_else(|e| panic!("{e}"));
+        let runner = GitRunner::new();
+
+        let gone = "0123456789abcdef0123456789abcdef01234567";
+        let state = classify_cursor(&runner, &repo, "main", Some(gone))
+            .await
+            .unwrap_or_else(|e| panic!("a missing cursor must not fail: {e}"));
+
+        assert_eq!(
+            state,
+            CursorState::Missing {
+                old_cursor: gone.to_owned()
+            }
+        );
+        assert_eq!(
+            state.effective(),
+            None,
+            "with no resume point, the branch is re-discovered rather than skipped \
+             forward — losing changes is the one outcome this must not have"
+        );
+
+        let event = state
+            .event("main")
+            .unwrap_or_else(|| panic!("this must be audited"));
+        assert_eq!(event.audit_kind(), "cursor_object_missing");
+
+        // Discovery still works.
+        let found = discover_branch(&runner, &repo, "main", state.effective(), 1000)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(found.len(), 11, "the whole branch is re-discovered");
+    }
+
+    #[tokio::test]
+    async fn git_discover_every_recovery_event_has_a_distinct_audit_kind() {
+        // They map onto audit rows, and two events sharing a kind would be
+        // indistinguishable in the log — where the difference is the whole point.
+        let kinds = [
+            DiscoveryEvent::HistoryRewritten {
+                branch: "main".to_owned(),
+                old_cursor: "a".to_owned(),
+                reset_to: "b".to_owned(),
+            }
+            .audit_kind(),
+            DiscoveryEvent::CursorObjectMissing {
+                branch: "main".to_owned(),
+                old_cursor: "a".to_owned(),
+            }
+            .audit_kind(),
+            DiscoveryEvent::FetchSkipped {
+                reason: "none".to_owned(),
+            }
+            .audit_kind(),
+        ];
+        let unique: std::collections::BTreeSet<&str> = kinds.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            kinds.len(),
+            "audit kinds must be distinct: {kinds:?}"
         );
     }
 }
