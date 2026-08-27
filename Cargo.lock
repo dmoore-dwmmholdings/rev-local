@@ -1001,6 +1001,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "revlocal-core",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror",

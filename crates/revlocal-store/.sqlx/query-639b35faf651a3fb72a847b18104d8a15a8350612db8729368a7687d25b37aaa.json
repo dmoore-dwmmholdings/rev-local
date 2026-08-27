@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO finding\n               (run_id, fingerprint, severity, category, confidence, file, line_start,\n                line_end, title, body, failure_scenario, suggested_fix, state, created_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "639b35faf651a3fb72a847b18104d8a15a8350612db8729368a7687d25b37aaa"
+}

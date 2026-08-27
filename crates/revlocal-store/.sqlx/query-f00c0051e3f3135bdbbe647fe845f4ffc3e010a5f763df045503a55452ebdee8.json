@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO change\n               (repo_id, kind, external_id, title, author_name, author_email, authored_at,\n                branch, base_ref, head_ref, url, diff_stat_json, detected_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT (repo_id, kind, external_id) DO UPDATE SET\n               title = excluded.title,\n               author_name = excluded.author_name,\n               author_email = excluded.author_email,\n               authored_at = excluded.authored_at,\n               branch = excluded.branch,\n               base_ref = excluded.base_ref,\n               head_ref = excluded.head_ref,\n               url = excluded.url,\n               diff_stat_json = excluded.diff_stat_json\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 13
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f00c0051e3f3135bdbbe647fe845f4ffc3e010a5f763df045503a55452ebdee8"
+}

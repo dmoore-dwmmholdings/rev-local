@@ -11,6 +11,7 @@ description = "SQLite persistence: migrations, entity repositories, audit log an
 [dependencies]
 chrono = { workspace = true }
 revlocal-core = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

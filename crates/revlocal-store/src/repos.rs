@@ -14,7 +14,7 @@ use std::str::FromStr;
 /// keep out a value this build does not know — a row written by a newer rev-local
 /// is exactly that. Failing with [`StoreError::Corrupt`] says "disk disagrees with
 /// this build", which is a different problem from the database being unreachable.
-fn parse_enum<T: FromStr>(column: &'static str, raw: &str) -> Result<T>
+pub(crate) fn parse_enum<T: FromStr>(column: &'static str, raw: &str) -> Result<T>
 where
     T::Err: std::fmt::Display,
 {
@@ -25,7 +25,7 @@ where
 }
 
 /// Parse an RFC 3339 timestamp out of a `TEXT` column.
-fn parse_time(column: &'static str, raw: &str) -> Result<Timestamp> {
+pub(crate) fn parse_time(column: &'static str, raw: &str) -> Result<Timestamp> {
     chrono::DateTime::parse_from_rfc3339(raw)
         .map(|t| t.with_timezone(&chrono::Utc))
         .map_err(|e| StoreError::Corrupt {
@@ -38,7 +38,7 @@ fn parse_time(column: &'static str, raw: &str) -> Result<Timestamp> {
 ///
 /// RFC 3339 with a `Z` offset, which sorts lexicographically — `idx_audit_at`
 /// orders by a text column, so the encoding has to be sortable to be useful.
-fn format_time(at: Timestamp) -> String {
+pub(crate) fn format_time(at: Timestamp) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
 }
 

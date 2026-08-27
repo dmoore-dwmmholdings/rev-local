@@ -1,11 +1,12 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-109b
+- current_item: RL-109c
 - item_status: in_progress
 - last_gate_command: cargo test -p revlocal-store
-- last_gate_result: PASS — exit 0, 24 passed (12 migrations + 12 repos).
+- last_gate_result: PASS — exit 0, 43 passed (12 migrations + 12 repos + 19 changes).
 - last_visual: n/a
-- next_action: RL-109b (REVL-110) — change upsert, run transitions, finding by fingerprint
+- next_action: RL-109c (REVL-111) — publish_action idempotency, audit append, budget
+    ledger increment, plus the two queries REVL-18's risk model needs
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1

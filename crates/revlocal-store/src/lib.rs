@@ -22,9 +22,11 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// what turns it into a short wait instead of a `database is locked` error.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+mod changes;
 mod error;
 mod repos;
 
+pub use changes::{ChangeStore, FindingStore, RunStore};
 pub use error::{Result, StoreError};
 pub use repos::{CursorStore, RepoStore};
 
