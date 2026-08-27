@@ -120,13 +120,29 @@ steps_field() {
   ' "$STEPS_FILE" "$1"
 }
 
-# Emit one shell-safe line per step: kind|index|dir|role|subject|author|extra
+# Emit one `|`-separated line per step: kind|index|dir|role|subject|author|name|count|into
+#
+# The delimiter is load-bearing twice over, and both constraints are bash 3.2 --
+# the only bash macOS ships, and the one `Command::new("bash")` finds:
+#
+#   * NOT a control byte. bash 3.2 does not word-split on $'\001' at all: every
+#     field lands in $kind and the read loop sees one unknown step kind. That is
+#     what broke every fixture-dependent test in the workspace.
+#   * NOT whitespace. Tab and space are IFS *whitespace*, which POSIX collapses --
+#     `a<tab><tab>b` yields two fields, not three -- so an empty `dir` would shift
+#     `into` out of existence. Empty fields are normal here, so the delimiter has
+#     to be a non-whitespace character that 3.2 splits on.
+#
+# No field may contain `|`, a tab or a newline. A subject that did would shift
+# every later field one position left, which reads as a wrong fixture rather than
+# a broken one -- so this refuses to emit it at all.
 steps_lines() {
   node -e '
     const fs = require("node:fs");
     const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const NAMES = ["kind", "index", "dir", "role", "subject", "author", "name", "count", "into"];
     for (const step of data.steps) {
-      process.stdout.write([
+      const fields = [
         step.kind,
         step.index ?? "",
         step.dir ?? "",
@@ -136,7 +152,17 @@ steps_lines() {
         step.name ?? step.branch ?? "",
         step.count ?? "",
         step.into ?? "",
-      ].join("\u0001") + "\n");
+      ].map(String);
+      fields.forEach((value, i) => {
+        if (/[|\t\r\n]/.test(value)) {
+          process.stderr.write(
+            `fixtures: step ${step.kind}: field ${NAMES[i]} contains "|", a tab or a newline: ` +
+            JSON.stringify(value) + "\n"
+          );
+          process.exit(1);
+        }
+      });
+      process.stdout.write(fields.join("|") + "\n");
     }
   ' "$STEPS_FILE"
 }
@@ -159,7 +185,7 @@ git config core.autocrlf false
 git config core.fileMode true
 git config commit.gpgsign false
 
-while IFS=$'\001' read -r kind index dir role subject who name count into; do
+while IFS='|' read -r kind index dir role subject who name count into; do
   case "$kind" in
     commit)
       # Copy the step's whole tree over the working tree. Full snapshots rather

@@ -25,17 +25,31 @@ fn mock_server(env: &[(&str, &str)]) -> ServerCommand {
     server
 }
 
-/// Whether a pid is still a live process (not a zombie, not gone).
+/// The process's state letter, or `None` once the pid is gone entirely.
 ///
-/// `kill(pid, 0)` succeeds for a zombie too, so the state is read from procfs where
-/// it exists. A reaped child is what this test is about, and "the pid no longer
+/// `kill(pid, 0)` succeeds for a zombie too, so it cannot answer the question this
+/// file asks. A reaped child is what criterion 3 is about, and "the pid no longer
 /// answers" would pass for a zombie — which is precisely the leak.
+///
+/// Read via `ps` rather than `/proc/<pid>/stat`: macOS has no procfs, so the procfs
+/// version returned `None` unconditionally there and the two tests that establish
+/// "the server was running *before* we killed it" failed on their precondition. The
+/// engine was fine; the probe was Linux-only. `ps -o state=` reports `Z` for a
+/// zombie and exits non-zero for a pid that does not exist, on both platforms.
 fn process_state(pid: u32) -> Option<char> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // `... (comm) S ...` — comm may contain spaces and parentheses, so start after
-    // the last ')'.
-    let after = status.rsplit_once(')')?.1;
-    after.split_whitespace().next()?.chars().next()
+    let output = std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // macOS decorates the state with flags (`S+`, `Ss`); the first letter is the
+    // state proper, which is all either platform is being asked for here.
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .chars()
+        .next()
 }
 
 fn node_is_installed() -> bool {
