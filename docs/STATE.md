@@ -1,13 +1,12 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-110
+- current_item: RL-111
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-store
-- last_gate_result: PASS — exit 0, 58 passed (12 migrations + 12 repos + 19 changes + 15 publish).
+- last_gate_command: cargo test -p revlocal-store -- --include-ignored budget
+- last_gate_result: PASS — exit 0, 8 passed (including the 2 ignored WAL tests).
 - last_visual: n/a
-- next_action: RL-110 (REVL-23) — audit log and budget ledger. The repositories exist;
-    this is the guard on top. Per ADR 0010, `cost_exhausted(..) == None` must be a STOP,
-    not a go.
+- next_action: RL-111 (REVL-24) — structured logging with secret redaction. `SecretRef`
+    already redacts in Debug and Display (RL-107); this is the tracing layer around it.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -41,6 +40,13 @@
 
 A guard that has only ever passed is not known to work. Where an item's criteria say
 a check must *fail* on bad input, the failure was produced deliberately and observed:
+
+- **RL-110** — the append-only audit guard was verified by injecting a
+  `DELETE FROM audit` into `publish.rs` and observing the test FAIL, naming the file
+  and the statement; then restored, `git diff` empty, green again. The guard is
+  structural (it scans the crate's source) because the guarantee is that no such
+  method *exists* — a test that only exercises existing methods could never notice
+  one being added.
 
 - **RL-108** — the `UNIQUE (target, idempotency_key)` constraint on
   `publish_action` was exercised by inserting a duplicate and observing the

@@ -18,6 +18,7 @@
 mod macros;
 
 mod audit;
+pub mod budget;
 mod change;
 pub mod config;
 mod enums;
@@ -38,6 +39,7 @@ mod run;
 pub type Timestamp = chrono::DateTime<chrono::Utc>;
 
 pub use audit::{AuditEntry, BudgetLedgerEntry};
+pub use budget::{BudgetDecision, BudgetLimits, ExhaustedLimit};
 pub use change::{Change, DiffStat, FileDiff, FileStatus};
 pub use config::{
     effective_autonomy, merge_in_repo, BudgetSettings, ConfigError, ConfigWarning, GlobalConfig,
