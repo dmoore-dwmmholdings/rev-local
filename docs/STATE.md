@@ -1,11 +1,11 @@
 # Build state
 - current_milestone: M3
-- current_item: RL-203
+- current_item: RL-204
 - item_status: not_started
-- last_gate_command: ./fixtures/build.sh && test -f fixtures/out/svn-basic/.manifest.json
-- last_gate_result: PASS — exit 0. Skip path taken; svn content UNVERIFIED (see below).
+- last_gate_command: MOCK_ENGINE_MODE=valid REVLOCAL_OUT=$(mktemp -d) fixtures/mock-engine/run
+- last_gate_result: PASS — exit 0, result.json written and schema-valid.
 - last_visual: n/a
-- next_action: RL-203 (REVL-27) — mock engine binary. Unblocked and independent of svn.
+- next_action: RL-204 (REVL-28) — mock MCP server with a request journal
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -100,6 +100,25 @@ a check must *fail* on bad input, the failure was produced deliberately and obse
   `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
   force a transitive arrival, observed `revlocal-core -> tokio-util (normal) ->
   tokio (normal)`. Manifest restored, `git diff` empty, test green again.
+
+## fixture invariants worth not breaking
+
+Properties the fixtures have *on purpose*, where the obvious simplification would
+make a downstream test pass for the wrong reason.
+
+- **`fenced_only` emits TWO fenced blocks** (`RL-203`). SPEC §8.2 says the **last**
+  one is authoritative; with a single block, a runner that took the first would
+  pass and be wrong in production.
+- **`hang` installs a no-op SIGTERM handler** (`RL-203`). A hang mode that died on
+  SIGTERM would let a runner claiming SIGTERM→grace→SIGKILL escalation pass without
+  ever escalating. Verified by signalling it and observing it survive.
+- **`nonzero_exit` still writes valid output** (`RL-203`), so a runner keying only
+  off the exit code is caught throwing away a review the engine produced.
+- **Two SVN reintegrations** (`RL-202`), one detectable by both §6.4 heuristics and
+  one by `svn:mergeinfo` alone. A fixture where every signal fires cannot tell you
+  which signal the code is using.
+- **The git merge commit has two parents** (`RL-201`) — a fast-forward would have
+  one and M4's merge skip rule would never fire.
 
 ## frozen_by_golden_vectors
 

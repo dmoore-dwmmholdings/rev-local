@@ -9,6 +9,12 @@ authors.workspace = true
 description = "`Engine` trait plus the Claude Code, Codex and mock review runners."
 
 [dependencies]
+revlocal-core = { workspace = true }
+
+[dev-dependencies]
+jsonschema = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

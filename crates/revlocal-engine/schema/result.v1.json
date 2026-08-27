@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rev-local.invalid/schema/result.v1.json",
+  "title": "rev-local engine result",
+  "description": "The engine output contract of SPEC §8.3. An engine writes this to $REVLOCAL_OUT/result.json and writes nothing else to that directory.",
+  "type": "object",
+  "required": ["schema_version", "verdict", "summary", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Always 1 for this schema.",
+      "const": 1
+    },
+    "verdict": {
+      "description": "The overall stance (SPEC §10.2).",
+      "enum": ["approve", "comment", "request_changes"]
+    },
+    "summary": {
+      "description": "Markdown: what changed and the headline judgement.",
+      "type": "string",
+      "maxLength": 1200
+    },
+    "coverage_notes": {
+      "description": "What could not be reviewed and why. SPEC §18: a review that saw 60% of the diff must never look like one that saw all of it.",
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["severity", "category", "title", "body"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": { "enum": ["critical", "high", "medium", "low", "info"] },
+        "category": {
+          "enum": ["correctness", "security", "convention", "tests", "perf", "other"]
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "file": {
+          "description": "Path relative to the repository root.",
+          "type": "string"
+        },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "title": {
+          "description": "The claim alone. SPEC §5 and §8.3 both cap this at 80 characters.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "body": { "type": "string", "minLength": 1 },
+        "failure_scenario": {
+          "description": "Concrete inputs or state leading to wrong output or a crash.",
+          "type": "string"
+        },
+        "suggested_fix": { "type": "string" }
+      }
+    }
+  }
+}
