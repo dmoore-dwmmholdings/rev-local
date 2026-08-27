@@ -27,6 +27,7 @@ mod finding;
 pub mod fingerprint;
 pub mod ids;
 mod publish;
+pub mod redact;
 mod repo;
 pub mod risk;
 mod run;
@@ -55,6 +56,7 @@ pub use finding::{Finding, Suppression, LOW_CONFIDENCE_THRESHOLD, TITLE_MAX_CHAR
 pub use fingerprint::{fingerprint, normalize_path, normalize_title, FINGERPRINT_HEX_LEN};
 pub use ids::{AuditId, ChangeId, FindingId, PublishActionId, RepoId, RunId, SuppressionId};
 pub use publish::{CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
+pub use redact::{is_sensitive_field, redact, redact_field, REDACTED};
 pub use repo::{Cursor, Repo};
 pub use risk::{
     classify, ActionIntent, CheckConclusion, RiskAssessment, RiskInputs, RiskReason,

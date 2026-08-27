@@ -1,12 +1,12 @@
 # Build state
-- current_milestone: M1
-- current_item: RL-111
+- current_milestone: M2 (complete — see below)
+- current_item: RL-201
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-store -- --include-ignored budget
-- last_gate_result: PASS — exit 0, 8 passed (including the 2 ignored WAL tests).
+- last_gate_command: cargo test -p revlocal-core redact
+- last_gate_result: PASS — exit 0, 14 passed.
 - last_visual: n/a
-- next_action: RL-111 (REVL-24) — structured logging with secret redaction. `SecretRef`
-    already redacts in Debug and Display (RL-107); this is the tracing layer around it.
+- next_action: RL-201 (REVL-25) — git fixture repository generator. This starts M3;
+    check the M1/M2 exit gates in SPEC §17 before treating them as closed.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -40,6 +40,11 @@
 
 A guard that has only ever passed is not known to work. Where an item's criteria say
 a check must *fail* on bad input, the failure was produced deliberately and observed:
+
+- **RL-111** — redaction was disabled in `RedactingVisitor` and **7 of the 9 layer
+  tests failed**; the 2 that still passed are the ones asserting ordinary logging is
+  unharmed and still valid JSON, which correctly do not depend on redaction. Then
+  restored, `git diff` empty, green again.
 
 - **RL-110** — the append-only audit guard was verified by injecting a
   `DELETE FROM audit` into `publish.rs` and observing the test FAIL, naming the file
