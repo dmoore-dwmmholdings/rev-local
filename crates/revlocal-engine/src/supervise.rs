@@ -84,6 +84,53 @@ pub fn filtered_env<'a>(
         .collect()
 }
 
+/// Variables that are denied by §8.5 but that an engine may need to authenticate.
+///
+/// This is the sharp edge of the denylist. Decision D9 says engines authenticate via
+/// the user's existing CLI logins, and the common case is a credential file — which
+/// needs `HOME`, and `HOME` is passed. But a user who authenticates with an API key
+/// instead will find the engine unauthenticated, with **nothing on screen connecting
+/// that to rev-local withholding a variable they set themselves**.
+///
+/// `revlocal doctor` uses this to say so out loud.
+const LIKELY_AUTH_VARIABLES: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_API_KEY",
+    "OPENAI_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+];
+
+/// Variables present in `source` that are withheld and look like engine credentials.
+///
+/// Returned for `revlocal doctor` to report. Withholding them is correct — §8.5 is
+/// explicit — but doing it silently turns a two-word fix (`pass_env`) into an
+/// afternoon of confusion.
+pub fn withheld_auth_variables<'a>(
+    source: impl IntoIterator<Item = (&'a str, &'a str)>,
+    pass_env: &[String],
+) -> Vec<String> {
+    source
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            let upper = name.to_uppercase();
+            LIKELY_AUTH_VARIABLES.contains(&upper.as_str()) && is_denied(name, pass_env)
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How `revlocal doctor` should explain a withheld credential.
+pub fn withheld_auth_remediation(name: &str, engine: &str) -> String {
+    format!(
+        "`{name}` is set in your environment but rev-local withholds it from review \
+         engines (SPEC §8.5: a review engine has no business acting on remotes). If \
+         `{engine}` needs it to authenticate, add it to `engines.{engine}.pass_env` \
+         in config.toml. Most CLIs authenticate from their own login instead, which \
+         needs no environment variable."
+    )
+}
+
 /// Why a process was killed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KillReason {

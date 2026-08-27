@@ -9,9 +9,7 @@
 
 mod process_supervision {
     use revlocal_core::Depth;
-    use revlocal_engine::supervise::{
-        filtered_env, is_denied, supervise, timeout_for, KillReason, GRACE,
-    };
+    use revlocal_engine::supervise::{supervise, timeout_for, KillReason, GRACE};
     use revlocal_engine::template::Invocation;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -399,103 +397,8 @@ mod process_supervision {
         assert!(error.to_string().contains("try:"), "{error}");
     }
 
-    // --- §8.5's environment denylist ---------------------------------------------
-
-    #[test]
-    fn supervision_secrets_are_withheld_from_the_engine() {
-        // §8.5: "the review engine has no business acting on remotes; only
-        // rev-local's publish layer does". A review engine holding a GITHUB_TOKEN
-        // can push — not hypothetical with an agent that has been asked to fix
-        // things.
-        for denied in [
-            "GITHUB_TOKEN",
-            "GH_TOKEN",
-            "ANTHROPIC_API_KEY",
-            "SOME_SERVICE_SECRET",
-            "DB_PASSWORD",
-            "TRAMA_TOKEN",
-        ] {
-            assert!(is_denied(denied, &[]), "{denied} should be withheld");
-        }
-
-        for allowed in ["PATH", "HOME", "LANG", "TERM", "RUST_LOG"] {
-            assert!(!is_denied(allowed, &[]), "{allowed} should pass through");
-        }
-    }
-
-    #[test]
-    fn supervision_the_denylist_is_case_insensitive() {
-        // Environment names are conventionally uppercase but not required to be, and
-        // a lowercase `github_token` is the same secret.
-        assert!(is_denied("github_token", &[]));
-        assert!(is_denied("My_Api_Key", &[]));
-    }
-
-    #[test]
-    fn supervision_pass_env_is_the_explicit_escape_hatch() {
-        // §8.5 allows it, and it should be a decision the user makes rather than one
-        // rev-local makes for them.
-        assert!(is_denied("GITHUB_TOKEN", &[]));
-        assert!(!is_denied("GITHUB_TOKEN", &["GITHUB_TOKEN".to_owned()]));
-        assert!(
-            is_denied("GH_TOKEN", &["GITHUB_TOKEN".to_owned()]),
-            "allowing one must not allow the rest"
-        );
-    }
-
-    #[test]
-    fn supervision_filtering_removes_secrets_and_keeps_everything_else() {
-        let source = [
-            ("PATH", "/usr/bin"),
-            ("GITHUB_TOKEN", "ghp_secret"),
-            ("HOME", "/home/dev"),
-            ("OPENAI_API_KEY", "sk-secret"),
-        ];
-        let filtered = filtered_env(source, &[]);
-
-        assert_eq!(filtered.get("PATH").map(String::as_str), Some("/usr/bin"));
-        assert_eq!(filtered.get("HOME").map(String::as_str), Some("/home/dev"));
-        assert!(!filtered.contains_key("GITHUB_TOKEN"));
-        assert!(!filtered.contains_key("OPENAI_API_KEY"));
-    }
-
-    #[tokio::test]
-    async fn supervision_a_denied_variable_really_does_not_reach_the_child() {
-        // The filter is only as good as the spawn. `env_clear` plus the filtered map
-        // is what makes a withheld variable absent rather than merely overridden —
-        // and the difference is invisible until something reads it.
-        let out = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
-        let (_ignored, mut env) = fixture("valid", out.path());
-        env.insert(
-            "GITHUB_TOKEN".to_owned(),
-            "ghp_should_not_appear".to_owned(),
-        );
-        let env = filtered_env(env.iter().map(|(k, v)| (k.as_str(), v.as_str())), &[]);
-
-        let invocation = Invocation {
-            program: "env".to_owned(),
-            args: Vec::new(),
-            stdin: None,
-        };
-        let result = supervise(
-            revlocal_core::EngineKind::Mock,
-            &invocation,
-            &workspace_root(),
-            &env,
-            Duration::from_secs(10),
-            &CancellationToken::new(),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("supervise: {e}"));
-
-        assert!(
-            !result.stdout.contains("ghp_should_not_appear"),
-            "the token reached the child:\n{}",
-            result.stdout
-        );
-        assert!(
-            result.stdout.contains("PATH="),
-            "but ordinary variables must arrive"
-        );
-    }
+    // §8.5's environment denylist lives in tests/env_denylist.rs, so that RL-406's
+    // gate (`cargo test -p revlocal-engine env_denylist`) actually selects it. A
+    // filter matching nothing exits 0, which is the quietest way for a gate to pass
+    // while testing nothing.
 }

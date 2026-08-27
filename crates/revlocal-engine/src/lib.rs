@@ -23,7 +23,8 @@ pub use schema::{
     SUPPORTED_SCHEMA_VERSION,
 };
 pub use supervise::{
-    filtered_env, is_denied, supervise, timeout_for, KillReason, Supervised, GRACE,
+    filtered_env, is_denied, supervise, timeout_for, withheld_auth_remediation,
+    withheld_auth_variables, KillReason, Supervised, GRACE,
 };
 pub use template::{Invocation, InvocationTemplate, RenderContext, TemplateError, PLACEHOLDERS};
 

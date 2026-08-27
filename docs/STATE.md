@@ -1,13 +1,25 @@
 # Build state
 - current_milestone: M5
-- current_item: RL-406
+- current_item: RL-407
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-engine --test process_supervision
-- last_gate_result: PASS — exit 0, 14 passed.
+- last_gate_command: cargo test -p revlocal-engine env_denylist
+- last_gate_result: PASS — exit 0, 12 passed (0 before renaming — see below).
 - last_visual: n/a
-- next_action: RL-406 (REVL-43). Still outstanding: REVL-113 (RL-305b). The ladder
+- next_action: RL-407 (REVL-44). Still outstanding: REVL-113 (RL-305b). The ladder
     takes `Option<&dyn RepairPass>` — spending tokens on a repair is the BUDGET
     GUARD's decision, so the runner must pass `None` when there is none left.
+
+## a gate that selected nothing
+
+`RL-406`'s gate is `cargo test -p revlocal-engine env_denylist`. The work had landed
+inside `RL-405` with tests named `supervision_*`, so the gate **selected zero tests
+and exited 0** — observed before fixing it. A filter matching nothing is the quietest
+way for a gate to pass while testing nothing.
+
+**When an item's gate is a name filter, check how many tests it selected, not just
+its exit code.** `cargo test ... | grep '^test result' | awk '{s+=$4} END {print s}'`
+is enough. `RL-108`'s test file already warned about this in a comment; it happened
+anyway, one crate over.
 
 ## a correction
 
