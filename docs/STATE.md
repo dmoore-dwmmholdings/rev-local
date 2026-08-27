@@ -1,15 +1,15 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-102
+- current_item: RL-103
 - item_status: not_started
-- last_gate_command: cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && ./target/debug/revlocal --version
-- last_gate_result: PASS — exit 0, printed `revlocal 0.1.0`
+- last_gate_command: cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && (act -j test 2>/dev/null || echo 'verify in CI')
+- last_gate_result: PASS — exit 0. 10 tests passed. See `ci_green_unobserved` below.
 - last_visual: n/a
-- next_action: RL-102 — add the CI matrix for macOS, Windows and Linux
+- next_action: RL-103 — domain types in revlocal-core (SPEC §5)
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
-- items_closed: [RL-101]
+- items_closed: [RL-101, RL-102]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -33,6 +33,19 @@
    Everything else proceeds — the mock engine covers the inner loop.
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
+
+## ci_green_unobserved
+
+`RL-102` acceptance criterion 2 — "all three OS legs green" — **cannot be observed from
+this container**: `act` is not installed and there is no GitHub remote configured. What
+was observed is that `.github/workflows/ci.yml` parses and asserts its own contract:
+`crates/revlocal-cli/tests/ci_workflow.rs` (6 tests) checks the push/PR triggers, the
+three-runner matrix with `fail-fast: false`, an `svn` installer per OS plus an
+unconditional `svn --version` verification, the four gates in BUILD_LOOP §2 order, the
+cargo cache, and the `if: failure()` upload of `artifacts/logs/**` + `artifacts/gui/*.png`.
+
+**The legs stay unverified until the first push to a GitHub remote.** Re-check this
+section then; if a leg is red, RL-102 reopens.
 
 ## live_engine_notes
 

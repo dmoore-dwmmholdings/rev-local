@@ -20,8 +20,10 @@ Lints are configured in two places, and member crates opt in with `[lints] works
   `clippy::unwrap_used = "deny"`, `clippy::expect_used = "deny"`,
   `clippy::panic = "warn"`, `clippy::todo = "warn"`, `missing_docs = "warn"`,
   `unsafe_code = "forbid"`.
-- `clippy.toml` sets `allow-unwrap-in-tests = true` and `allow-expect-in-tests = true`,
-  which is the only exemption.
+- `clippy.toml` sets `allow-unwrap-in-tests`, `allow-expect-in-tests` and
+  `allow-panic-in-tests`, which are the only exemptions. Each lint needs its own
+  key — `allow-unwrap-in-tests` does not cover `clippy::panic`, which is why a
+  `panic!()` inside a `#[test]` function still failed the gate in `RL-102`.
 
 `warn` and `deny` are equivalent under the gate's `-D warnings`; the distinction records
 intent. `missing_docs` at `warn` is what makes "every public item has a doc comment"

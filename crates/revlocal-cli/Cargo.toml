@@ -22,5 +22,8 @@ revlocal-publish = { workspace = true }
 revlocal-daemon = { workspace = true }
 clap = { workspace = true }
 
+[dev-dependencies]
+serde_norway = { workspace = true }
+
 [lints]
 workspace = true

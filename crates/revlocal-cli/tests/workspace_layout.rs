@@ -73,7 +73,11 @@ fn unwrap_and_expect_are_denied_outside_tests() {
             "[workspace.lints.clippy] must deny {lint} (BUILD_PROMPT hard constraints)"
         );
     }
-    for key in ["allow-unwrap-in-tests", "allow-expect-in-tests"] {
+    for key in [
+        "allow-unwrap-in-tests",
+        "allow-expect-in-tests",
+        "allow-panic-in-tests",
+    ] {
         assert!(
             clippy.contains(&format!("{key} = true")),
             "clippy.toml must set {key} so the ban applies to non-test code only"
