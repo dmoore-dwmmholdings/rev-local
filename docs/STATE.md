@@ -1,13 +1,14 @@
 # Build state
-- current_milestone: M3
-- current_item: RL-205
+- current_milestone: M4
+- current_item: RL-301
 - item_status: not_started
-- last_gate_command: node fixtures/mock-mcp/selftest.js
-- last_gate_result: PASS — exit 0, 32/32 checks.
+- last_gate_command: ./fixtures/build.sh && test -d fixtures/out/git-basic && test -d fixtures/out/svn-basic
+- last_gate_result: PASS — exit 0 (M3 exit gate; svn portion skipped cleanly as §17 allows).
 - last_visual: n/a
-- next_action: RL-205 (REVL-29) — Windows fixture parity (build.ps1). Note it is the LAST
-    M3 item; check the M3 exit gate in SPEC §17 before closing the milestone, and remember
-    the svn half of that gate skips cleanly here rather than passing.
+- next_action: RL-301 (REVL-30) — VcsAdapter trait and scratch-worktree lifecycle. This
+    starts M4. Its gate asserts the fixture working tree is byte-identical after a review,
+    which `fixtures_the_working_tree_is_clean_after_a_build` already protects from the
+    fixture side.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -43,6 +44,15 @@ Work that is complete but whose verification cannot run in this container. Each 
 a test that **activates itself** where the prerequisite exists, so this is a gap in
 where it ran, not a gap in what exists.
 
+- **`pwsh` is not installed** — `RL-205`'s gate (`pwsh fixtures/build.ps1`) has
+  **never run**, and acceptance criterion 1 (same commit SHAs as the bash script) is
+  **NOT OBSERVED**. Most of that risk was removed structurally rather than tested:
+  the file bodies live once under `fixtures/content/` and both drivers *copy* them,
+  and the commit sequence lives once in `steps.json`, so only the git invocations
+  can diverge. Two structural tests run everywhere and assert that design holds.
+  `parity_powershell_produces_the_same_commit_shas_as_bash` runs where pwsh exists —
+  **GitHub runners ship pwsh on all three platforms**, so it runs in CI.
+
 - **`svn` is not installed and cannot be** — no root, `apt-get` refuses the dpkg
   lock. `RL-202`'s generator (`fixtures/svn.sh`) is written but **never executed**.
   Two of its three acceptance criteria — the revision→role manifest including
@@ -63,6 +73,11 @@ where it ran, not a gap in what exists.
 ## milestone gates observed
 
 Checked by running them, not by assuming the items were finished.
+
+- **M3** — `./fixtures/build.sh && test -d fixtures/out/git-basic && test -d
+  fixtures/out/svn-basic` → exit 0. Note §17 allows the svn portion to skip cleanly
+  when `svn` is absent, and it did: `svn-basic/` exists and its manifest says
+  `skipped: true`. The gate passes **without the svn fixture having been built**.
 
 - **M0** — `cargo build --workspace && cargo clippy ... -D warnings && ./target/debug/revlocal --version` → exit 0, `revlocal 0.1.0`.
 - **M1** — `cargo test -p revlocal-core` → exit 0, **133 tests** (≥25 required);

@@ -40,18 +40,13 @@ export GIT_CONFIG_NOSYSTEM=1
 export LC_ALL=C
 export TZ=UTC
 
-readonly AUTHOR_NAME="Fixture Author"
-readonly AUTHOR_EMAIL="fixtures@rev-local.invalid"
-readonly BOT_NAME="dependabot[bot]"
-readonly BOT_EMAIL="49699333+dependabot[bot]@users.noreply.github.com"
-
-# One fixed instant per commit, so a SHA cannot drift with wall-clock time.
-readonly BASE_EPOCH=1735689600   # 2025-01-01T00:00:00Z
-
-# Commit N is BASE_EPOCH + N*60, as both author and committer time.
+# Identity, timing and the commit sequence all come from
+# fixtures/content/git-basic/steps.json, so build.ps1 reads the same values rather
+# than repeating them. Commit N is base_epoch + N*seconds_per_step, as both author
+# and committer time, so a SHA cannot drift with wall-clock time.
 set_commit_time() {
   local index="$1"
-  local stamp=$(( BASE_EPOCH + index * 60 ))
+  local stamp=$(( BASE_EPOCH + index * SECONDS_PER_STEP ))
   export GIT_AUTHOR_DATE="${stamp} +0000"
   export GIT_COMMITTER_DATE="${stamp} +0000"
 }
@@ -66,8 +61,6 @@ commit_as() {
     git commit --quiet --no-gpg-sign -m "$subject"
 }
 
-commit_normal() { commit_as "$1" "$AUTHOR_NAME" "$AUTHOR_EMAIL" "$2"; }
-commit_bot()    { commit_as "$1" "$BOT_NAME" "$BOT_EMAIL" "$2"; }
 
 # --- manifest ---------------------------------------------------------------
 #
@@ -103,182 +96,121 @@ write_manifest() {
 }
 
 # --- git-basic --------------------------------------------------------------
+#
+# Driven from fixtures/content/git-basic/steps.json. The file bodies live under
+# fixtures/content/ and are COPIED, not written inline here, so this script and
+# build.ps1 apply identical bytes rather than each carrying its own copy of every
+# file. Two hand-maintained generators that must agree byte-for-byte will not stay
+# in agreement; this leaves only the git invocations to keep in step.
+
+CONTENT_DIR="${FIXTURE_ROOT}/content/git-basic"
+STEPS_FILE="${CONTENT_DIR}/steps.json"
+
+# steps.json is read with node, which is already required by the mock engine and
+# mock MCP fixtures. `jq` is not, and adding a second dependency to read one file
+# would make the fixture harder to build than the thing it tests.
+steps_field() {
+  node -e '
+    const fs = require("node:fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const path = process.argv[2].split(".");
+    let value = data;
+    for (const key of path) { value = value?.[key]; }
+    process.stdout.write(String(value ?? ""));
+  ' "$STEPS_FILE" "$1"
+}
+
+# Emit one shell-safe line per step: kind|index|dir|role|subject|author|extra
+steps_lines() {
+  node -e '
+    const fs = require("node:fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    for (const step of data.steps) {
+      process.stdout.write([
+        step.kind,
+        step.index ?? "",
+        step.dir ?? "",
+        step.role ?? "",
+        step.subject ?? "",
+        step.author ?? "human",
+        step.name ?? step.branch ?? "",
+        step.count ?? "",
+        step.into ?? "",
+      ].join("\u0001") + "\n");
+    }
+  ' "$STEPS_FILE"
+}
 
 echo "fixtures: building ${GIT_BASIC}"
 rm -rf "$GIT_BASIC" "$GIT_BARE"
 mkdir -p "$GIT_BASIC"
 cd "$GIT_BASIC"
 
-git init --quiet --initial-branch=main .
+DEFAULT_BRANCH="$(steps_field default_branch)"
+BASE_EPOCH="$(steps_field base_epoch)"
+SECONDS_PER_STEP="$(steps_field seconds_per_step)"
+AUTHOR_NAME="$(steps_field author.name)"
+AUTHOR_EMAIL="$(steps_field author.email)"
+BOT_NAME="$(steps_field bot.name)"
+BOT_EMAIL="$(steps_field bot.email)"
+
+git init --quiet --initial-branch="$DEFAULT_BRANCH" .
 git config core.autocrlf false
 git config core.fileMode true
 git config commit.gpgsign false
 
-# 1 — initial scaffold
-mkdir -p src
-cat > README.md <<'EOF'
-# fixture
+while IFS=$'\001' read -r kind index dir role subject who name count into; do
+  case "$kind" in
+    commit)
+      # Copy the step's whole tree over the working tree. Full snapshots rather
+      # than patches: a snapshot cannot half-apply, and it is what makes the two
+      # drivers trivially identical.
+      cp -R "${CONTENT_DIR}/${dir}/." .
+      git add -A
+      if [[ "$who" == "bot" ]]; then
+        commit_as "$index" "$BOT_NAME" "$BOT_EMAIL" "$subject"
+      else
+        commit_as "$index" "$AUTHOR_NAME" "$AUTHOR_EMAIL" "$subject"
+      fi
+      record "$role" "$subject"
+      ;;
 
-An offline fixture repository. Every commit here is deliberate; see .manifest.json.
-EOF
-cat > src/main.rs <<'EOF'
-fn main() {
-    println!("fixture");
-}
-EOF
-git add -A
-commit_normal 1 "Initial commit"
-record "initial" "Initial commit"
+    generate)
+      # 200 files, for depth selection and truncation (SPEC §9.3, §9.4).
+      mkdir -p "$into"
+      for n in $(seq -w 1 "$count"); do
+        printf '/// Generated fixture module %s.\npub const ID_%s: u32 = %s;\n' \
+          "$n" "$n" "$((10#$n))" > "${into}/mod_${n}.rs"
+      done
+      git add -A
+      commit_as "$index" "$AUTHOR_NAME" "$AUTHOR_EMAIL" "$subject"
+      record "$role" "$subject"
+      ;;
 
-# 2 — a clean commit, nothing wrong with it
-cat > src/util.rs <<'EOF'
-/// Clamp `value` into `lo..=hi`.
-pub fn clamp(value: i64, lo: i64, hi: i64) -> i64 {
-    if value < lo {
-        lo
-    } else if value > hi {
-        hi
-    } else {
-        value
-    }
-}
-EOF
-git add -A
-commit_normal 2 "Add a clamp helper"
-record "clean" "Add a clamp helper"
+    branch)
+      git checkout --quiet -b "$name"
+      ;;
 
-# 3 — planted off-by-one. `<=` against len() indexes one past the end.
-cat > src/pager.rs <<'EOF'
-/// Return the items on `page`, counting from zero.
-pub fn page_items(items: &[String], page: usize, per_page: usize) -> Vec<String> {
-    let start = page * per_page;
-    let mut out = Vec::new();
-    // BUG (planted): `<=` walks one past the last index on a full final page.
-    for index in start..=(start + per_page) {
-        if index <= items.len() {
-            out.push(items[index].clone());
-        }
-    }
-    out
-}
-EOF
-git add -A
-commit_normal 3 "Add pagination helper"
-record "planted_bug_off_by_one" "Add pagination helper"
+    checkout)
+      git checkout --quiet "$name"
+      ;;
 
-# 4 — filler
-cat >> src/util.rs <<'EOF'
+    merge)
+      # --no-ff so it is a real merge with two parents; a fast-forward would have
+      # one and M4's merge skip rule would never fire.
+      set_commit_time "$index"
+      GIT_AUTHOR_NAME="$AUTHOR_NAME" GIT_AUTHOR_EMAIL="$AUTHOR_EMAIL" \
+      GIT_COMMITTER_NAME="$AUTHOR_NAME" GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL" \
+        git merge --quiet --no-ff --no-gpg-sign -m "$subject" "$name"
+      record "$role" "$subject"
+      ;;
 
-/// Whether `value` is within `lo..=hi`.
-pub fn in_range(value: i64, lo: i64, hi: i64) -> bool {
-    value >= lo && value <= hi
-}
-EOF
-git add -A
-commit_normal 4 "Add in_range helper"
-record "filler" "Add in_range helper"
-
-# 5 — planted SQL injection: user input concatenated into a query.
-cat > src/db.rs <<'EOF'
-/// Look a user up by name.
-pub fn find_user(conn: &Connection, name: &str) -> Result<Vec<Row>, Error> {
-    // BUG (planted): `name` is interpolated straight into the SQL.
-    let sql = format!("SELECT id, email FROM users WHERE name = '{}'", name);
-    conn.query(&sql)
-}
-
-pub struct Connection;
-pub struct Row;
-pub struct Error;
-
-impl Connection {
-    pub fn query(&self, _sql: &str) -> Result<Vec<Row>, Error> {
-        Ok(Vec::new())
-    }
-}
-EOF
-git add -A
-commit_normal 5 "Add user lookup"
-record "planted_bug_sql_injection" "Add user lookup"
-
-# 6 — lockfile only. The skip rules must not review this (SPEC §9.4).
-cat > Cargo.lock <<'EOF'
-# This file is automatically @generated by Cargo.
-version = 4
-
-[[package]]
-name = "fixture"
-version = "0.1.0"
-EOF
-git add -A
-commit_normal 6 "Update Cargo.lock"
-record "lockfile_only" "Update Cargo.lock"
-
-# 7 — bot-authored. Skipped by ignore_authors (SPEC §13.2).
-mkdir -p .github
-cat > .github/dependabot.yml <<'EOF'
-version: 2
-updates:
-  - package-ecosystem: cargo
-    directory: "/"
-    schedule:
-      interval: weekly
-EOF
-git add -A
-commit_bot 7 "Bump serde from 1.0.0 to 1.0.1"
-record "bot" "Bump serde from 1.0.0 to 1.0.1"
-
-# 8 — filler
-cat > src/lib.rs <<'EOF'
-pub mod db;
-pub mod pager;
-pub mod util;
-EOF
-git add -A
-commit_normal 8 "Declare modules"
-record "filler_modules" "Declare modules"
-
-# 9 — 200 files, for depth selection and truncation (SPEC §9.3, §9.4).
-mkdir -p generated
-for n in $(seq -w 1 200); do
-  printf '/// Generated fixture module %s.\npub const ID_%s: u32 = %s;\n' "$n" "$n" "$((10#$n))" \
-    > "generated/mod_${n}.rs"
-done
-git add -A
-commit_normal 9 "Add 200 generated modules"
-record "large_200_files" "Add 200 generated modules"
-
-# 10 — work on a branch, so there is something to merge
-git checkout --quiet -b feature/pager-tweak
-cat >> src/pager.rs <<'EOF'
-
-/// Number of pages needed for `count` items.
-pub fn page_count(count: usize, per_page: usize) -> usize {
-    count.div_ceil(per_page)
-}
-EOF
-git add -A
-commit_normal 10 "Add page_count"
-record "branch_work" "Add page_count"
-
-# 11 — merge commit. --no-ff so it is a real merge with two parents; the skip
-#      rules must not review it (SPEC §9.4).
-git checkout --quiet main
-set_commit_time 11
-GIT_AUTHOR_NAME="$AUTHOR_NAME" GIT_AUTHOR_EMAIL="$AUTHOR_EMAIL" \
-GIT_COMMITTER_NAME="$AUTHOR_NAME" GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL" \
-  git merge --quiet --no-ff --no-gpg-sign -m "Merge branch 'feature/pager-tweak'" \
-    feature/pager-tweak
-record "merge" "Merge branch 'feature/pager-tweak'"
-
-# 12 — a final clean commit
-cat >> README.md <<'EOF'
-
-Built by `fixtures/build.sh`. Do not edit by hand.
-EOF
-git add -A
-commit_normal 12 "Note the generator in the README"
-record "clean_final" "Note the generator in the README"
+    *)
+      echo "fixtures: unknown step kind ${kind}" >&2
+      exit 1
+      ;;
+  esac
+done < <(steps_lines)
 
 write_manifest "${GIT_BASIC}/.manifest.json"
 
@@ -288,7 +220,7 @@ printf '.manifest.json\n' > .git/info/exclude
 
 COMMIT_COUNT="$(git rev-list --count HEAD)"
 if [[ "$COMMIT_COUNT" -ne 12 ]]; then
-  echo "fixtures: expected 12 commits on main, got ${COMMIT_COUNT}" >&2
+  echo "fixtures: expected 12 commits on ${DEFAULT_BRANCH}, got ${COMMIT_COUNT}" >&2
   exit 1
 fi
 
