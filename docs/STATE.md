@@ -1,12 +1,13 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-302
+- current_item: RL-303
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs scratch
-- last_gate_result: PASS — exit 0, 13 passed.
+- last_gate_command: cargo test -p revlocal-vcs git::cmd
+- last_gate_result: PASS — exit 0, 12 passed.
 - last_visual: n/a
-- next_action: RL-302 (REVL-31) — git adapter: probe and discover. The trait and the
-    scratch lifecycle exist; this is the first real implementation behind them.
+- next_action: RL-303 (REVL-32) — git discovery. Every git call must go through
+    `git::cmd::run`; `git_cmd_no_module_spawns_git_directly` enforces it and was
+    observed failing when violated.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -92,6 +93,13 @@ milestone. **Trama's `update_page` replaces a body — `get_page` first (§11.5)
 A guard that has only ever passed is not known to work. Where an item's criteria say
 a check must *fail* on bad input, the failure was produced deliberately and observed:
 
+- **RL-302** — two guards, both observed failing when broken. Replacing `killpg`
+  with `kill` (child only, not the group) made
+  `git_cmd_a_timeout_kills_the_child_and_its_whole_process_group` FAIL with
+  "grandchild N survived the timeout". Adding a `Command::new("git")` to
+  `scratch.rs` made `git_cmd_no_module_spawns_git_directly` FAIL naming the file.
+  Both restored, 12/12 again.
+
 - **RL-204** — read-before-write enforcement was disabled in `server.js` and the
   selftest observed FAILING 4 of 32 checks with exit 1; restored, `git diff` empty,
   32/32 again.
@@ -119,6 +127,20 @@ a check must *fail* on bad input, the failure was produced deliberately and obse
   `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
   force a transitive arrival, observed `revlocal-core -> tokio-util (normal) ->
   tokio (normal)`. Manifest restored, `git diff` empty, test green again.
+
+## enforced by a guard test
+
+Rules that hold because a test fails when they are broken, not because everyone
+remembers them. Each was observed failing.
+
+- **Only `git::cmd` may spawn `git`** (`RL-302`). A second call site is not a style
+  problem — it is a call site with no timeout and no prompt suppression, and it will
+  be found when the daemon hangs on someone's private repository. Production code
+  only; test code inspecting a fixture repo is exempt and the test says why.
+- **The audit log has no update or delete** (`RL-110`), asserted by scanning the
+  store crate's source rather than by exercising the methods that exist.
+- **`revlocal-core` reaches no I/O crate transitively** (`RL-104`), walked from
+  `cargo metadata`'s resolve graph and reported with the full dependency path.
 
 ## fixture invariants worth not breaking
 

@@ -13,10 +13,12 @@
 //!   simply never showing up (SPEC §18).
 
 mod adapter;
+pub mod git;
 mod scratch;
 
 pub use adapter::{
     ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem, ProbeReport, Result,
     VcsAdapter, VcsError,
 };
+pub use git::{GitError, GitOutput, GitRunner};
 pub use scratch::{RunOutcome, ScratchDir};
