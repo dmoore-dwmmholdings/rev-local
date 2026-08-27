@@ -176,11 +176,30 @@ while IFS=$'\001' read -r kind index dir role subject who name count into; do
       ;;
 
     generate)
-      # 200 files, for depth selection and truncation (SPEC §9.3, §9.4).
+      # 200 files, for depth selection AND truncation (SPEC §9.3, §9.4).
+      #
+      # Each file is deliberately verbose. The two-line version this replaced made a
+      # 44 KB diff against a 512 KB default budget, so §9.4's caps could never fire:
+      # the step claimed to exercise truncation and only ever exercised depth, and
+      # every unit test passed because each lowered the budget to suit itself. The
+      # M6 exit gate caught it. See REVL-118 and ADR 0025.
+      #
+      # ASCII only, and no locale-dependent formatting: build.ps1 must produce these
+      # bytes exactly, and `fixture_parity` compares them.
       mkdir -p "$into"
       for n in $(seq -w 1 "$count"); do
-        printf '/// Generated fixture module %s.\npub const ID_%s: u32 = %s;\n' \
-          "$n" "$n" "$((10#$n))" > "${into}/mod_${n}.rs"
+        {
+          printf '/// Generated fixture module %s.\n' "$n"
+          printf '///\n'
+          printf '/// Deliberately verbose: 200 of these must exceed max_total_diff_bytes\n'
+          printf '/// (512 KB) so that SPEC 9.4 truncation runs at its DEFAULT settings.\n'
+          printf 'pub const ID_%s: u32 = %s;\n' "$n" "$((10#$n))"
+          printf '\n'
+          for k in $(seq -w 1 40); do
+            printf 'pub fn value_%s_%s(input: u32) -> u32 { input.wrapping_add(%s).wrapping_mul(3) }\n' \
+              "$n" "$k" "$((10#$k))"
+          done
+        } > "${into}/mod_${n}.rs"
       done
       git add -A
       commit_as "$index" "$AUTHOR_NAME" "$AUTHOR_EMAIL" "$subject"

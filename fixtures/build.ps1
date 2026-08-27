@@ -153,10 +153,22 @@ try {
 
             'generate' {
                 New-Item -ItemType Directory -Force -Path $step.into | Out-Null
+                # Must match build.sh byte for byte -- see the comment there, and
+                # `fixture_parity`. ASCII only, no locale-dependent formatting.
                 for ($n = 1; $n -le [int]$step.count; $n++) {
                     $padded = '{0:d3}' -f $n
-                    $text = "/// Generated fixture module $padded.`npub const ID_$padded" + ": u32 = $n;`n"
-                    Write-LfFile -Path (Join-Path $step.into "mod_$padded.rs") -Text $text
+                    $sb = [System.Text.StringBuilder]::new()
+                    [void]$sb.Append("/// Generated fixture module $padded.`n")
+                    [void]$sb.Append("///`n")
+                    [void]$sb.Append("/// Deliberately verbose: 200 of these must exceed max_total_diff_bytes`n")
+                    [void]$sb.Append("/// (512 KB) so that SPEC 9.4 truncation runs at its DEFAULT settings.`n")
+                    [void]$sb.Append("pub const ID_$padded" + ": u32 = $n;`n")
+                    [void]$sb.Append("`n")
+                    for ($k = 1; $k -le 40; $k++) {
+                        $kp = '{0:d2}' -f $k
+                        [void]$sb.Append("pub fn value_${padded}_${kp}(input: u32) -> u32 { input.wrapping_add($k).wrapping_mul(3) }`n")
+                    }
+                    Write-LfFile -Path (Join-Path $step.into "mod_$padded.rs") -Text $sb.ToString()
                 }
                 Invoke-Git add -A
                 Invoke-CommitAs -Index $step.index -Name $AuthorName -Email $AuthorEmail -Subject $step.subject

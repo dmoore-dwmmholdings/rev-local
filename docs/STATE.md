@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-507 (REVL-52)
+- current_item: RL-508 (REVL-118)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-daemon determinism
-- last_gate_result: PASS — 7 tests, 7 passed; workspace 612 passed / 0 failed
+- last_gate_command: SPEC §17 M6 exit gate, run by hand; plus cargo test --workspace
+- last_gate_result: PASS — part 1 done/2 findings; part 2 summary/truncated/58 omitted; workspace 613 passed / 0 failed
 - last_visual: n/a
-- next_action: REVL-118 (RL-508) — the 200-file fixture is 12x too small to truncate; M6 stays open until its exit gate is observed passing
+- next_action: close M6, write the overdue Trama build log for M4/M5/M6, then start M7 (§11 publish)
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -692,3 +692,41 @@ infer it.
 M0–M3 pages exist. **M4, M5 and M6 have no page.** BUILD_PROMPT requires one per
 milestone close. M6 is not closed yet, but M4 and M5 are — those two are overdue and
 should be written before M6's.
+
+## M6 exit gate now PASSES — observed
+
+```
+part 1 (planted bug):  status=done, findings=2
+part 2 (200 files):    depth=summary, truncated=true, 58 files omitted
+                       every omitted name present in the prompt (asserted name by name)
+```
+
+Fixture diff went from 44,662 to **737,462** bytes against the 524,288 default.
+
+## the generalisable bug, not just this one
+
+Every test that touched truncation lowered `max_total_diff_bytes` to reach its
+subject. Each was individually correct — you cannot exercise a 512 KB boundary with a
+fixture you also want small. But they all did the same thing, so **§9.4's default path
+had never run end to end.** The tests agreed with each other and none tested what a
+user gets.
+
+> **A test that adjusts a default to reach its subject verifies the mechanism, not the
+> configuration.** If every test of a rule adjusts the same default, nothing checks
+> that the shipped default ever reaches the rule at all.
+
+Still open, same class, smaller blast radius: **`max_file_diff_bytes` (64 KB) is only
+ever exercised with a lowered budget** — no fixture file comes near 64 KB. Written
+down here rather than left to be rediscovered.
+
+## the role-not-sha invariant paid off
+
+Every sha from step 9 onward changed and **no test needed editing**. Tests reference
+fixture commits by role. Worth keeping absolutely.
+
+## build.ps1's new branch has NOT been executed
+
+`pwsh` is absent here, so `fixture_parity` reports itself skipped rather than passing.
+The PowerShell string construction was independently simulated and compared byte for
+byte against build.sh's real output across five files — zero mismatches — which is a
+real check and is weaker than running it. Stays on REVL-29.

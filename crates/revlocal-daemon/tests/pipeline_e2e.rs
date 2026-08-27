@@ -509,6 +509,89 @@ fn the_200_file_commit_is_summarised_and_truncated() {
         .any(|r| r.contains("files changed")));
 }
 
+/// **SPEC §17's M6 exit gate, at DEFAULT settings.**
+///
+/// The gate reads: "the 200-file commit yields `depth=summary` and `truncated=true`
+/// with the full omitted-file list present in the prompt". Every word of that is
+/// asserted here, and the default config is the point — the test above lowers
+/// `max_total_diff_bytes` to 4,000 to exercise the truncation *logic*, which is
+/// sound and which is exactly why nobody noticed for seven stories that §9.4's
+/// default path never ran at all (REVL-118).
+///
+/// The omitted list is checked **name by name**, not by count. A count would pass
+/// against a list that named 58 wrong files.
+#[test]
+fn the_m6_exit_gate_runs_at_default_settings() {
+    let temp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let out = temp.path().join("fixtures");
+    let manifest = build_fixture(&out).unwrap_or_else(|e| panic!("{e}"));
+    let sha = manifest
+        .sha("large_200_files")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let repo_dir = out.join("git-basic");
+
+    let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|e| panic!("{e}"));
+    runtime.block_on(async {
+        let runner = GitRunner::new();
+        let scratch = temp.path().join("scratch");
+        let change = change_for(&sha, DiffStat::default());
+        let context = revlocal_vcs::git::materialize(&runner, &repo_dir, &change, &scratch)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let change = change_for(&sha, context.stat);
+        let engine =
+            MockEngine::with_behaviour(MockBehaviour::Succeed(Box::new(outcome_with(Vec::new()))));
+
+        let report = pipeline::review(
+            &ReviewInputs {
+                repo_name: "git-basic",
+                repo_kind: "git",
+                change: &change,
+                config: &RepoConfig::default(), // <- the whole point
+                worktree: &context.worktree,
+                diff_unified: &context.diff_unified,
+                diff_files: &context.diff_files,
+                labels: &[],
+                suppressions: &[],
+                published_fingerprints: &[],
+                prior_findings: &[],
+                skip: None,
+                now: Timestamp::default(),
+            },
+            &engine,
+            &scratch,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(
+            report.depth, "summary",
+            "reasons: {:?}",
+            report.depth_reasons
+        );
+        assert!(report.truncated, "the default budget was not exceeded");
+        assert!(!report.omitted_files.is_empty());
+        assert!(report.is_consistent());
+
+        // §9.4's absolute rule: "Truncation must never silently hide a file."
+        let tasks = engine.seen_tasks.lock().unwrap_or_else(|e| panic!("{e}"));
+        let prompt = &tasks.first().expect("the engine ran").prompt;
+
+        for omitted in &report.omitted_files {
+            assert!(
+                prompt.contains(omitted.as_str()),
+                "`{omitted}` was dropped from the diff and never named in the prompt"
+            );
+            assert!(
+                !prompt.contains(&format!("+pub fn value_{}", &omitted[14..17])),
+                "`{omitted}` was reported omitted but its hunks are still in the diff"
+            );
+        }
+        assert!(prompt.contains("This diff has been truncated"));
+    });
+}
+
 // --- criterion 3: stable JSON --------------------------------------------
 
 #[test]
