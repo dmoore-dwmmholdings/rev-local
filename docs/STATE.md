@@ -1,15 +1,16 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-308
+- current_item: RL-1304
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs github::transport
-- last_gate_result: PASS — exit 0, 15 passed.
+- last_gate_command: cargo test -p revlocal-vcs --test github_pr_discover
+- last_gate_result: PASS — exit 0, 16 passed.
+- next_action: **RECOMMENDED NEXT: RL-1304 (REVL-114)** — audit §5's DDL against
+    §§6–12 in one pass. Three amendments have come from that same gap already, each
+    costing a migration + sqlx prepare + SPEC edit + ADR *after* the surrounding code
+    was written. §9.4's `truncated` / omitted-file list looks like the next one, and
+    RL-309 (truncation) is imminent. Filed at `high`; the backlog's own next item by
+    priority is RL-309 (REVL-38). Also outstanding in M4: REVL-113 (RL-305b).
 - last_visual: n/a
-- next_action: RL-308 (REVL-37) — GitHub PR discovery. Also outstanding in M4:
-    REVL-113 (RL-305b, the generated-file marker skip).
-    **Worth doing soon:** three §5 amendments have now come from the same gap — the
-    DDL predating a fact another section requires persisted. Check §5 against §§6–12
-    in one pass rather than finding the fourth the same way (ADR 0015).
 
 ## counting tests
 

@@ -664,11 +664,15 @@ mod skip_rules {
             ]
         );
 
+        // draft_pr and covered_by_pr are decided by the GitHub adapter, which is
+        // the only layer that knows a change is a pull request at all;
+        // already_reviewed needs the store. This assertion is why adding DraftPr in
+        // RL-308 failed here first rather than being quietly forgotten.
         let deferred: Vec<&str> = SkipReason::ALL
             .iter()
             .filter(|r| !r.is_decided_by_vcs())
             .map(|r| r.as_str())
             .collect();
-        assert_eq!(deferred, ["covered_by_pr", "already_reviewed"]);
+        assert_eq!(deferred, ["draft_pr", "covered_by_pr", "already_reviewed"]);
     }
 }

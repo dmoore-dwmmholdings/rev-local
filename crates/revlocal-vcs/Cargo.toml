@@ -24,6 +24,7 @@ tracing = { workspace = true }
 nix = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 # revlocal-store is a DEV dependency only. Production code in this crate must not
 # depend on the store — the VCS layer notices, the caller records (see ADR 0013).
 # The force-push test uses it to prove the DiscoveryEvent -> audit row path end to

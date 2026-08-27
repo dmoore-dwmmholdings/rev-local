@@ -31,6 +31,11 @@ pub enum SkipReason {
     IgnoredAuthor,
     /// A merge commit, with `review_merge_commits = false`.
     MergeCommit,
+    /// A draft pull request, with `review_draft_prs = false` (SPEC §6.3, §13.2).
+    ///
+    /// Decided by the GitHub adapter, which is the only layer that knows a change
+    /// is a pull request at all.
+    DraftPr,
     /// The commit is already covered by an open pull request (SPEC §6.3).
     ///
     /// Not decided here: it needs the GitHub adapter's view of open PRs. `RL-306`
@@ -50,6 +55,7 @@ impl SkipReason {
         Self::EmptyDiff,
         Self::IgnoredAuthor,
         Self::MergeCommit,
+        Self::DraftPr,
         Self::CoveredByPr,
         Self::AlreadyReviewed,
     ];
@@ -61,6 +67,7 @@ impl SkipReason {
             Self::EmptyDiff => "empty_diff",
             Self::IgnoredAuthor => "ignored_author",
             Self::MergeCommit => "merge_commit",
+            Self::DraftPr => "draft_pr",
             Self::CoveredByPr => "covered_by_pr",
             Self::AlreadyReviewed => "already_reviewed",
         }
@@ -68,6 +75,10 @@ impl SkipReason {
 
     /// Whether this reason is decided by [`evaluate`], as opposed to by a layer
     /// with more context.
+    ///
+    /// `DraftPr` and `CoveredByPr` are decided by the GitHub adapter, which is the
+    /// only layer that knows a change is a pull request; `AlreadyReviewed` needs the
+    /// store.
     pub const fn is_decided_by_vcs(self) -> bool {
         matches!(
             self,
