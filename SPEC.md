@@ -227,6 +227,7 @@ CREATE TABLE run (
   trigger           TEXT NOT NULL CHECK (trigger IN ('poll','hook','webhook','manual','backfill','retry')),
   skip_reason       TEXT,
   error             TEXT,
+  degraded          TEXT,                    -- why output was salvaged (§8.2); NULL = clean
   tokens_in         INTEGER NOT NULL DEFAULT 0,
   tokens_out        INTEGER NOT NULL DEFAULT 0,
   cost_usd          REAL,

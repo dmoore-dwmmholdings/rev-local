@@ -9,6 +9,9 @@ authors.workspace = true
 description = "Domain types, configuration, errors and the risk model. No I/O dependencies (SPEC §4.1)."
 
 [dependencies]
+# chrono without the `clock` feature: the domain crate represents timestamps but
+# never reads the system clock, which keeps it free of ambient I/O (SPEC §4.1).
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

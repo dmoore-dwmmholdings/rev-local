@@ -1,16 +1,17 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-103b
-- item_status: in_progress
+- current_item: RL-104
+- item_status: not_started
 - last_gate_command: cargo test -p revlocal-core
-- last_gate_result: PASS — exit 0. 13 tests + 3 doctests, 0 failed.
+- last_gate_result: PASS — exit 0. 26 tests + 3 doctests, 0 failed.
 - last_visual: n/a
-- next_action: RL-103b (REVL-108) — the domain structs: Repo, Cursor, Change, DiffStat,
-    FileDiff, Run, Usage, Finding, Suppression, PublishAction, AuditEntry, BudgetLedgerEntry
+- next_action: RL-104 (REVL-17) — enforce that revlocal-core has no I/O dependencies.
+    Per ADR 0005, assert the ABSENCE of tokio/sqlx/reqwest transitively rather than an
+    allowlist, or the test needs editing every time a pure dependency is added.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
-- items_closed: [RL-101, RL-102]
+- items_closed: [RL-101, RL-102, RL-103, RL-103b]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -35,18 +36,16 @@
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
 
-## RL-103 was split
+## spec_amendments
 
-RL-103 covered 21 types across SPEC §3 and §5 — more than one iteration. Split per
-BUILD_PROMPT: the enums and newtype ids landed as the first half; the structs are
-**REVL-108 / RL-103b**, a subtask of REVL-16. REVL-16 stays `In Progress` and closes
-when RL-103b lands, since its criterion "every type in SPEC §3 and §5 is represented"
-is not yet true.
+The spec has been changed once, under the SPEC §5 implementation note ("if you must
+deviate, do it — but record why in docs/adr/ and update this section in the same
+commit").
 
-Landed: 14 enums (`RepoKind`, `EngineKind`, `AutonomyMode`, `ChangeKind`, `RunStatus`,
-`Depth`, `TriggerSource`, `Severity`, `Category`, `FindingState`, `Capability`,
-`PublishActionStatus`, `RiskClass`, `Verdict`) and 7 newtype ids, plus `ParseEnumError`
-/ `DomainError`. See ADR 0004.
+- **`run.degraded TEXT`** added to the `run` table in SPEC §5 (`RL-103b`, ADR 0005).
+  §8.1 gives `EngineOutcome` a `degraded: Option<String>` and §12.3 escalates every
+  action on a degraded run to high risk, but the `run` table had nowhere to keep it.
+  Nullable reason, not a flag. **`RL-108`'s `0001_init.sql` must include it.**
 
 ## ci_green_unobserved
 

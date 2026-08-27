@@ -17,13 +17,32 @@
 #[macro_use]
 mod macros;
 
+mod audit;
+mod change;
 mod enums;
 mod error;
+mod finding;
 pub mod ids;
+mod publish;
+mod repo;
+mod run;
 
+/// A point in time, as stored in SPEC §5's `TEXT` timestamp columns.
+///
+/// Always UTC. The domain crate represents instants but never reads the clock —
+/// chrono is taken without its `clock` feature — so a timestamp is always supplied
+/// by the caller and a test can pin one (SPEC §4.1).
+pub type Timestamp = chrono::DateTime<chrono::Utc>;
+
+pub use audit::{AuditEntry, BudgetLedgerEntry};
+pub use change::{Change, DiffStat, FileDiff, FileStatus};
 pub use enums::{
     AutonomyMode, Capability, Category, ChangeKind, Depth, EngineKind, FindingState,
     PublishActionStatus, RepoKind, RiskClass, RunStatus, Severity, TriggerSource, Verdict,
 };
 pub use error::{DomainError, ParseEnumError, Result};
+pub use finding::{Finding, Suppression, LOW_CONFIDENCE_THRESHOLD, TITLE_MAX_CHARS};
 pub use ids::{AuditId, ChangeId, FindingId, PublishActionId, RepoId, RunId, SuppressionId};
+pub use publish::{CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
+pub use repo::{Cursor, Repo};
+pub use run::{Run, Usage};
