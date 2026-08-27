@@ -1,12 +1,12 @@
 # Build state
 
-- current_milestone: M6
+- current_milestone: M7
 - current_item: RL-508 (REVL-118)
 - item_status: done
 - last_gate_command: SPEC §17 M6 exit gate, run by hand; plus cargo test --workspace
 - last_gate_result: PASS — part 1 done/2 findings; part 2 summary/truncated/58 omitted; workspace 613 passed / 0 failed
 - last_visual: n/a
-- next_action: close M6, write the overdue Trama build log for M4/M5/M6, then start M7 (§11 publish)
+- next_action: start M7 (§11 publish) — first unblocked item in epic REVL-6
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -730,3 +730,23 @@ fixture commits by role. Worth keeping absolutely.
 The PowerShell string construction was independently simulated and compared byte for
 byte against build.sh's real output across five files — zero mismatches — which is a
 real check and is weaker than running it. Stays on REVL-29.
+
+## M6 CLOSED — exit gate observed passing
+
+`REVL-5` is Done. Trama page `rev-local build log / M6` written and published; the
+index updated.
+
+**The index had said "M4 — next" for three milestones.** M4 and M5 closed without a
+build-log page, against this log's own stated rule. Filed as **REVL-119** and left
+visible on the index rather than quietly fixed — an index that looks complete and is
+not is the same failure the log documents everywhere else.
+
+## the two rules M6 paid for
+
+Both now on the Trama index, because they generalise past this project:
+
+1. **A milestone gate is not the sum of its story gates.** Seven passing story gates,
+   one failing milestone gate. Each story's test adjusted a default to reach its
+   subject; collectively the shipped default never reached the rule.
+2. **Never write a string match against another tool's output without running the
+   tool.** Four occurrences in M6; one shipped a code path that had never once fired.
