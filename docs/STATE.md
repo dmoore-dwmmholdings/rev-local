@@ -1,14 +1,13 @@
 # Build state
 - current_milestone: M5
-- current_item: RL-405
+- current_item: RL-406
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-engine --test fallback_ladder
-- last_gate_result: PASS — exit 0, 16 passed.
+- last_gate_command: cargo test -p revlocal-engine --test process_supervision
+- last_gate_result: PASS — exit 0, 14 passed.
 - last_visual: n/a
-- next_action: RL-405 (REVL-42). The ladder takes `Option<&dyn RepairPass>` — whether
-    to spend tokens on a repair is the BUDGET GUARD's decision, not the ladder's, so
-    the runner must pass `None` when there is no budget left. Also outstanding:
-    REVL-113 (RL-305b).
+- next_action: RL-406 (REVL-43). Still outstanding: REVL-113 (RL-305b). The ladder
+    takes `Option<&dyn RepairPass>` — spending tokens on a repair is the BUDGET
+    GUARD's decision, so the runner must pass `None` when there is none left.
 
 ## a correction
 
@@ -59,11 +58,30 @@ Current total: **308 passing, 0 failing.**
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
 
+## criteria not met as written
+
+Recorded rather than quietly satisfied. Each is a place where an acceptance criterion
+and the spec pull against each other, resolved deliberately.
+
+- **`RL-405` criterion 1** — "hung mock engine is killed within timeout + 2s" cannot
+  hold together with §8.5's five-second SIGTERM grace, for a process that ignores
+  SIGTERM. **The grace period wins** (ADR 0017): shortening it would lose a review
+  whose tokens were already spent, on exactly the slow runs where it was most
+  expensive. The "+2s" is tested as *supervisor overhead* against a SIGTERM-respecting
+  process; the pathological path is bounded at `timeout + grace + 2s`. If the two
+  seconds are wanted literally, §8.5's grace is the thing to change.
+
 ## unverified_here
 
 Work that is complete but whose verification cannot run in this container. Each has
 a test that **activates itself** where the prerequisite exists, so this is a gap in
 where it ran, not a gap in what exists.
+
+- **`RL-405` criterion 4** — "test passes on all three platforms in CI" is
+  **NOT OBSERVED**: CI has never run (no remote). The Unix path is fully exercised
+  here; the Windows path needs a Job Object, which §8.5 requires and `RL-1303` owns,
+  and until then a timed-out engine can leave grandchildren on Windows. The
+  `#[cfg(not(unix))]` branch logs that rather than silently doing nothing.
 
 - **`pwsh` is not installed** — `RL-205`'s gate (`pwsh fixtures/build.ps1`) has
   **never run**, and acceptance criterion 1 (same commit SHAs as the bash script) is

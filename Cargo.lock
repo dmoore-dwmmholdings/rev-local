@@ -1397,6 +1397,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "jsonschema",
+ "nix",
  "revlocal-core",
  "serde",
  "serde_json",
@@ -1405,6 +1406,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]

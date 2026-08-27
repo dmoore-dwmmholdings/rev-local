@@ -146,6 +146,21 @@ async function main() {
     case "hang": {
       process.on("SIGTERM", () => {});
       process.on("SIGINT", () => {});
+
+      // A grandchild, so a supervisor that kills only the direct child is caught.
+      // That is the failure worth catching: a surviving grandchild holds the
+      // scratch worktree open and the next run fails for a reason nobody can trace.
+      // Its pid goes to a file rather than stdout, because a supervisor under test
+      // may never read stdout from a process it had to kill.
+      const { spawn } = await import("node:child_process");
+      const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], {
+        detached: false,
+        stdio: "ignore",
+      });
+      if (outDir) {
+        writeFileSync(join(outDir, "grandchild.pid"), String(grandchild.pid), "utf8");
+      }
+
       process.stdout.write("mock-engine: hanging, ignoring SIGTERM\n");
       // An interval keeps the event loop alive indefinitely without spinning.
       setInterval(() => {}, 1 << 30);
