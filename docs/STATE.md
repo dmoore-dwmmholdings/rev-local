@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-505 (REVL-50)
+- current_item: RL-506a (REVL-51)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-daemon normalize
-- last_gate_result: PASS — 27 tests selected, 27 passed; workspace 577 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-daemon --test pipeline_e2e
+- last_gate_result: PASS — 14 tests, 14 passed; workspace 591 passed / 0 failed
 - last_visual: n/a
-- next_action: RL-506 (REVL-51) — the pipeline end to end, which is what REVL-47..50 were blocking
+- next_action: REVL-117 (RL-506b) — the VcsAdapter assembly and `revlocal review --json`; then REVL-52 closes M6
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -527,3 +527,52 @@ have given the wrong answer for one of them.
 - Suppressed findings become publishable → 3 fail.
 - Don't supersede repeats → 4 fail.
 - Stop salvaging severities → 2 fail, including the real-validator cross-check.
+
+## a negative probe that did not bite — and how to tell why
+
+Three probes against the pipeline. **Two did not fail, for opposite reasons**, and the
+difference is the whole lesson:
+
+- Leaking the worktree path into `summary` → nothing failed, because `summary` is
+  overwritten on the success path. **The probe was ineffective.** Re-probing through
+  `repo` failed both stability tests, as it should.
+- Swapping `publishable()` for all findings in the escalation check → nothing failed,
+  because every existing capped-finding case was still `Open`. **That was a real
+  gap**: the design claim "escalation asks the normalized findings" had no test.
+  `a_suppressed_critical_does_not_escalate` was written in response; the re-probe now
+  fails exactly it.
+
+**When a negative probe does not bite, establish which of the two it is before moving
+on.** Assuming the test is fine leaves an untested claim in the codebase — and the
+untested claim was one I had already written into a doc comment as though settled.
+
+## a wrapper that claims more than it does is worse than none
+
+Criterion 4 wanted "zero network access, asserted by a no-network test wrapper". The
+obvious version — run an outbound command, assert it fails — **passes on any offline
+machine whether the wrapper works or not**, so it asserts nothing while looking done.
+
+`GIT_ALLOW_PROTOCOL=file` makes git refuse `https://` *before opening a socket*, with
+a distinctive message. The assertion requires that message, so it fails where the
+wrapper is not applied.
+
+Its first run failed usefully: I guessed "not supported"; git says
+`transport 'https' not allowed`. Third time this has come up — **assert against what
+the tool emits, not what you expect it to.**
+
+## fixture-driven tests found a cross-stage interaction I had not predicted
+
+`a_high_severity_finding_escalates...` failed first time because I gave the finding a
+file the fixture commit does not touch. §9.5 capped it to medium as out-of-diff, and a
+capped finding correctly does not escalate.
+
+My test was wrong and the code was right — but the interaction is worth a test of its
+own, so `an_out_of_diff_critical_does_not_escalate_because_it_was_capped` now pins it.
+Otherwise any engine hallucinating a filename could spend the escalation budget.
+
+## RL-506 was split
+
+REVL-51 keeps the §9 pipeline and all four criteria (the gate is daemon-side).
+**REVL-117 (RL-506b)** takes the two things it also asked for: there is no
+`impl VcsAdapter` anywhere — the trait is declared and only free functions implement
+its parts — and the CLI has no `review` subcommand.
