@@ -9,10 +9,15 @@ authors.workspace = true
 description = "`Engine` trait plus the Claude Code, Codex and mock review runners."
 
 [dependencies]
+async-trait = { workspace = true }
 revlocal-core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 jsonschema = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

@@ -1,14 +1,23 @@
 # Build state
-- current_milestone: M4
-- current_item: RL-309
+- current_milestone: M5
+- current_item: RL-402
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-store
-- last_gate_result: PASS — exit 0, 68 passed.
+- last_gate_command: cargo test -p revlocal-engine trait_
+- last_gate_result: PASS — exit 0, 16 passed.
 - last_visual: n/a
-- next_action: RL-309 (REVL-38) — diff truncation. The schema is already there:
-    `run.truncated` and `run.omitted_files_json` landed in RL-1304, and
-    `Run::is_consistent` already refuses a truncated run with an empty omitted list.
-    Also outstanding in M4: REVL-113 (RL-305b).
+- next_action: RL-402 (REVL-39) — the engine runner. Note two mocks now exist and
+    they are not interchangeable: `fixtures/mock-engine` is a real subprocess and is
+    what RL-402 must drive to exercise §8.2's ladder; `revlocal_engine::MockEngine`
+    is in-process and is for pipeline tests. Also outstanding: REVL-113 (RL-305b).
+
+## a correction
+
+Last iteration's report said "RL-309 (REVL-38) — diff truncation" was next. **There
+is no RL-309.** M4's VCS epic ends at RL-308, REVL-38 is RL-401 (the engine trait),
+and truncation is **RL-504 / REVL-49** in the M5 pipeline epic. The RL-1304 audit was
+still worth doing first — `publish_action.next_attempt_at` precedes REVL-60, and the
+truncation columns now precede REVL-49 — but the claim that it unblocked *the very
+next item* was wrong. **Check the item, do not infer the id from the sequence.**
 
 ## counting tests
 
