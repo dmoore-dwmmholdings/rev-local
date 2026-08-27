@@ -10,9 +10,12 @@ description = "Scheduler, trigger sources, run orchestrator and budget guard."
 
 [dependencies]
 chrono = { workspace = true }
+handlebars = { workspace = true }
 revlocal-core = { workspace = true }
+revlocal-engine = { workspace = true }
 revlocal-store = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

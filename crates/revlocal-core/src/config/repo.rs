@@ -53,6 +53,16 @@ pub struct RepoConfig {
     ///
     /// Load-bearing for risk: publishing is high risk, a draft is low (SPEC §12.3).
     pub trama_publish: bool,
+    /// Total budget for repo-convention files in the prompt (SPEC §9.2).
+    ///
+    /// 24 KB. Conventions are the whole basis of the convention/architecture-drift
+    /// scope (D8), and a repository with a 400 KB CONTRIBUTING.md would otherwise
+    /// crowd the diff out of the prompt entirely.
+    pub max_convention_bytes: usize,
+    /// Per-file diff budget before hunks become a stat line (SPEC §9.4).
+    pub max_file_diff_bytes: usize,
+    /// Total diff budget before whole files are dropped (SPEC §9.4).
+    pub max_total_diff_bytes: usize,
     /// Whether the webhook listener is enabled for this repo (SPEC §7.3).
     ///
     /// Off by default and opt-in per repo, as §7.3 requires: a listener bound
@@ -125,6 +135,9 @@ impl Default for RepoConfig {
             andare_key_regex: r"[A-Z][A-Z0-9]+-\d+".to_owned(),
             trama_space: None,
             trama_publish: false,
+            max_convention_bytes: 24 * 1024,
+            max_file_diff_bytes: 64 * 1024,
+            max_total_diff_bytes: 512 * 1024,
             webhook_enabled: false,
             webhook_secret_ref: None,
             block_on_findings: false,

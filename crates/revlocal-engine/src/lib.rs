@@ -3,6 +3,13 @@
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
 pub mod engine;
+/// The review prompt template (SPEC §9.2).
+///
+/// Compiled in rather than read from disk: a packaged desktop app has no `crates/`
+/// directory beside the binary, so a runtime read would work in every test and fail
+/// on every install.
+pub const REVIEW_TEMPLATE: &str = include_str!("../prompts/review.md.hbs");
+
 pub mod ladder;
 pub mod mock;
 pub mod runner;

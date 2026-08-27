@@ -3,6 +3,7 @@
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
 pub mod logging;
+pub mod prompt;
 pub mod state_machine;
 
 pub use logging::{

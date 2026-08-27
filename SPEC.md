@@ -999,6 +999,9 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
   "andare_key_regex": "[A-Z][A-Z0-9]+-\\d+",
   "trama_space": "ENG",
   "trama_publish": false,
+  "max_convention_bytes": 24576,        // §9.2
+  "max_file_diff_bytes": 65536,         // §9.4
+  "max_total_diff_bytes": 524288,       // §9.4
   "webhook_enabled": false,             // §7.3: off by default, explicit opt-in per repo
   "webhook_secret_ref": null,           // keychain reference, never the secret itself
   "block_on_findings": false,

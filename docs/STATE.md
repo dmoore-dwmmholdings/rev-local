@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-502
-- item_status: not_started
-- last_gate_command: cargo test -p revlocal-daemon state_machine
-- last_gate_result: PASS — exit 0, 10 passed.
+- current_item: RL-502 (REVL-47)
+- item_status: done
+- last_gate_command: cargo test -p revlocal-daemon prompt::
+- last_gate_result: PASS — 21 tests selected, 21 passed; workspace 504 passed / 0 failed
 - last_visual: n/a
-- next_action: RL-502 (REVL-47) — prompt assembly. Open items that are NOT next by
+- next_action: RL-503 (REVL-48) — depth selection, then wire prompt::render_to into CliEngine so one writer owns prompt.md
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -365,3 +365,39 @@ section then; if a leg is red, RL-102 reopens.
 ## live_engine_notes
 
 None yet — no engine-live suite exists before M5.
+
+## a template that escaped its own comment
+
+`{{! ... }}` in handlebars ends at the **first** `}}`. The template's header comment
+explained triple-stache syntax, wrote `{{{diff}}}` as the example, and thereby closed
+itself inside its own example — spilling the rest of the comment, including the
+literal text `&lt;`, into every rendered prompt.
+
+Nothing failed. The prompt rendered, the sections were in order, the diff was intact.
+It was caught only because `prompt_a_diff_is_not_html_escaped` asserts on the *whole*
+document rather than on the diff fence, so the stray `&lt;` from the prose tripped it.
+
+Two things worth keeping:
+
+- Scoping that assertion tightly to the diff block — the "cleaner" version — would
+  have shipped this. A guard that over-reaches sometimes earns its false positives.
+- Use `{{!-- --}}` for any handlebars comment that mentions handlebars.
+
+## the escaping hazard itself
+
+Handlebars HTML-escapes `{{value}}`. A diff run through it is corrupted silently:
+`<` → `&lt;`, and the engine reviews code nobody wrote, then cites lines that do not
+exist. No error, no warning, nothing odd in the transcript. Every interpolation in
+`review.md.hbs` is `{{{...}}}` and a test guards it. Negative case observed: flipping
+`{{{diff}}}` to `{{diff}}` fails that test and only that test (20 passed, 1 failed).
+
+## config gap, fourth of its kind
+
+`max_convention_bytes` / `max_file_diff_bytes` / `max_total_diff_bytes` were named
+with defaults in §9.2 and §9.4 prose and present in neither §13.1 nor §13.2. Added to
+`RepoConfig` and to §13.2's document (ADR 0018). All three at once, per RL-1304.
+
+The pattern now has four instances (`degraded`, `webhook_enabled`, `ignore_globs`,
+these). **§9's and §7's prose name defaults that §13's documents do not carry.** Worth
+one sweep of §7–§12 prose for `default` against §13 before M6, rather than a fifth
+discovery.
