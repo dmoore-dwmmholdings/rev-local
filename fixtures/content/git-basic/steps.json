@@ -18,10 +18,10 @@
     { "index": 7, "kind": "commit", "dir": "07-bot", "role": "bot", "subject": "Bump serde from 1.0.0 to 1.0.1", "author": "bot" },
     { "index": 8, "kind": "commit", "dir": "08-modules", "role": "filler_modules", "subject": "Declare modules" },
     { "index": 9, "kind": "generate", "role": "large_200_files", "subject": "Add 200 generated modules", "count": 200, "into": "generated" },
-    { "kind": "branch", "name": "feature/pager-tweak" },
+    { "kind": "branch", "name": "release/pager-tweak", "why": "named to match SPEC 13.2 default branches glob release/* so the fixture is discoverable under the DEFAULT config and exercises glob resolution" },
     { "index": 10, "kind": "commit", "dir": "10-branch-work", "role": "branch_work", "subject": "Add page_count" },
     { "kind": "checkout", "name": "main" },
-    { "index": 11, "kind": "merge", "branch": "feature/pager-tweak", "role": "merge", "subject": "Merge branch 'feature/pager-tweak'" },
+    { "index": 11, "kind": "merge", "branch": "release/pager-tweak", "role": "merge", "subject": "Merge branch 'release/pager-tweak'" },
     { "index": 12, "kind": "commit", "dir": "12-final", "role": "clean_final", "subject": "Note the generator in the README" }
   ]
 }

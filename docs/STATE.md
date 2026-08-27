@@ -1,13 +1,13 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-303
-- item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs git::cmd
-- last_gate_result: PASS — exit 0, 12 passed.
+- current_item: RL-303b
+- item_status: in_progress
+- last_gate_command: cargo test -p revlocal-vcs --test git_discover
+- last_gate_result: PASS — exit 0, 17 passed.
 - last_visual: n/a
-- next_action: RL-303 (REVL-32) — git discovery. Every git call must go through
-    `git::cmd::run`; `git_cmd_no_module_spawns_git_directly` enforces it and was
-    observed failing when violated.
+- next_action: RL-303b (REVL-112) — fetch/prune and force-push `history_rewritten`
+    handling. Reset the cursor to the MERGE-BASE, not the branch root: resetting to
+    root would re-review every surviving commit and re-file every finding.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
