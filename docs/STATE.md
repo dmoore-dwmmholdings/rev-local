@@ -1,14 +1,12 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-301
+- current_item: RL-302
 - item_status: not_started
-- last_gate_command: ./fixtures/build.sh && test -d fixtures/out/git-basic && test -d fixtures/out/svn-basic
-- last_gate_result: PASS — exit 0 (M3 exit gate; svn portion skipped cleanly as §17 allows).
+- last_gate_command: cargo test -p revlocal-vcs scratch
+- last_gate_result: PASS — exit 0, 13 passed.
 - last_visual: n/a
-- next_action: RL-301 (REVL-30) — VcsAdapter trait and scratch-worktree lifecycle. This
-    starts M4. Its gate asserts the fixture working tree is byte-identical after a review,
-    which `fixtures_the_working_tree_is_clean_after_a_build` already protects from the
-    fixture side.
+- next_action: RL-302 (REVL-31) — git adapter: probe and discover. The trait and the
+    scratch lifecycle exist; this is the first real implementation behind them.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1

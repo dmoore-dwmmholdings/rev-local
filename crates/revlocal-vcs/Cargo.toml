@@ -9,10 +9,14 @@ authors.workspace = true
 description = "`VcsAdapter` trait plus git, GitHub and Subversion implementations."
 
 [dependencies]
+async-trait = { workspace = true }
 revlocal-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 serde = { workspace = true }
+tokio = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
