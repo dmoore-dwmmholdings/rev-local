@@ -15,6 +15,7 @@
 mod adapter;
 pub mod git;
 mod scratch;
+pub mod skip_rules;
 
 pub use adapter::{
     ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem, ProbeReport, Result,
@@ -22,3 +23,4 @@ pub use adapter::{
 };
 pub use git::{CursorState, DiscoveryEvent, GitError, GitOutput, GitRunner};
 pub use scratch::{RunOutcome, ScratchDir};
+pub use skip_rules::{evaluate as evaluate_skip, Skip, SkipReason};

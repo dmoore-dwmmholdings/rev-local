@@ -1,13 +1,14 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-305
+- current_item: RL-306
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs --test git_force_push
-- last_gate_result: PASS — exit 0, 7 passed.
+- last_gate_command: cargo test -p revlocal-vcs skip_rules
+- last_gate_result: PASS — exit 0, 17 passed.
 - last_visual: n/a
-- next_action: RL-305 (REVL-34) — skip rules: merges, bots, lockfiles, ignored globs.
-    `DetectedChange.skip_reason` already exists and is already used by rewrite dedupe;
-    this adds the §9.4 rules on top.
+- next_action: RL-306 (REVL-35) — materialize a change into a scratch worktree. Two
+    things are owed here: M4's gate requires the fixture working tree byte-identical
+    afterwards, and §9.4's "generated-file markers" skip is deferred to this item
+    because it needs file CONTENT, which only materialization has (ADR 0014).
 
 ## counting tests
 
@@ -230,6 +231,12 @@ commit").
   action on a degraded run to high risk, but the `run` table had nowhere to keep it.
   Nullable reason, not a flag. **Carried into `0001_init.up.sql` by `RL-108`, with a
   test asserting the column exists — done.**
+
+- **SPEC §13.2's `ignore_globs` default** corrected to match §9.4 (`RL-305`, ADR
+  0014). The two sections gave **different defaults for the same field** — three
+  globs in §13.2, seven in §9.4. Found by a test, not by reading. §9.4 wins; §13.2's
+  example document now matches, and `RL-107`'s defaults test parses that document,
+  so they cannot drift apart again silently.
 
 ## ci_green_unobserved
 

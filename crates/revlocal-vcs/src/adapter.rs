@@ -146,8 +146,20 @@ pub struct DetectedChange {
     pub authored_at: Option<Timestamp>,
     /// Branch, where the concept applies.
     pub branch: Option<String>,
-    /// PR base SHA or SVN merge base.
+    /// PR base SHA or SVN merge base. The first parent, for a commit.
     pub base_ref: Option<String>,
+    /// Every parent. Length > 1 means a merge (SPEC §9.4's `merge_commit` skip).
+    ///
+    /// Carried rather than recomputed: deciding whether a change is a merge is a
+    /// skip rule, and shelling out again per change to answer a question discovery
+    /// already knew the answer to would be a git call per commit.
+    pub parents: Vec<String>,
+    /// Repository-relative paths the change touches.
+    ///
+    /// Needed by the `ignore_globs` skip rule, which is about *which* paths a
+    /// change touches rather than how many. Also what §9.4's truncation rules need
+    /// in order to list omitted files in full.
+    pub paths: Vec<String>,
     /// Head SHA or revision.
     pub head_ref: Option<String>,
     /// Web URL, if known.

@@ -45,6 +45,7 @@ struct RawCommit {
     parents: Vec<String>,
     subject: String,
     stat: DiffStat,
+    paths: Vec<String>,
 }
 
 /// Resolve a repository's watched-branch patterns against its actual refs.
@@ -200,6 +201,7 @@ fn parse_log(stdout: &str) -> Vec<RawCommit> {
             parents: fields[4].split_whitespace().map(str::to_owned).collect(),
             subject: fields[5].trim_end().to_owned(),
             stat: parse_numstat(numstat),
+            paths: parse_numstat_paths(numstat),
         });
     }
 
@@ -232,6 +234,21 @@ fn parse_numstat(block: &str) -> DiffStat {
     stat
 }
 
+/// The repository-relative paths a `--numstat` block names.
+///
+/// A rename is reported as `old => new` (or with a brace form); the **new** path is
+/// what a glob should be matched against, since that is where the file is now.
+fn parse_numstat_paths(block: &str) -> Vec<String> {
+    block
+        .lines()
+        .filter_map(|line| line.trim().split('\t').nth(2))
+        .map(|path| match path.rsplit_once(" => ") {
+            Some((_, new)) => new.trim_end_matches('}').to_owned(),
+            None => path.to_owned(),
+        })
+        .collect()
+}
+
 /// Turn a parsed commit into a [`DetectedChange`].
 ///
 /// `skip_reason` is left unset here. Deciding what not to review is `RL-305`'s
@@ -251,6 +268,8 @@ fn to_detected(commit: RawCommit, branch: &str) -> DetectedChange {
         authored_at,
         branch: Some(branch.to_owned()),
         base_ref: commit.parents.first().cloned(),
+        parents: commit.parents,
+        paths: commit.paths,
         head_ref: Some(commit.sha.clone()),
         url: None,
         diff_stat: commit.stat,

@@ -86,10 +86,17 @@ impl Default for RepoConfig {
             ],
             engine: EngineKind::Claude,
             autonomy: AutonomyMode::AutoLowAskHigh,
+            // SPEC §9.4's list, which is the fuller of the two the spec gave;
+            // §13.2's example document listed only the first three. See ADR 0014.
+            // "generated-file markers" from §9.4 are deliberately absent: that is a
+            // content check, not a glob, and it is tracked separately.
             ignore_globs: vec![
                 "**/node_modules/**".to_owned(),
                 "**/vendor/**".to_owned(),
                 "**/*.lock".to_owned(),
+                "**/dist/**".to_owned(),
+                "**/*.min.*".to_owned(),
+                "**/target/**".to_owned(),
             ],
             ignore_authors: vec!["dependabot[bot]".to_owned(), "renovate[bot]".to_owned()],
             sensitive_globs: vec![

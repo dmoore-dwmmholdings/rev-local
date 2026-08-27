@@ -11,6 +11,8 @@ description = "`VcsAdapter` trait plus git, GitHub and Subversion implementation
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+globset = { workspace = true }
+serde = { workspace = true }
 revlocal-core = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util"] }
