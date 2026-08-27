@@ -1,17 +1,16 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-104
+- current_item: RL-105
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-core
-- last_gate_result: PASS — exit 0. 26 tests + 3 doctests, 0 failed.
+- last_gate_command: cargo test -p revlocal-core --test no_io_deps
+- last_gate_result: PASS — exit 0, 2 passed. Negative case observed by injection (below).
 - last_visual: n/a
-- next_action: RL-104 (REVL-17) — enforce that revlocal-core has no I/O dependencies.
-    Per ADR 0005, assert the ABSENCE of tokio/sqlx/reqwest transitively rather than an
-    allowlist, or the test needs editing every time a pure dependency is added.
+- next_action: RL-105 (REVL-18) — risk classification model (SPEC §12.3), including
+    "first use of a capability is always high risk", which is a decision of record.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
-- items_closed: [RL-101, RL-102, RL-103, RL-103b]
+- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -35,6 +34,16 @@
    Everything else proceeds — the mock engine covers the inner loop.
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
+
+## negative cases observed
+
+A guard that has only ever passed is not known to work. Where an item's criteria say
+a check must *fail* on bad input, the failure was produced deliberately and observed:
+
+- **RL-104** — `tokio` added to `revlocal-core`'s manifest, test run, observed
+  `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
+  force a transitive arrival, observed `revlocal-core -> tokio-util (normal) ->
+  tokio (normal)`. Manifest restored, `git diff` empty, test green again.
 
 ## spec_amendments
 
