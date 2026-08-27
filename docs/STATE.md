@@ -1,15 +1,23 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-107
-- item_status: not_started
-- last_gate_command: cargo test -p revlocal-core fingerprint
-- last_gate_result: PASS — exit 0, 14 passed.
+- current_item: RL-107b
+- item_status: in_progress
+- last_gate_command: cargo test -p revlocal-core config::
+- last_gate_result: PASS — exit 0, 22 passed.
 - last_visual: n/a
-- next_action: RL-107 (REVL-20) — configuration load, merge and validation (SPEC §13)
+- next_action: RL-107b (REVL-109) — the .rev-local.toml overlay and the rule that a
+    repository may narrow scope/ignores but never widen autonomy or add targets
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
 - items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105, RL-106]
+
+## RL-107 was split
+
+The two config documents, their defaults and unknown-key handling landed as the first
+half. The in-repo overlay and its security rule are **REVL-109 / RL-107b**, a subtask of
+REVL-20. REVL-20 stays `In Progress`: three of its five criteria concern the overlay and
+are not yet true.
 - andare_connected: true
 
 ## Environment observed (2026-08-27)

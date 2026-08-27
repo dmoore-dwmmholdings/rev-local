@@ -1,0 +1,147 @@
+//! The per-repo config document — `repo.config_json` (SPEC §13.2).
+
+use super::{collect_unknown_keys, ConfigWarning, Extra};
+use crate::{AutonomyMode, Category, EngineKind, Severity};
+use serde::{Deserialize, Serialize};
+
+/// Per-repository configuration (SPEC §13.2).
+///
+/// Every field has the default from §13.2, so a repo added with no configuration
+/// behaves exactly as the spec's example document describes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RepoConfig {
+    /// Branch globs to watch.
+    pub branches: Vec<String>,
+    /// Review pull requests.
+    pub review_prs: bool,
+    /// Review individual commits.
+    pub review_commits: bool,
+    /// Review draft pull requests.
+    pub review_draft_prs: bool,
+    /// Review merge commits.
+    pub review_merge_commits: bool,
+    /// For SVN, watch `branches/*` as well as trunk (decision D6).
+    pub watch_branches: bool,
+    /// Poll interval in seconds (SPEC §7.1).
+    pub poll_interval_secs: u64,
+    /// What the review covers (decision D8).
+    pub scope: Vec<Category>,
+    /// Which engine reviews this repo (decision D3).
+    pub engine: EngineKind,
+    /// This repo's requested autonomy, capped by the global ceiling (SPEC §12.2).
+    pub autonomy: AutonomyMode,
+    /// Paths never reviewed.
+    pub ignore_globs: Vec<String>,
+    /// Authors whose changes are never reviewed.
+    pub ignore_authors: Vec<String>,
+    /// Paths that force `deep` review (SPEC §9.3).
+    pub sensitive_globs: Vec<String>,
+    /// Files read as the repo's own conventions (decision D8).
+    pub convention_files: Vec<String>,
+    /// Publish targets enabled for this repo.
+    pub targets: Vec<String>,
+    /// Andare project key for filed issues (SPEC §11.4).
+    pub andare_project: Option<String>,
+    /// Minimum severity that becomes an Andare issue (SPEC §11.4).
+    pub andare_min_severity: Severity,
+    /// Pattern for finding a work-item key in a commit message (SPEC §11.4).
+    pub andare_key_regex: String,
+    /// Trama space for review pages (SPEC §11.5).
+    pub trama_space: Option<String>,
+    /// Whether Trama pages are published rather than left as drafts.
+    ///
+    /// Load-bearing for risk: publishing is high risk, a draft is low (SPEC §12.3).
+    pub trama_publish: bool,
+    /// Whether `request_changes` produces a failing check (SPEC §11.3).
+    pub block_on_findings: bool,
+    /// Whether the app may submit a GitHub `APPROVE` review.
+    ///
+    /// Default `false`. SPEC §10.2: an AI approving code is a stronger claim than
+    /// the product makes unattended.
+    pub allow_approve: bool,
+    /// Pattern for detecting an SVN branch reintegration (decision D6).
+    pub merge_detect_regex: String,
+    /// Keys present in the document that this version does not know.
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+impl Default for RepoConfig {
+    /// Exactly the document in SPEC §13.2.
+    fn default() -> Self {
+        Self {
+            branches: vec!["main".to_owned(), "release/*".to_owned()],
+            review_prs: true,
+            review_commits: false,
+            review_draft_prs: false,
+            review_merge_commits: false,
+            watch_branches: true,
+            poll_interval_secs: 120,
+            scope: vec![
+                Category::Correctness,
+                Category::Security,
+                Category::Convention,
+                Category::Tests,
+            ],
+            engine: EngineKind::Claude,
+            autonomy: AutonomyMode::AutoLowAskHigh,
+            ignore_globs: vec![
+                "**/node_modules/**".to_owned(),
+                "**/vendor/**".to_owned(),
+                "**/*.lock".to_owned(),
+            ],
+            ignore_authors: vec!["dependabot[bot]".to_owned(), "renovate[bot]".to_owned()],
+            sensitive_globs: vec![
+                "**/auth/**".to_owned(),
+                "**/crypto/**".to_owned(),
+                "**/*.sql".to_owned(),
+                ".github/workflows/**".to_owned(),
+            ],
+            convention_files: vec![
+                "CLAUDE.md".to_owned(),
+                "AGENTS.md".to_owned(),
+                "CONTRIBUTING.md".to_owned(),
+            ],
+            targets: vec!["github".to_owned(), "andare".to_owned(), "trama".to_owned()],
+            andare_project: None,
+            andare_min_severity: Severity::High,
+            andare_key_regex: r"[A-Z][A-Z0-9]+-\d+".to_owned(),
+            trama_space: None,
+            trama_publish: false,
+            block_on_findings: false,
+            allow_approve: false,
+            merge_detect_regex: r"(?i)\b(merge|reintegrat\w+)\b.*\b(branches?/[\w./-]+)".to_owned(),
+            extra: Extra::default(),
+        }
+    }
+}
+
+impl RepoConfig {
+    /// Parse a per-repo config document from `repo.config_json`.
+    ///
+    /// Unknown keys become warnings, not errors, for the same reason as the global
+    /// document: an older rev-local must still run a repo configured by a newer one.
+    pub fn parse_json(json: &str) -> Result<(Self, Vec<ConfigWarning>), serde_json::Error> {
+        let config: Self = serde_json::from_str(json)?;
+        let warnings = config.warnings();
+        Ok((config, warnings))
+    }
+
+    /// Every unknown key in this document, as warnings.
+    pub fn warnings(&self) -> Vec<ConfigWarning> {
+        let mut warnings = Vec::new();
+        collect_unknown_keys(&self.extra, "", &mut warnings);
+        warnings
+    }
+
+    /// Whether `category` is in this repo's review scope (decision D8).
+    pub fn covers(&self, category: Category) -> bool {
+        self.scope.contains(&category)
+    }
+
+    /// Whether `target` is enabled for this repo.
+    pub fn targets_include(&self, target: &str) -> bool {
+        self.targets.iter().any(|t| t == target)
+    }
+}

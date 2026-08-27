@@ -19,6 +19,7 @@ mod macros;
 
 mod audit;
 mod change;
+pub mod config;
 mod enums;
 mod error;
 mod finding;
@@ -38,6 +39,10 @@ pub type Timestamp = chrono::DateTime<chrono::Utc>;
 
 pub use audit::{AuditEntry, BudgetLedgerEntry};
 pub use change::{Change, DiffStat, FileDiff, FileStatus};
+pub use config::{
+    BudgetSettings, ConfigWarning, GlobalConfig, GlobalSettings, McpServerSettings, OnExhausted,
+    RepoConfig, SecretRef,
+};
 pub use enums::{
     AutonomyMode, Capability, Category, ChangeKind, Depth, EngineKind, FindingState,
     PublishActionStatus, RepoKind, RiskClass, RunStatus, Severity, TriggerSource, Verdict,
