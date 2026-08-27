@@ -10,7 +10,9 @@ description = "`Engine` trait plus the Claude Code, Codex and mock review runner
 
 [dependencies]
 async-trait = { workspace = true }
+jsonschema = { workspace = true }
 revlocal-core = { workspace = true }
+serde_json = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }

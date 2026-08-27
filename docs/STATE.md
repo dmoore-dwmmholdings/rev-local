@@ -1,14 +1,14 @@
 # Build state
 - current_milestone: M5
-- current_item: RL-402
+- current_item: RL-403
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-engine trait_
+- last_gate_command: cargo test -p revlocal-engine schema
 - last_gate_result: PASS — exit 0, 16 passed.
 - last_visual: n/a
-- next_action: RL-402 (REVL-39) — the engine runner. Note two mocks now exist and
-    they are not interchangeable: `fixtures/mock-engine` is a real subprocess and is
-    what RL-402 must drive to exercise §8.2's ladder; `revlocal_engine::MockEngine`
-    is in-process and is for pipeline tests. Also outstanding: REVL-113 (RL-305b).
+- next_action: RL-403 (REVL-40). Two mocks exist and are NOT interchangeable:
+    `fixtures/mock-engine` is a real subprocess and is what the runner must drive to
+    exercise §8.2's ladder; `revlocal_engine::MockEngine` is in-process, for pipeline
+    tests. Also outstanding: REVL-113 (RL-305b).
 
 ## a correction
 
@@ -149,6 +149,20 @@ a check must *fail* on bad input, the failure was produced deliberately and obse
   `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
   force a transitive arrival, observed `revlocal-core -> tokio-util (normal) ->
   tokio (normal)`. Manifest restored, `git diff` empty, test green again.
+
+## contracts held by a cross-check
+
+Places where two independently-written artefacts must agree, and a test makes them
+prove it rather than trusting review.
+
+- **The fixture engine's output vs `result.v1.json`** (`RL-402`). The fixture is
+  JavaScript, the validator is Rust, and they encode the same §8.3 contract. The test
+  *runs* the fixture and validates what it actually wrote — grepping its source for
+  plausible shapes would not catch drift. A second test asserts `partial_findings`
+  still produces both valid and invalid findings, or §8.3's drop path stops being
+  tested anywhere.
+- **The golden fingerprint vectors vs an independent implementation** (`RL-106`).
+- **`GH_PR_FIELDS` vs the fields the parser reads** (`RL-308`).
 
 ## enforced by a guard test
 
