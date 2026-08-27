@@ -996,8 +996,25 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
 ```
 
 Optional in-repo override: `.rev-local.toml` at the repo root, merged over the
-stored config (repo-local wins for scope/ignores, never for autonomy or targets —
-a repository must not be able to grant itself more authority).
+stored config. **A repository must not be able to grant itself more authority than
+it was given** — `.rev-local.toml` is committed inside the repository under review,
+so anyone who can open a pull request can propose changing it.
+
+The rule is implemented as an **allowlist**, not a denylist (ADR 0007). Only these
+keys may be set in-repo, and each may only narrow:
+
+| Key | Merge semantics |
+|---|---|
+| `scope` | intersection — may drop a review dimension, never add one |
+| `ignore_globs` | union — may add ignores, never remove the operator's |
+| `ignore_authors` | union |
+| `sensitive_globs` | union — may force deeper review, never shallower |
+| `convention_files` | union |
+
+Every other key is refused with a typed error naming it, including `autonomy`,
+`targets`, `engine`, and — though they are not authority by name — `trama_publish`
+and `allow_approve`, which change the risk class of an action (§12.3, §10.2).
+Refusal is per key: one forbidden key does not discard the rest of the file.
 
 ---
 

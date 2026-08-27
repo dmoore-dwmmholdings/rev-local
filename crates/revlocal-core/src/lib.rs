@@ -40,8 +40,9 @@ pub type Timestamp = chrono::DateTime<chrono::Utc>;
 pub use audit::{AuditEntry, BudgetLedgerEntry};
 pub use change::{Change, DiffStat, FileDiff, FileStatus};
 pub use config::{
-    BudgetSettings, ConfigWarning, GlobalConfig, GlobalSettings, McpServerSettings, OnExhausted,
-    RepoConfig, SecretRef,
+    effective_autonomy, merge_in_repo, BudgetSettings, ConfigError, ConfigWarning, GlobalConfig,
+    GlobalSettings, InRepoConfig, McpServerSettings, MergeOutcome, OnExhausted, RepoConfig,
+    SecretRef,
 };
 pub use enums::{
     AutonomyMode, Capability, Category, ChangeKind, Depth, EngineKind, FindingState,

@@ -1,23 +1,17 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-107b
-- item_status: in_progress
+- current_item: RL-108
+- item_status: not_started
 - last_gate_command: cargo test -p revlocal-core config::
-- last_gate_result: PASS — exit 0, 22 passed.
+- last_gate_result: PASS — exit 0, 42 passed.
 - last_visual: n/a
-- next_action: RL-107b (REVL-109) — the .rev-local.toml overlay and the rule that a
-    repository may narrow scope/ignores but never widen autonomy or add targets
+- next_action: RL-108 (REVL-21) — SQLite schema and migrations. `0001_init.sql` MUST
+    include the `run.degraded TEXT` column added under spec_amendments below.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
-- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105, RL-106]
-
-## RL-107 was split
-
-The two config documents, their defaults and unknown-key handling landed as the first
-half. The in-repo overlay and its security rule are **REVL-109 / RL-107b**, a subtask of
-REVL-20. REVL-20 stays `In Progress`: three of its five criteria concern the overlay and
-are not yet true.
+- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105, RL-106, RL-107,
+                 RL-107b]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -80,6 +74,14 @@ line to change if a decision comes back differently.
 The spec has been changed once, under the SPEC §5 implementation note ("if you must
 deviate, do it — but record why in docs/adr/ and update this section in the same
 commit").
+
+- **SPEC §13.2's in-repo override rule** rewritten (`RL-107b`, ADR 0007). The section
+  stated the rule by example ("repo-local wins for scope/ignores, never for autonomy or
+  targets"), which reads as a denylist of two keys. Implemented as an **allowlist of
+  five**, so a field added to `RepoConfig` later is refused by default rather than
+  granted to every repository silently. `trama_publish` and `allow_approve` are refused
+  too, though §13.2 did not name them: both change an action's risk class. §13.2 now
+  states the rule as built.
 
 - **`run.degraded TEXT`** added to the `run` table in SPEC §5 (`RL-103b`, ADR 0005).
   §8.1 gives `EngineOutcome` a `degraded: Option<String>` and §12.3 escalates every

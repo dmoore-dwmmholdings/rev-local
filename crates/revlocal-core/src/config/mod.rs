@@ -6,10 +6,9 @@
 //! 2. the per-repo JSON in `repo.config_json` (§13.2);
 //! 3. an optional in-repo `.rev-local.toml` at the repository root.
 //!
-//! This module owns (1) and (2), their defaults, and the handling of keys a given
-//! version does not recognise. The in-repo overlay and the security rule governing
-//! it — a repository must not be able to grant itself more authority — are
-//! `RL-107b`.
+//! This module owns all three, their defaults, the handling of keys a given version
+//! does not recognise, and the rule that a repository must not be able to grant
+//! itself more authority than it was given. See [`overlay`] for that rule.
 //!
 //! **Unknown keys warn, they do not fail.** A config written for a newer rev-local
 //! has to start an older one, and a user's typo should be reported rather than
@@ -17,10 +16,14 @@
 //! the key is named, so an ignored setting is visible instead of merely inert.
 
 mod global;
+mod overlay;
 mod repo;
 mod secret;
 
 pub use global::{BudgetSettings, GlobalConfig, GlobalSettings, McpServerSettings, OnExhausted};
+pub use overlay::{
+    effective_autonomy, merge_in_repo, ConfigError, InRepoConfig, MergeOutcome, PERMITTED_KEYS,
+};
 pub use repo::RepoConfig;
 pub use secret::SecretRef;
 
