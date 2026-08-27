@@ -1533,6 +1533,7 @@ name = "revlocal-daemon"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "globset",
  "handlebars",
  "revlocal-core",
  "revlocal-engine",

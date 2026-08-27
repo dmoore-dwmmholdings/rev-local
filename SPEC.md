@@ -992,6 +992,8 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
                    "**/dist/**", "**/*.min.*", "**/target/**"],
   "ignore_authors": ["dependabot[bot]", "renovate[bot]"],
   "sensitive_globs": ["**/auth/**", "**/crypto/**", "**/*.sql", ".github/workflows/**"],
+  "deep_file_limit": 150,               // §9.3
+  "deep_labels": [],                    // §9.3
   "convention_files": ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md"],
   "targets": ["github", "andare", "trama"],
   "andare_project": "PLAT",

@@ -37,6 +37,17 @@ pub struct RepoConfig {
     pub ignore_authors: Vec<String>,
     /// Paths that force `deep` review (SPEC §9.3).
     pub sensitive_globs: Vec<String>,
+    /// File count above which a change is reviewed as `summary` (SPEC §9.3).
+    ///
+    /// Defaults to 150. A diff this size cannot be read carefully in any budget, so
+    /// the honest move is a cheap summary rather than a deep review that pretends
+    /// otherwise.
+    pub deep_file_limit: u32,
+    /// PR labels that force `deep` review (SPEC §9.3).
+    ///
+    /// Empty by default. rev-local does not know what labels a repository uses, and
+    /// guessing at `security` would be a rule that silently never fires.
+    pub deep_labels: Vec<String>,
     /// Files read as the repo's own conventions (decision D8).
     pub convention_files: Vec<String>,
     /// Publish targets enabled for this repo.
@@ -124,6 +135,8 @@ impl Default for RepoConfig {
                 "**/*.sql".to_owned(),
                 ".github/workflows/**".to_owned(),
             ],
+            deep_file_limit: 150,
+            deep_labels: Vec::new(),
             convention_files: vec![
                 "CLAUDE.md".to_owned(),
                 "AGENTS.md".to_owned(),

@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-502 (REVL-47)
+- current_item: RL-503 (REVL-48)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-daemon prompt::
-- last_gate_result: PASS — 21 tests selected, 21 passed; workspace 504 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-daemon depth
+- last_gate_result: PASS — 26 tests selected, 26 passed; workspace 530 passed / 0 failed
 - last_visual: n/a
-- next_action: RL-503 (REVL-48) — depth selection, then wire prompt::render_to into CliEngine so one writer owns prompt.md
+- next_action: RL-504 (REVL-49) — diff truncation per §9.4, using max_file_diff_bytes / max_total_diff_bytes added in RL-502
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -401,3 +401,50 @@ The pattern now has four instances (`degraded`, `webhook_enabled`, `ignore_globs
 these). **§9's and §7's prose name defaults that §13's documents do not carry.** Worth
 one sweep of §7–§12 prose for `default` against §13 before M6, rather than a fifth
 discovery.
+
+## the config sweep is done — five misses, two false positives
+
+RL-502 recommended one sweep of §7–§12 prose against §13's documents rather than a
+fifth ad-hoc discovery. Run in RL-503, mechanically (every backticked lowercase
+identifier in §7–§12, minus the keys the config structs declare).
+
+Genuine misses: `deep_file_limit`, `deep_labels` (§9.3, added in RL-503);
+`file_medium_issues`, `andare_transition_on` (§11.4); `max_attempts` (§13.1, the gap
+RL-501 recorded). The last three are **REVL-116**, filed rather than added — a config
+key with no reader is how a document acquires fields nobody can explain.
+
+False positives worth not re-checking: `engine_timeout` is a failure-reason string,
+`version_args` already lives on `InvocationTemplate`.
+
+**The sweep is closed. Do not re-run it.** If a sixth key turns up, it is new prose,
+not a missed one.
+
+## a spec table that contradicted its own acceptance criteria
+
+§9.3's table has a `summary` row (size) and a `deep` row (risk) and does not say which
+wins. This item's criteria 1 and 2 describe a 200-file commit touching `**/auth/**`
+two different ways.
+
+Resolved in ADR 0019: **risk beats cost**, because a summary review of an auth change
+reports nothing and looks exactly like a clean one. The losing reason is retained and
+`is_contested()` exposes it, so the size rule does not look broken to whoever reads the
+config next.
+
+Worth generalising: when two spec rules fire on the same input, ask which failure is
+*silent*. That is the one to design against.
+
+## negative cases observed (RL-503)
+
+- Dropping `if current != Depth::Standard` from `escalate` → fails exactly
+  `depth_a_deep_run_never_escalates_again` and `depth_a_summary_run_does_not_escalate`
+  (24 passed, 2 failed).
+- `max()` → `min()` in `DepthDecision::resolve` (size beats risk) → fails exactly
+  `depth_risk_beats_size_when_both_fire` (25 passed, 1 failed).
+
+## a cross-check that caught a formatting slip
+
+`the_repo_defaults_are_the_spec_13_2_document` parses the §13.2 document embedded in
+`config/mod.rs` and compares it to `RepoConfig::default()`. It rejected the `// §9.3`
+trailing comments I copied over from SPEC.md — JSON has no comments. Cheap catch, but
+the reason it works is that the document is *parsed*, not eyeballed: the test would
+equally catch a default that drifts from the spec's stated one.

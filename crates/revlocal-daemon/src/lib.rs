@@ -2,6 +2,7 @@
 //!
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
+pub mod depth;
 pub mod logging;
 pub mod prompt;
 pub mod state_machine;

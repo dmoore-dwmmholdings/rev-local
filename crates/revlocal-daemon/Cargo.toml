@@ -10,6 +10,7 @@ description = "Scheduler, trigger sources, run orchestrator and budget guard."
 
 [dependencies]
 chrono = { workspace = true }
+globset = { workspace = true }
 handlebars = { workspace = true }
 revlocal-core = { workspace = true }
 revlocal-engine = { workspace = true }
