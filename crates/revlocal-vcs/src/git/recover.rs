@@ -49,6 +49,19 @@ pub enum DiscoveryEvent {
         /// Why it was skipped.
         reason: String,
     },
+
+    /// A rewrite was detected but its commits could not be content-compared.
+    ///
+    /// Without the pre-rewrite commits there is nothing to compare against, so
+    /// everything above the merge-base is reviewed again. Recorded rather than
+    /// passing silently: an operator seeing a burst of re-reviews after a rebase
+    /// needs this line to know why (SPEC §18).
+    RewriteDedupeUnavailable {
+        /// The cursor before the rewrite.
+        old_cursor: String,
+        /// Why the comparison could not be made.
+        reason: String,
+    },
 }
 
 impl DiscoveryEvent {
@@ -58,6 +71,7 @@ impl DiscoveryEvent {
             Self::HistoryRewritten { .. } => "history_rewritten",
             Self::CursorObjectMissing { .. } => "cursor_object_missing",
             Self::FetchSkipped { .. } => "fetch_skipped",
+            Self::RewriteDedupeUnavailable { .. } => "rewrite_dedupe_unavailable",
         }
     }
 }
@@ -222,4 +236,130 @@ pub async fn fetch(
 
     runner.run(dir, &["fetch", "--all", "--prune"]).await?;
     Ok((FetchOutcome::Fetched, Vec::new()))
+}
+
+/// Content hashes for a set of commits, keyed by SHA (SPEC §6.2).
+///
+/// `git patch-id --stable` hashes a diff with line numbers and whitespace
+/// normalised away, so **the same change on a different base has the same
+/// patch-id**. That is precisely the property a rebase preserves and a SHA does
+/// not, and it is why resetting the cursor to the merge-base is necessary but not
+/// sufficient: every commit above the merge-base comes back with a new SHA, and
+/// without a content hash they all look new.
+///
+/// Two git calls for the whole set rather than two per commit: `git show` emits
+/// every diff at once and `patch-id` reports one line per commit it saw.
+pub async fn patch_ids(
+    runner: &GitRunner,
+    dir: &Path,
+    revs: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, GitError> {
+    use std::collections::BTreeMap;
+
+    if revs.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut args: Vec<String> = vec![
+        "show".to_owned(),
+        "--no-walk".to_owned(),
+        "--format=%H".to_owned(),
+        "--patch".to_owned(),
+        // Rename detection off: a rename detected on one base and not the other
+        // would change the diff text and therefore the patch-id, making the same
+        // change look different.
+        "--no-renames".to_owned(),
+    ];
+    args.extend(revs.iter().cloned());
+
+    let diffs = runner.run(dir, &args).await?;
+
+    // `--stable` so the hash does not depend on the order hunks happen to appear
+    // in; the unstable form is explicitly not comparable across invocations.
+    let ids = runner
+        .run_with_stdin(dir, &["patch-id", "--stable"], &diffs.stdout)
+        .await?;
+
+    let mut map = BTreeMap::new();
+    for line in ids.lines() {
+        let mut parts = line.split_whitespace();
+        if let (Some(patch_id), Some(sha)) = (parts.next(), parts.next()) {
+            map.insert(sha.to_owned(), patch_id.to_owned());
+        }
+    }
+    Ok(map)
+}
+
+/// Mark discovered changes that merely reproduce an already-reviewed commit.
+///
+/// After a rebase, the commits above the merge-base are the *same work* with new
+/// SHAs. Reviewing them again would re-file every finding on them, so a rebase
+/// would spam the tracker — the failure this whole item exists to prevent.
+///
+/// Sets `skip_reason` rather than dropping them: SPEC §18 wants a skip recorded
+/// with its reason, and "we already reviewed this as `<old sha>`" is exactly the
+/// kind of thing an operator needs to see when they wonder why a rebased commit
+/// has no review.
+///
+/// Returns the number marked. If the pre-rewrite commits are no longer reachable —
+/// garbage-collected after the rewrite — nothing can be compared and every change
+/// is reviewed again; that is reported as an event rather than passing silently.
+pub async fn mark_superseded_by_rewrite(
+    runner: &GitRunner,
+    dir: &Path,
+    old_cursor: &str,
+    merge_base: &str,
+    changes: &mut [crate::adapter::DetectedChange],
+) -> Result<Vec<DiscoveryEvent>, GitError> {
+    let mut events = Vec::new();
+
+    // The commits that existed between the merge-base and the old cursor: what was
+    // already reviewed and then rewritten.
+    let old_range = format!("{merge_base}..{old_cursor}");
+    let listed = match runner.run(dir, &["rev-list", &old_range]).await {
+        Ok(output) => output,
+        Err(_) => {
+            // The old history is gone. Honest degradation: everything above the
+            // merge-base is reviewed again, and the log says why.
+            events.push(DiscoveryEvent::RewriteDedupeUnavailable {
+                old_cursor: old_cursor.to_owned(),
+                reason: "the pre-rewrite commits are no longer reachable".to_owned(),
+            });
+            return Ok(events);
+        }
+    };
+
+    let old_shas: Vec<String> = listed.lines().iter().map(|s| (*s).to_owned()).collect();
+    if old_shas.is_empty() {
+        return Ok(events);
+    }
+
+    let old_ids = patch_ids(runner, dir, &old_shas).await?;
+    // patch-id -> the old sha that had it, so the skip reason can name it.
+    let by_content: std::collections::BTreeMap<&str, &str> = old_ids
+        .iter()
+        .map(|(sha, id)| (id.as_str(), sha.as_str()))
+        .collect();
+
+    let new_shas: Vec<String> = changes.iter().map(|c| c.external_id.clone()).collect();
+    let new_ids = patch_ids(runner, dir, &new_shas).await?;
+
+    for change in changes.iter_mut() {
+        let Some(patch_id) = new_ids.get(&change.external_id) else {
+            continue;
+        };
+        // An empty patch-id means an empty diff — a merge or an empty commit. Those
+        // are not "the same change", they are "no change", and treating every one of
+        // them as a match would suppress unrelated commits.
+        if patch_id.chars().all(|c| c == '0') {
+            continue;
+        }
+        if let Some(old_sha) = by_content.get(patch_id.as_str()) {
+            change.skip_reason = Some(format!(
+                "unchanged_after_rewrite: same content as already-reviewed {old_sha}"
+            ));
+        }
+    }
+
+    Ok(events)
 }

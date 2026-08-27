@@ -194,6 +194,30 @@ impl GitRunner {
         dir: &Path,
         args: &[S],
     ) -> Result<GitOutput, GitError> {
+        self.run_inner(dir, args, None).await
+    }
+
+    /// Run git in `dir` with `args`, writing `input` to its stdin.
+    ///
+    /// `git patch-id` reads a diff from stdin and has no file-argument form, so
+    /// without this the only way to use it would be a second call site spawning
+    /// git — which is exactly what `no_module_spawns_git_directly` exists to
+    /// prevent. The choke point owns piping too.
+    pub async fn run_with_stdin<S: AsRef<OsStr>>(
+        &self,
+        dir: &Path,
+        args: &[S],
+        input: &str,
+    ) -> Result<GitOutput, GitError> {
+        self.run_inner(dir, args, Some(input)).await
+    }
+
+    async fn run_inner<S: AsRef<OsStr>>(
+        &self,
+        dir: &Path,
+        args: &[S],
+        input: Option<&str>,
+    ) -> Result<GitOutput, GitError> {
         let rendered = args
             .iter()
             .map(|a| a.as_ref().to_string_lossy().into_owned())
@@ -204,7 +228,14 @@ impl GitRunner {
         command
             .args(args)
             .current_dir(dir)
-            .stdin(Stdio::null()) // nothing to type into, so make that explicit
+            // Null unless the caller is piping: nothing to type into, made explicit
+            // so a command that reads stdin gets a fast EOF rather than blocking on
+            // an inherited terminal.
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -219,7 +250,7 @@ impl GitRunner {
         #[cfg(unix)]
         command.process_group(0);
 
-        let child = command.spawn().map_err(|source| {
+        let mut child = command.spawn().map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
                 GitError::NotInstalled
             } else {
@@ -231,6 +262,24 @@ impl GitRunner {
         })?;
 
         let pid = child.id();
+
+        if let Some(input) = input {
+            // Written before waiting, and the handle dropped so git sees EOF. A
+            // `patch-id` that never sees EOF would hit the timeout instead of
+            // answering.
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt as _;
+                let write = stdin.write_all(input.as_bytes()).await;
+                let shutdown = stdin.shutdown().await;
+                drop(stdin);
+                if let Err(source) = write.and(shutdown) {
+                    return Err(GitError::Spawn {
+                        args: rendered,
+                        source,
+                    });
+                }
+            }
+        }
 
         let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
             Ok(Ok(output)) => output,

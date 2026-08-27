@@ -1,13 +1,25 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-304
+- current_item: RL-305
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs --test git_discover
-- last_gate_result: PASS — exit 0, 25 passed.
+- last_gate_command: cargo test -p revlocal-vcs --test git_force_push
+- last_gate_result: PASS — exit 0, 7 passed.
 - last_visual: n/a
-- next_action: RL-304 (REVL-33) — materialize a change into a scratch worktree. The
-    scratch lifecycle (RL-301) and the git wrapper (RL-302) both exist; M4's gate
-    requires the fixture working tree to be byte-identical afterwards.
+- next_action: RL-305 (REVL-34) — skip rules: merges, bots, lockfiles, ignored globs.
+    `DetectedChange.skip_reason` already exists and is already used by rewrite dedupe;
+    this adds the §9.4 rules on top.
+
+## counting tests
+
+`cargo test --workspace 2>&1 | grep -c '^test .* ok'` **undercounts** — parallel test
+binaries interleave their output and some lines are split. Sum the `test result` lines
+instead:
+
+```
+cargo test --workspace 2>&1 | grep -E "^test result" | awk '{s+=$4} END {print s}'
+```
+
+Current total: **308 passing, 0 failing.**
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1

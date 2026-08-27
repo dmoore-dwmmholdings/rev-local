@@ -1389,6 +1389,7 @@ dependencies = [
  "chrono",
  "nix",
  "revlocal-core",
+ "revlocal-store",
  "serde",
  "serde_json",
  "tempfile",
