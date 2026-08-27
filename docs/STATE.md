@@ -1,11 +1,11 @@
 # Build state
 - current_milestone: M5
-- current_item: RL-403
+- current_item: RL-404
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-engine schema
-- last_gate_result: PASS — exit 0, 16 passed.
+- last_gate_command: cargo test -p revlocal-engine template
+- last_gate_result: PASS — exit 0, 22 passed.
 - last_visual: n/a
-- next_action: RL-403 (REVL-40). Two mocks exist and are NOT interchangeable:
+- next_action: RL-404 (REVL-41). Two mocks exist and are NOT interchangeable:
     `fixtures/mock-engine` is a real subprocess and is what the runner must drive to
     exercise §8.2's ladder; `revlocal_engine::MockEngine` is in-process, for pipeline
     tests. Also outstanding: REVL-113 (RL-305b).
@@ -174,6 +174,15 @@ remembers them. Each was observed failing.
   branches, stash, `worktree list` and the index before and after, and separately
   against a repo with uncommitted work and an untracked file. A review that stashed
   someone's work-in-progress at 3am would be worse than no review.
+
+- **An engine invocation is argv, never a command line** (`RL-403`). A rendered
+  template is a program plus a `Vec<String>` handed to `Command::args`. Nothing is
+  concatenated and nothing reaches a shell, so a prompt containing `; rm -rf /` is
+  one argv element — argv has no syntax for it to escape into. The prompt is
+  attacker-influenced in the ordinary case, because it contains the diff.
+  `template_a_prompt_full_of_shell_metacharacters_is_one_argument` is the guard, and
+  `template_rendering_produces_argv_not_a_command_line` is where adding a
+  command-line field to `Invocation` should be reconsidered.
 
 - **Only `git::cmd` may spawn `git`** (`RL-302`). A second call site is not a style
   problem — it is a call site with no timeout and no prompt suppression, and it will

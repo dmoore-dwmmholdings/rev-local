@@ -5,6 +5,7 @@
 pub mod engine;
 pub mod mock;
 pub mod schema;
+pub mod template;
 
 pub use engine::{
     Engine, EngineError, EngineId, EngineOutcome, EngineProbe, EngineProblem, EngineTask,
@@ -15,6 +16,7 @@ pub use schema::{
     validate, DroppedFinding, SchemaError, ValidatedResult, RESULT_SCHEMA_V1,
     SUPPORTED_SCHEMA_VERSION,
 };
+pub use template::{Invocation, InvocationTemplate, RenderContext, TemplateError, PLACEHOLDERS};
 
 /// The name of this crate, used by the workspace layout test in `revlocal-cli`.
 pub const CRATE_NAME: &str = "revlocal-engine";
