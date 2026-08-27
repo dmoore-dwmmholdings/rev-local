@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-506a (REVL-51)
+- current_item: RL-506b (REVL-117)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-daemon --test pipeline_e2e
-- last_gate_result: PASS — 14 tests, 14 passed; workspace 591 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-cli review
+- last_gate_result: PASS — 8 tests, 8 passed; workspace 605 passed / 0 failed
 - last_visual: n/a
-- next_action: REVL-117 (RL-506b) — the VcsAdapter assembly and `revlocal review --json`; then REVL-52 closes M6
+- next_action: REVL-52 — M6 exit gate
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -576,3 +576,41 @@ REVL-51 keeps the §9 pipeline and all four criteria (the gate is daemon-side).
 **REVL-117 (RL-506b)** takes the two things it also asked for: there is no
 `impl VcsAdapter` anywhere — the trait is declared and only free functions implement
 its parts — and the CLI has no `review` subcommand.
+
+## a probe that found a feature which had never once worked
+
+RL-506a's rule ("when a negative probe does not bite, establish which of the two it
+is") paid for itself immediately.
+
+Deleting `GitAdapter`'s `NoSuchChange` mapping changed **no test**. Investigating
+rather than shrugging found *both* failure modes at once:
+
+- The CLI test asserted the error "names the rev" — but git's own stderr contains the
+  sha, so it passed with or without the mapping.
+- **The mapping never fired.** Its three patterns were guessed. `git worktree add`
+  says `invalid reference`; none of `unknown revision`, `bad revision`,
+  `not a valid object name` appears.
+
+A feature with a test, a doc comment and a green suite that did nothing at all.
+
+Both tests now discriminate (the CLI requires the classified wording and rejects a
+leaked `git worktree add`; a vcs-level test asserts the variant). Re-probing fails
+both.
+
+## THE recurring M6 lesson, now four for four
+
+**Never write a string match against another tool's output without running the tool
+and reading what it says.**
+
+1. RL-505 — the schema validator's violation text (checked; assumption held, now pinned).
+2. RL-506a — `GIT_ALLOW_PROTOCOL`'s refusal: guessed "not supported", git says
+   `transport 'https' not allowed`.
+3. RL-506a — a finding's file vs. what the fixture commit actually touches.
+4. RL-506b — `invalid reference`, above. **This one shipped a dead code path.**
+
+Every future string match on external output gets the tool run first. It costs one
+command.
+
+## M6 is feature-complete pending its exit gate
+
+RL-501..506 all closed with observed gates. REVL-52 (the M6 exit gate) is next.

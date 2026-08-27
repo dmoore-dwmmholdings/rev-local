@@ -22,7 +22,7 @@ pub use adapter::{
     ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem, ProbeReport, Result,
     VcsAdapter, VcsError,
 };
-pub use git::{CursorState, DiscoveryEvent, GitError, GitOutput, GitRunner};
+pub use git::{CursorState, DiscoveryEvent, GitAdapter, GitError, GitOutput, GitRunner};
 pub use github::{GitHubTransport, GitHubWrite, TransportSelection, WriteRefused};
 pub use scratch::{RunOutcome, ScratchDir};
 pub use skip_rules::{evaluate as evaluate_skip, reviewable_paths, Skip, SkipReason};

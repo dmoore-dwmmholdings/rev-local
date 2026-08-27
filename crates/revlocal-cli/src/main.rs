@@ -8,6 +8,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod review;
+
 /// Autonomous local code review for git, GitHub and Subversion.
 #[derive(Debug, Parser)]
 #[command(name = "revlocal", version, about, long_about = None)]
@@ -23,6 +25,21 @@ enum Command {
     Db {
         #[command(subcommand)]
         command: DbCommand,
+    },
+    /// Review one change and print the result.
+    Review {
+        /// The repository's working copy or mirror.
+        #[arg(long, value_name = "PATH")]
+        repo: PathBuf,
+        /// The revision to review.
+        #[arg(long, value_name = "REV")]
+        rev: String,
+        /// Print the machine-readable report instead of the human one.
+        ///
+        /// Exactly one JSON document reaches stdout and nothing else — see
+        /// `review::run`.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -64,8 +81,20 @@ fn main() -> ExitCode {
     }
 }
 
+/// Anything a command can fail with.
+#[derive(Debug, thiserror::Error)]
+enum CliError {
+    /// The store could not be opened or migrated.
+    #[error(transparent)]
+    Store(#[from] revlocal_store::StoreError),
+
+    /// A review could not be run.
+    #[error(transparent)]
+    Review(#[from] review::ReviewCommandError),
+}
+
 /// Dispatch one command.
-async fn run(command: Command) -> Result<(), revlocal_store::StoreError> {
+async fn run(command: Command) -> Result<(), CliError> {
     match command {
         Command::Db {
             command: DbCommand::Migrate { database },
@@ -73,6 +102,10 @@ async fn run(command: Command) -> Result<(), revlocal_store::StoreError> {
             let pool = revlocal_store::open(&database).await?;
             pool.close().await;
             println!("revlocal: schema is up to date at {}", database.display());
+            Ok(())
+        }
+        Command::Review { repo, rev, json } => {
+            review::run(&repo, &rev, json).await?;
             Ok(())
         }
     }

@@ -1511,8 +1511,13 @@ dependencies = [
  "revlocal-publish",
  "revlocal-store",
  "revlocal-vcs",
+ "serde",
+ "serde_json",
  "serde_norway",
+ "tempfile",
+ "thiserror",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
