@@ -9,6 +9,12 @@ authors.workspace = true
 description = "`VcsAdapter` trait plus git, GitHub and Subversion implementations."
 
 [dependencies]
+revlocal-core = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

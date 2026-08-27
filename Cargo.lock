@@ -1099,6 +1099,12 @@ dependencies = [
 [[package]]
 name = "revlocal-vcs"
 version = "0.1.0"
+dependencies = [
+ "revlocal-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "rustix"

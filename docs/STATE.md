@@ -1,12 +1,13 @@
 # Build state
-- current_milestone: M2 (complete — see below)
-- current_item: RL-201
+- current_milestone: M3
+- current_item: RL-202
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-core redact
-- last_gate_result: PASS — exit 0, 14 passed.
+- last_gate_command: ./fixtures/build.sh && test -f fixtures/out/git-basic/.manifest.json
+- last_gate_result: PASS — exit 0; 12 commits, manifest written, bare mirror created.
 - last_visual: n/a
-- next_action: RL-201 (REVL-25) — git fixture repository generator. This starts M3;
-    check the M1/M2 exit gates in SPEC §17 before treating them as closed.
+- next_action: RL-202 (REVL-26) — SVN fixture generator. **`svn` is not installed in this
+    container**; the M3 gate says the svn portion must skip cleanly when it is absent, so
+    that skip path is the deliverable here and the svn content itself may be unverifiable.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -35,6 +36,20 @@
    Everything else proceeds — the mock engine covers the inner loop.
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
+
+## milestone gates observed
+
+Checked by running them, not by assuming the items were finished.
+
+- **M0** — `cargo build --workspace && cargo clippy ... -D warnings && ./target/debug/revlocal --version` → exit 0, `revlocal 0.1.0`.
+- **M1** — `cargo test -p revlocal-core` → exit 0, **133 tests** (≥25 required);
+  `risk::tests::every_row_of_the_spec_12_3_matrix` and
+  `revlocal_core_has_no_io_dependencies` both present.
+- **M2** — `cargo test -p revlocal-store` → exit 0, **66 tests**; down-migration,
+  three typed `AlreadyExists` tests, and the 2-writer WAL test all present.
+
+Build log published to Trama, space `ENG`: `rev-local build log` with a page per
+milestone. **Trama's `update_page` replaces a body — `get_page` first (§11.5).**
 
 ## negative cases observed
 
