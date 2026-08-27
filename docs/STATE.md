@@ -1,13 +1,15 @@
 # Build state
 - current_milestone: M4
-- current_item: RL-307
+- current_item: RL-308
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-vcs --test git_materialize_is_readonly
-- last_gate_result: PASS — exit 0, 8 passed.
+- last_gate_command: cargo test -p revlocal-vcs github::transport
+- last_gate_result: PASS — exit 0, 15 passed.
 - last_visual: n/a
-- next_action: RL-307 (REVL-36) — GitHub adapter. Also outstanding in M4: REVL-113
-    (RL-305b, the generated-file marker skip) now that materialization exists to
-    supply file content.
+- next_action: RL-308 (REVL-37) — GitHub PR discovery. Also outstanding in M4:
+    REVL-113 (RL-305b, the generated-file marker skip).
+    **Worth doing soon:** three §5 amendments have now come from the same gap — the
+    DDL predating a fact another section requires persisted. Check §5 against §§6–12
+    in one pass rather than finding the fourth the same way (ADR 0015).
 
 ## counting tests
 
@@ -215,6 +217,12 @@ line to change if a decision comes back differently.
 The spec has been changed once, under the SPEC §5 implementation note ("if you must
 deviate, do it — but record why in docs/adr/ and update this section in the same
 commit").
+
+- **`repo.github_transport TEXT`** added in migration `0003` (`RL-307`, ADR 0015).
+  §6.3 says the selected transport is "stored on the repo row" and §5 had nowhere to
+  put it. A column rather than `config_json`, because that holds what the *user
+  chose* and this is what the *ladder found* — a doctor report exists to tell those
+  apart. `NULL` = not probed, deliberately distinct from `'unauthenticated'`.
 
 - **`budget_ledger.cost_complete INTEGER NOT NULL DEFAULT 1`** added in migration
   `0002` (`RL-109c`, ADR 0010). §5 declared `cost_usd REAL NOT NULL DEFAULT 0` while

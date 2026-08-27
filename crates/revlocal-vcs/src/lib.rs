@@ -14,6 +14,7 @@
 
 mod adapter;
 pub mod git;
+pub mod github;
 mod scratch;
 pub mod skip_rules;
 
@@ -22,5 +23,6 @@ pub use adapter::{
     VcsAdapter, VcsError,
 };
 pub use git::{CursorState, DiscoveryEvent, GitError, GitOutput, GitRunner};
+pub use github::{GitHubTransport, GitHubWrite, TransportSelection, WriteRefused};
 pub use scratch::{RunOutcome, ScratchDir};
 pub use skip_rules::{evaluate as evaluate_skip, Skip, SkipReason};

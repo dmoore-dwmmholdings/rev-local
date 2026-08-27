@@ -539,6 +539,111 @@ mod skip_rules {
         let _ = run;
     }
 
+    #[tokio::test]
+    async fn skip_rules_github_transport_is_recorded_on_the_repo_row() {
+        // Not a skip rule, but it needs the same dev-dependency on the store and the
+        // same "prove it round-trips" treatment. SPEC §6.3: the selected transport is
+        // stored on the repo row. RL-307 added the column.
+        use revlocal_vcs::GitHubTransport;
+
+        let db = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let pool = revlocal_store::open(&db.path().join("rev-local.db"))
+            .await
+            .unwrap_or_else(|e| panic!("open db: {e}"));
+        let at = chrono::DateTime::parse_from_rfc3339("2026-08-27T12:00:00Z")
+            .map(|t| t.with_timezone(&chrono::Utc))
+            .unwrap_or_default();
+
+        let repo = revlocal_store::RepoStore::new(&pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: "owner/repo".to_owned(),
+                kind: revlocal_core::RepoKind::GitHub,
+                local_path: None,
+                remote_url: Some("https://github.com/owner/repo".to_owned()),
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: at,
+                updated_at: at,
+            })
+            .await
+            .unwrap_or_else(|e| panic!("insert repo: {e}"));
+
+        let store = revlocal_store::RepoStore::new(&pool);
+
+        // Not probed yet is distinguishable from probed-and-unauthenticated: one
+        // means nobody looked, the other means we looked and this is as good as it
+        // gets.
+        assert_eq!(
+            store
+                .github_transport(repo.id)
+                .await
+                .unwrap_or_else(|e| panic!("{e}")),
+            None,
+            "a fresh repo has not been probed"
+        );
+
+        let chosen = GitHubTransport::GhCli {
+            account: Some("octocat".to_owned()),
+        };
+        store
+            .set_github_transport(repo.id, Some(chosen.name()))
+            .await
+            .unwrap_or_else(|e| panic!("set: {e}"));
+
+        assert_eq!(
+            store
+                .github_transport(repo.id)
+                .await
+                .unwrap_or_else(|e| panic!("{e}")),
+            Some("gh_cli".to_owned())
+        );
+
+        // The CHECK constraint keeps a typo out of the column.
+        assert!(
+            store
+                .set_github_transport(repo.id, Some("gh-cli"))
+                .await
+                .is_err(),
+            "a transport name the ladder cannot produce must be refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn skip_rules_probing_the_real_gh_reports_something_actionable() {
+        // Runs against whatever `gh` this machine has. The assertion is not "gh is
+        // authenticated" — it will not be, in CI or here — but that the probe
+        // produces a ladder that SAYS what is wrong and how to fix it, whichever
+        // state the machine is in.
+        use revlocal_vcs::github::{probe, select};
+
+        let runner =
+            revlocal_vcs::GitRunner::new().with_timeout(std::time::Duration::from_secs(20));
+        let probes = probe(&runner, None, false, None).await;
+        let selection = select(&probes);
+
+        let report = selection.doctor_lines().join("\n");
+        assert_eq!(
+            selection.doctor_lines().len(),
+            3,
+            "all three rungs are reported"
+        );
+        assert!(
+            report.contains("try:"),
+            "every failing rung carries remediation:\n{report}"
+        );
+
+        if probes.gh_installed && !probes.gh_authenticated {
+            assert!(
+                report.contains("gh auth login"),
+                "an installed-but-unauthenticated gh must point at the right fix:\n{report}"
+            );
+        }
+    }
+
     #[test]
     fn skip_rules_every_reason_is_either_decided_here_or_documented_as_elsewhere() {
         // §9.4 lists six rules; this module can decide four. The other two need the

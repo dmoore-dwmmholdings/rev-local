@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT github_transport FROM repo WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "github_transport",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "repo",
+            "name": "github_transport"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c5161f056452587a59c20205d55694525eec87aa926b86cf41725561f5f0f6b6"
+}

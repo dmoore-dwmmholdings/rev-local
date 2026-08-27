@@ -140,6 +140,49 @@ impl<'a> RepoStore<'a> {
         Ok(repos)
     }
 
+    /// Record which transport reaches GitHub for this repo (SPEC §6.3).
+    ///
+    /// Separate from [`update`](Self::update) because it is a *discovered* fact, not
+    /// a user setting: it is written by the probe, not by anyone editing config, and
+    /// folding it into the general update would let a stale in-memory `Repo` clobber
+    /// a fresher probe result.
+    pub async fn set_github_transport(&self, id: RepoId, transport: Option<&str>) -> Result<()> {
+        let raw = id.get();
+        let affected = sqlx::query!(
+            "UPDATE repo SET github_transport = ? WHERE id = ?",
+            transport,
+            raw
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "repo",
+                key: format!("id={raw}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// The transport last probed for this repo, if any.
+    ///
+    /// `None` means "not probed yet", which is deliberately distinguishable from
+    /// `Some("unauthenticated")`: one means nobody has looked, the other means we
+    /// looked and this is as good as it gets.
+    pub async fn github_transport(&self, id: RepoId) -> Result<Option<String>> {
+        let raw = id.get();
+        let row = sqlx::query!("SELECT github_transport FROM repo WHERE id = ?", raw)
+            .fetch_optional(self.pool)
+            .await?
+            .ok_or_else(|| StoreError::NotFound {
+                entity: "repo",
+                key: format!("id={raw}"),
+            })?;
+        Ok(row.github_transport)
+    }
+
     /// Update the mutable fields of a repo.
     ///
     /// `name` and `kind` are not updatable here: a repo that changes either is a

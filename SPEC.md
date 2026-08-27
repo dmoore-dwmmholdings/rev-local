@@ -185,6 +185,8 @@ CREATE TABLE repo (
                       CHECK (autonomy IN ('off','dry_run','auto_low_ask_high','auto')),
   enabled           INTEGER NOT NULL DEFAULT 1,
   config_json       TEXT NOT NULL DEFAULT '{}',   -- RepoConfig (§13.2)
+  github_transport  TEXT                          -- §6.3 ladder result; NULL = not probed
+                      CHECK (github_transport IN ('mcp','gh_cli','unauthenticated')),
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
 );
