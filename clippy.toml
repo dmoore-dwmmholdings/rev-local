@@ -1,0 +1,5 @@
+# RL-101 / SPEC §18: unwrap() and expect() are denied in non-test code via
+# [workspace.lints.clippy] in Cargo.toml. These two keys carve out the only
+# exemption the spec allows: test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

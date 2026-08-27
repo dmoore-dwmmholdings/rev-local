@@ -1,0 +1,3197 @@
+{
+  "project": "rev-local",
+  "spec": "SPEC.md",
+  "generated_by": "scripts/gen_backlog.py",
+  "item_count": 107,
+  "items": [
+    {
+      "id": "RL-E1",
+      "type": "epic",
+      "title": "Foundation: workspace, domain model, persistence",
+      "parent": null,
+      "milestone": "M0-M2",
+      "labels": [
+        "foundation"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a74",
+        "\u00a75",
+        "\u00a713"
+      ],
+      "description": "Everything downstream depends on this epic. It establishes the Cargo workspace,\nthe I/O-free domain core, and the SQLite store. Nothing here talks to a network,\na VCS, or a model.",
+      "acceptance_criteria": [
+        "All of RL-1xx closed",
+        "cargo build/clippy/test green on macOS, Windows, Linux"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-1",
+      "status": "todo"
+    },
+    {
+      "id": "RL-101",
+      "type": "story",
+      "title": "Scaffold Cargo workspace with all eight crates",
+      "parent": "RL-E1",
+      "milestone": "M0",
+      "labels": [
+        "rust",
+        "scaffold"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a74.1"
+      ],
+      "description": "Create the workspace exactly as laid out in SPEC \u00a74.1: revlocal-core, -store, -vcs,\n-engine, -mcp, -publish, -daemon, -cli, plus src-tauri/ and ui/ placeholders.\nWorkspace-level [workspace.dependencies] for shared crates so versions stay aligned.\nSet rust-version, edition 2021, and a rustfmt.toml + clippy.toml (deny unwrap outside tests).",
+      "acceptance_criteria": [
+        "`cargo build --workspace` succeeds",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean",
+        "`revlocal --version` prints a version",
+        "clippy.toml disallows `unwrap`/`expect` in non-test code"
+      ],
+      "gate": "cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && ./target/debug/revlocal --version",
+      "notes": null,
+      "andare_key": "REVL-14",
+      "status": "todo"
+    },
+    {
+      "id": "RL-102",
+      "type": "story",
+      "title": "CI matrix for macOS, Windows and Linux",
+      "parent": "RL-E1",
+      "milestone": "M0",
+      "labels": [
+        "ci"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-101"
+      ],
+      "spec_refs": [
+        "\u00a716.3"
+      ],
+      "description": "GitHub Actions workflow running fmt, clippy, build and test on all three OSes.\nInstall `svn` on every runner (M11 needs it). Cache cargo registry and target dir.\nUpload framewatch artifacts (M13) and test logs on failure.",
+      "acceptance_criteria": [
+        "Workflow runs on push and PR",
+        "All three OS legs green on an empty workspace",
+        "`svn --version` succeeds on every runner",
+        "Failure uploads logs + any artifacts/gui/*.png"
+      ],
+      "gate": "act -j test 2>/dev/null || echo 'verify in CI'",
+      "notes": null,
+      "andare_key": "REVL-15",
+      "status": "todo"
+    },
+    {
+      "id": "RL-103",
+      "type": "story",
+      "title": "Domain types in revlocal-core",
+      "parent": "RL-E1",
+      "milestone": "M1",
+      "labels": [
+        "rust",
+        "domain"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-101"
+      ],
+      "spec_refs": [
+        "\u00a73",
+        "\u00a75"
+      ],
+      "description": "Repo, RepoKind, Cursor, Change, ChangeKind, Run, RunStatus, Depth, TriggerSource,\nFinding, Severity, Category, FindingState, PublishAction, Capability, Verdict,\nAutonomyMode, RiskClass, Usage, DiffStat, FileDiff. Serde on everything.\nNewtype IDs (RepoId, RunId, ChangeId) \u2014 never bare i64 across an API boundary.",
+      "acceptance_criteria": [
+        "Every type in SPEC \u00a73 and \u00a75 is represented",
+        "Serde round-trip property test for each enum",
+        "Newtype IDs are not interchangeable (compile-fail test via trybuild)"
+      ],
+      "gate": "cargo test -p revlocal-core",
+      "notes": null,
+      "andare_key": "REVL-16",
+      "status": "todo"
+    },
+    {
+      "id": "RL-104",
+      "type": "story",
+      "title": "Enforce that revlocal-core has no I/O dependencies",
+      "parent": "RL-E1",
+      "milestone": "M1",
+      "labels": [
+        "rust",
+        "architecture"
+      ],
+      "priority": "P0",
+      "estimate": 2,
+      "depends_on": [
+        "RL-103"
+      ],
+      "spec_refs": [
+        "\u00a74.1"
+      ],
+      "description": "The domain core must stay unit-testable and fast. Add a test that parses\n`cargo metadata` and fails if revlocal-core's transitive dependency tree contains\ntokio, sqlx, reqwest, hyper, or rusqlite.",
+      "acceptance_criteria": [
+        "Test fails loudly if someone adds tokio to revlocal-core",
+        "Test names the offending crate and the path that pulled it in"
+      ],
+      "gate": "cargo test -p revlocal-core --test no_io_deps",
+      "notes": null,
+      "andare_key": "REVL-17",
+      "status": "todo"
+    },
+    {
+      "id": "RL-105",
+      "type": "story",
+      "title": "Risk classification model",
+      "parent": "RL-E1",
+      "milestone": "M1",
+      "labels": [
+        "rust",
+        "domain",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-103"
+      ],
+      "spec_refs": [
+        "\u00a712.3"
+      ],
+      "description": "Pure function: (action kind, target, capability, run state, finding, repo history)\n-> RiskClass. Implements SPEC \u00a712.3 including the escalation rules: degraded run,\nconfidence < 0.6, burst threshold, and \u2014 critically \u2014 first-ever use of a\n(target, capability) pair is ALWAYS high risk.",
+      "acceptance_criteria": [
+        "Table-driven test covering every row of the \u00a712.3 matrix",
+        "First-use escalation has its own dedicated test",
+        "Escalation rules compose (a low-risk comment on a degraded run is high)",
+        "Function is total: no panics, no unwraps, exhaustive matches"
+      ],
+      "gate": "cargo test -p revlocal-core risk::",
+      "notes": null,
+      "andare_key": "REVL-18",
+      "status": "todo"
+    },
+    {
+      "id": "RL-106",
+      "type": "story",
+      "title": "Finding fingerprint algorithm",
+      "parent": "RL-E1",
+      "milestone": "M1",
+      "labels": [
+        "rust",
+        "domain"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-103"
+      ],
+      "spec_refs": [
+        "\u00a710.3"
+      ],
+      "description": "Implement the line-number-independent fingerprint from SPEC \u00a710.3: sha256 over\nrepo, normalized path, category and normalized title, truncated to 16 hex chars.\nTitle normalization: lowercase, collapse whitespace, digits -> '#', keep\nidentifiers > 3 chars verbatim.",
+      "acceptance_criteria": [
+        "Same defect at a different line yields the same fingerprint",
+        "Same title in a different file yields a different fingerprint",
+        "Windows-style backslash paths normalize to the same value as POSIX",
+        "Golden test vectors committed so the algorithm cannot drift silently"
+      ],
+      "gate": "cargo test -p revlocal-core fingerprint",
+      "notes": null,
+      "andare_key": "REVL-19",
+      "status": "todo"
+    },
+    {
+      "id": "RL-107",
+      "type": "story",
+      "title": "Configuration load, merge and validation",
+      "parent": "RL-E1",
+      "milestone": "M1",
+      "labels": [
+        "rust",
+        "config"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-103"
+      ],
+      "spec_refs": [
+        "\u00a713"
+      ],
+      "description": "Global TOML config + per-repo JSON config + optional in-repo .rev-local.toml,\nmerged with the precedence in SPEC \u00a713.2. Enforce the security rule: an in-repo\nfile may narrow scope/ignores but may NEVER widen autonomy or add publish targets.\nResolve {{keychain:name}} placeholders lazily, never eagerly, never into logs.",
+      "acceptance_criteria": [
+        "Merge precedence test for every field class",
+        "In-repo config attempting to set autonomy=auto is rejected with a typed error",
+        "In-repo config attempting to add a target is rejected",
+        "Unknown keys produce a warning, not a hard failure",
+        "Defaults match SPEC \u00a713 exactly (test asserts the default document)"
+      ],
+      "gate": "cargo test -p revlocal-core config::",
+      "notes": null,
+      "andare_key": "REVL-20",
+      "status": "todo"
+    },
+    {
+      "id": "RL-108",
+      "type": "story",
+      "title": "SQLite schema and migrations",
+      "parent": "RL-E1",
+      "milestone": "M2",
+      "labels": [
+        "rust",
+        "storage"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-103"
+      ],
+      "spec_refs": [
+        "\u00a75"
+      ],
+      "description": "sqlx migrations implementing SPEC \u00a75 DDL verbatim. WAL mode, foreign_keys=ON,\nbusy_timeout set. Include the UNIQUE(target, idempotency_key) constraint on\npublish_action \u2014 that constraint is a safety feature, not an optimisation.",
+      "acceptance_criteria": [
+        "`revlocal db migrate` creates the schema from empty",
+        "Migrations are idempotent when re-run",
+        "A down-migration path exists and is tested",
+        "PRAGMA journal_mode returns wal"
+      ],
+      "gate": "cargo test -p revlocal-store migrations",
+      "notes": null,
+      "andare_key": "REVL-21",
+      "status": "todo"
+    },
+    {
+      "id": "RL-109",
+      "type": "story",
+      "title": "Store repositories (CRUD) for every entity",
+      "parent": "RL-E1",
+      "milestone": "M2",
+      "labels": [
+        "rust",
+        "storage"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-108"
+      ],
+      "spec_refs": [
+        "\u00a75"
+      ],
+      "description": "Typed repository structs over each table with compile-time-checked queries.\nCursor read/advance, change upsert-by-(repo,kind,external_id), run state\ntransitions, finding insert with fingerprint index, publish_action insert with\nidempotency, audit append, budget ledger increment.",
+      "acceptance_criteria": [
+        "CRUD round-trip test per entity",
+        "Inserting a duplicate (target, idempotency_key) returns a typed AlreadyExists error, not a raw sqlx error",
+        "Run state transitions reject illegal moves (done -> reviewing) at the type or function level",
+        "Cursor advance is atomic"
+      ],
+      "gate": "cargo test -p revlocal-store",
+      "notes": null,
+      "andare_key": "REVL-22",
+      "status": "todo"
+    },
+    {
+      "id": "RL-110",
+      "type": "story",
+      "title": "Audit log and budget ledger",
+      "parent": "RL-E1",
+      "milestone": "M2",
+      "labels": [
+        "rust",
+        "storage",
+        "safety"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [
+        "RL-109"
+      ],
+      "spec_refs": [
+        "\u00a75",
+        "\u00a712"
+      ],
+      "description": "Append-only audit log with actor/kind/detail, plus the per-repo-per-day budget\nledger with atomic increment. Budget increments must be safe under concurrent runs.",
+      "acceptance_criteria": [
+        "Audit rows are never updated or deleted by any store method",
+        "Concurrent budget increments from two tasks sum correctly (WAL concurrency test)",
+        "Day rollover creates a new ledger row, does not mutate yesterday's"
+      ],
+      "gate": "cargo test -p revlocal-store -- --include-ignored budget",
+      "notes": null,
+      "andare_key": "REVL-23",
+      "status": "todo"
+    },
+    {
+      "id": "RL-111",
+      "type": "task",
+      "title": "Structured logging with secret redaction",
+      "parent": "RL-E1",
+      "milestone": "M2",
+      "labels": [
+        "rust",
+        "security"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-101"
+      ],
+      "spec_refs": [
+        "\u00a718"
+      ],
+      "description": "tracing subscriber with a JSON file layer under {data_dir}/logs/ and a redaction\nlayer that scrubs token-shaped strings before they reach any sink.",
+      "acceptance_criteria": [
+        "A fake token pushed through tracing does not appear in the log file",
+        "Redaction covers: Bearer tokens, gh[pousr]_*, trama_*/andare_*-style prefixed keys, and values of fields named *token*/*secret*/*password*",
+        "Redaction is applied to span fields as well as event fields"
+      ],
+      "gate": "cargo test -p revlocal-core redact",
+      "notes": null,
+      "andare_key": "REVL-24",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E2",
+      "type": "epic",
+      "title": "Offline test fixtures and mocks",
+      "parent": null,
+      "milestone": "M3",
+      "labels": [
+        "testing"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E1"
+      ],
+      "spec_refs": [
+        "\u00a716.2"
+      ],
+      "description": "The inner loop must never touch the network or spend model tokens. This epic builds\nthe git repo, the bare mirror, the SVN repository, the mock MCP server and the mock\nengine that every later test depends on.",
+      "acceptance_criteria": [
+        "`./fixtures/build.sh` reproduces every fixture from scratch, deterministically"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-2",
+      "status": "todo"
+    },
+    {
+      "id": "RL-201",
+      "type": "story",
+      "title": "Git fixture repository generator",
+      "parent": "RL-E2",
+      "milestone": "M3",
+      "labels": [
+        "testing",
+        "fixtures"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a716.2"
+      ],
+      "description": "fixtures/build.sh creates fixtures/out/git-basic with 12 commits: a clean commit,\na planted off-by-one in src/pager.rs, a planted SQL injection in src/db.rs, a\nlockfile-only commit, a merge commit, a 200-file commit, a bot-authored commit,\nand normal filler. Fixed author/date/env so SHAs are byte-identical every run.",
+      "acceptance_criteria": [
+        "Two consecutive builds produce identical commit SHAs",
+        "A manifest file records sha -> role (planted_bug, lockfile_only, bot, ...) for tests to reference by role, never by hardcoded sha",
+        "Also produces fixtures/out/git-bare as a --mirror clone"
+      ],
+      "gate": "./fixtures/build.sh && test -f fixtures/out/git-basic/.manifest.json",
+      "notes": null,
+      "andare_key": "REVL-25",
+      "status": "todo"
+    },
+    {
+      "id": "RL-202",
+      "type": "story",
+      "title": "SVN fixture repository generator",
+      "parent": "RL-E2",
+      "milestone": "M3",
+      "labels": [
+        "testing",
+        "fixtures",
+        "svn"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-201"
+      ],
+      "spec_refs": [
+        "\u00a716.2",
+        "\u00a76.4"
+      ],
+      "description": "svnadmin create + file:// access. trunk plus branches/feature-x, revisions mirroring\nthe git fixture, and a reintegration revision carrying both a matching log message\nand a real svn:mergeinfo property change, so pseudo-PR detection can be tested via\nboth heuristics independently.",
+      "acceptance_criteria": [
+        "Manifest records revision -> role including reintegration_rev and its fork point",
+        "The reintegration revision genuinely changes svn:mergeinfo (verified with svn propget)",
+        "Script skips with a clear message and exit 0 when `svn` is absent, and says so in the manifest"
+      ],
+      "gate": "./fixtures/build.sh && test -f fixtures/out/svn-basic/.manifest.json",
+      "notes": null,
+      "andare_key": "REVL-26",
+      "status": "todo"
+    },
+    {
+      "id": "RL-203",
+      "type": "story",
+      "title": "Mock engine binary",
+      "parent": "RL-E2",
+      "milestone": "M3",
+      "labels": [
+        "testing",
+        "fixtures"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a78.2",
+        "\u00a716.2"
+      ],
+      "description": "A script that impersonates a CLI engine and honours REVLOCAL_OUT. Behaviour is\nselected by env var MOCK_ENGINE_MODE so one fixture covers every branch of the\n\u00a78.2 fallback ladder: valid | malformed_json | fenced_only | no_file | hang |\npartial_findings | nonzero_exit | slow_but_ok.",
+      "acceptance_criteria": [
+        "One mode per rung of the fallback ladder",
+        "`hang` mode ignores SIGTERM so the SIGKILL path is genuinely exercised",
+        "`valid` mode emits a result.json that validates against result.v1.json",
+        "Runs on Windows (a .cmd shim or a portable node script)"
+      ],
+      "gate": "MOCK_ENGINE_MODE=valid REVLOCAL_OUT=$(mktemp -d) fixtures/mock-engine/run && echo ok",
+      "notes": null,
+      "andare_key": "REVL-27",
+      "status": "todo"
+    },
+    {
+      "id": "RL-204",
+      "type": "story",
+      "title": "Mock MCP server with a request journal",
+      "parent": "RL-E2",
+      "milestone": "M3",
+      "labels": [
+        "testing",
+        "fixtures",
+        "mcp"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a716.2",
+        "\u00a711.2"
+      ],
+      "description": "Node stdio MCP server with configurable tool names, so capability-mapping tests can\nsimulate Andare exposing `create_work_item` instead of `create_issue`. Records every\nrequest to a journal file that tests assert against. Implements a Trama-like\nupdate_page that FAILS if the caller did not call get_page for that page first.",
+      "acceptance_criteria": [
+        "Tool names and schemas are configurable via a JSON profile",
+        "Journal records method, args and ordering",
+        "update_page without a preceding get_page returns an error \u2014 this is what makes RL-802 testable",
+        "Can be told to return rate-limit and 5xx errors on demand for retry tests"
+      ],
+      "gate": "node fixtures/mock-mcp/selftest.js",
+      "notes": null,
+      "andare_key": "REVL-28",
+      "status": "todo"
+    },
+    {
+      "id": "RL-205",
+      "type": "task",
+      "title": "Windows fixture parity (build.ps1)",
+      "parent": "RL-E2",
+      "milestone": "M3",
+      "labels": [
+        "testing",
+        "fixtures",
+        "windows"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [
+        "RL-201",
+        "RL-202"
+      ],
+      "spec_refs": [
+        "\u00a716.3"
+      ],
+      "description": "PowerShell equivalent of build.sh producing byte-identical fixtures on Windows.",
+      "acceptance_criteria": [
+        "Same commit SHAs as the bash script",
+        "CRLF does not leak into fixture file contents"
+      ],
+      "gate": "pwsh fixtures/build.ps1",
+      "notes": null,
+      "andare_key": "REVL-29",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E3",
+      "type": "epic",
+      "title": "VCS: git and GitHub adapters",
+      "parent": null,
+      "milestone": "M4",
+      "labels": [
+        "vcs"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E2"
+      ],
+      "spec_refs": [
+        "\u00a76.1",
+        "\u00a76.2",
+        "\u00a76.3"
+      ],
+      "description": "Discovery, materialization and hook installation for local git repositories and\nGitHub-hosted ones. The absolute constraint: reviewing must never mutate the\nrepository under review.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-3",
+      "status": "todo"
+    },
+    {
+      "id": "RL-301",
+      "type": "story",
+      "title": "VcsAdapter trait and scratch-worktree lifecycle",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a76.1"
+      ],
+      "description": "Define the trait from SPEC \u00a76.1 and the scratch directory lifecycle under\n{data_dir}/scratch/{run_id}/, with RAII cleanup honouring keep_scratch_on_failure.",
+      "acceptance_criteria": [
+        "Scratch dir is removed on drop for a successful run",
+        "Scratch dir survives a failed run when keep_scratch_on_failure is set",
+        "Two concurrent runs on the same repo get isolated scratch dirs"
+      ],
+      "gate": "cargo test -p revlocal-vcs scratch",
+      "notes": null,
+      "andare_key": "REVL-30",
+      "status": "todo"
+    },
+    {
+      "id": "RL-302",
+      "type": "story",
+      "title": "Git command wrapper with timeouts and no interactive prompts",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-301"
+      ],
+      "spec_refs": [
+        "\u00a76.2"
+      ],
+      "description": "Single choke point for every git invocation. Sets GIT_TERMINAL_PROMPT=0,\nGIT_ASKPASS=echo, per-call timeout, captures stdout/stderr, maps exit codes to\ntyped errors. No other code in the workspace may spawn `git` directly.",
+      "acceptance_criteria": [
+        "A repo requiring credentials fails fast instead of hanging",
+        "Timeout kills the child and its process group",
+        "A grep-based test asserts no other module spawns `git` directly"
+      ],
+      "gate": "cargo test -p revlocal-vcs git::cmd",
+      "notes": null,
+      "andare_key": "REVL-31",
+      "status": "todo"
+    },
+    {
+      "id": "RL-303",
+      "type": "story",
+      "title": "Git commit discovery with cursor advancement",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-302"
+      ],
+      "spec_refs": [
+        "\u00a76.2"
+      ],
+      "description": "fetch --prune, then rev-list --reverse --first-parent per watched branch, honouring\nbranch globs. Emits DetectedChange in oldest-first order and advances the cursor\nonly after a change is durably recorded.",
+      "acceptance_criteria": [
+        "Discovers exactly the expected changes from git-basic (by manifest role, not hardcoded shas)",
+        "Cursor advance is crash-safe: killing after discovery but before recording re-discovers the same change, and does not duplicate it",
+        "Branch globs (release/*) resolve correctly"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test git_discover",
+      "notes": null,
+      "andare_key": "REVL-32",
+      "status": "todo"
+    },
+    {
+      "id": "RL-304",
+      "type": "story",
+      "title": "Force-push and history-rewrite recovery",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-303"
+      ],
+      "spec_refs": [
+        "\u00a76.2"
+      ],
+      "description": "When the stored cursor SHA is no longer an ancestor of the branch tip, emit a\n`history_rewritten` audit event, reset the cursor to the merge-base, and\nre-discover forward rather than replaying the entire branch.",
+      "acceptance_criteria": [
+        "Test force-pushes the fixture branch and asserts recovery",
+        "An audit row is written",
+        "Recovery does not re-review commits that survived the rewrite (dedupe by content hash)"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test git_force_push",
+      "notes": null,
+      "andare_key": "REVL-33",
+      "status": "todo"
+    },
+    {
+      "id": "RL-305",
+      "type": "story",
+      "title": "Skip rules: merges, bots, lockfiles, ignored globs",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-303"
+      ],
+      "spec_refs": [
+        "\u00a79.4"
+      ],
+      "description": "Implement the skip table from SPEC \u00a79.4, recording an explicit skip_reason for each.",
+      "acceptance_criteria": [
+        "Each skip category has a fixture commit and a test asserting the exact skip_reason",
+        "A skipped change still creates a `change` row and a `skipped` run \u2014 skips are visible, not invisible",
+        "Empty-after-filtering diffs are skipped, not sent to an engine"
+      ],
+      "gate": "cargo test -p revlocal-vcs skip_rules",
+      "notes": null,
+      "andare_key": "REVL-34",
+      "status": "todo"
+    },
+    {
+      "id": "RL-306",
+      "type": "story",
+      "title": "Materialize a change without mutating the source repo",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-302",
+        "RL-301"
+      ],
+      "spec_refs": [
+        "\u00a76.1"
+      ],
+      "description": "`git worktree add --detach` into scratch (or `git archive` for bare mirrors), plus\nthe unified diff and per-file diffs. The user's working tree, index, HEAD and stash\nmust be untouched.",
+      "acceptance_criteria": [
+        "After materializing every fixture commit, `git status --porcelain` on the fixture is empty",
+        "The fixture's HEAD and tree hash are byte-identical before and after",
+        "Worktree is pruned afterwards (`git worktree list` returns to its prior state)",
+        "Works against a bare mirror where worktree add is unavailable"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test git_materialize_is_readonly",
+      "notes": null,
+      "andare_key": "REVL-35",
+      "status": "todo"
+    },
+    {
+      "id": "RL-307",
+      "type": "story",
+      "title": "GitHub transport selection: MCP, gh CLI, unauthenticated",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs",
+        "github"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-302"
+      ],
+      "spec_refs": [
+        "\u00a76.3"
+      ],
+      "description": "Priority ladder from SPEC \u00a76.3. The chosen transport is recorded on the repo row and\nreported by `revlocal doctor`, so a user always knows how the app is reaching GitHub.",
+      "acceptance_criteria": [
+        "Ladder falls through in order and reports which rung it landed on",
+        "Unauthenticated mode is read-only and refuses every write with a clear error",
+        "doctor output names the transport and, on failure, the remediation"
+      ],
+      "gate": "cargo test -p revlocal-vcs github::transport",
+      "notes": null,
+      "andare_key": "REVL-36",
+      "status": "todo"
+    },
+    {
+      "id": "RL-308",
+      "type": "story",
+      "title": "Pull request discovery keyed by head SHA",
+      "parent": "RL-E3",
+      "milestone": "M4",
+      "labels": [
+        "rust",
+        "vcs",
+        "github"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-307"
+      ],
+      "spec_refs": [
+        "\u00a76.3"
+      ],
+      "description": "Open PRs against watched branches become Changes with external_id \"{number}:{head_sha}\",\nso a re-push is a new Change. Drafts skipped by default. Commits already covered by an\nopen PR are skipped with skip_reason='covered_by_pr'.",
+      "acceptance_criteria": [
+        "Re-push produces a second Change, not a mutated first one",
+        "Findings from the prior head SHA whose fingerprints do not recur become `superseded`",
+        "Draft PRs are skipped unless review_draft_prs is enabled",
+        "covered_by_pr skip is exercised with both commit and PR review enabled"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test github_pr_discover",
+      "notes": null,
+      "andare_key": "REVL-37",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E4",
+      "type": "epic",
+      "title": "Review engines: Claude Code and Codex runners",
+      "parent": null,
+      "milestone": "M5",
+      "labels": [
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E2"
+      ],
+      "spec_refs": [
+        "\u00a78"
+      ],
+      "description": "Invoke locally installed AI CLIs as review engines, without depending on any\nspecific CLI's structured-output flag. The output contract and its fallback ladder\nare the load-bearing design here.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-4",
+      "status": "todo"
+    },
+    {
+      "id": "RL-401",
+      "type": "story",
+      "title": "Engine trait, task and outcome types",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a78.1"
+      ],
+      "description": "Implement the trait and structs from SPEC \u00a78.1, plus EngineId and EngineProbe.",
+      "acceptance_criteria": [
+        "Mock engine implements the trait and is usable from tests",
+        "Trait is object-safe (Box<dyn Engine> works)"
+      ],
+      "gate": "cargo test -p revlocal-engine trait_",
+      "notes": null,
+      "andare_key": "REVL-38",
+      "status": "todo"
+    },
+    {
+      "id": "RL-402",
+      "type": "story",
+      "title": "result.json schema and validator",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-401"
+      ],
+      "spec_refs": [
+        "\u00a78.3"
+      ],
+      "description": "Commit crates/revlocal-engine/schema/result.v1.json matching SPEC \u00a78.3 and validate\nevery engine output against it. A finding that fails validation is dropped\nindividually with an audit event; the run still succeeds if the envelope parsed.",
+      "acceptance_criteria": [
+        "Valid document passes",
+        "A single malformed finding is dropped, the rest survive, and an audit row records the drop",
+        "A malformed envelope fails the run rather than inventing findings",
+        "schema_version mismatch is a typed error with an actionable message"
+      ],
+      "gate": "cargo test -p revlocal-engine schema",
+      "notes": null,
+      "andare_key": "REVL-39",
+      "status": "todo"
+    },
+    {
+      "id": "RL-403",
+      "type": "story",
+      "title": "Config-driven invocation templates",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-401"
+      ],
+      "spec_refs": [
+        "\u00a78.4"
+      ],
+      "description": "Render {cwd}, {out_dir}, {prompt_file}, {prompt_file_content}, {timeout_secs} into\nan argv template. Support stdin_prompt. Ship the claude and codex defaults from\nSPEC \u00a78.4 but treat them as defaults, never as assumptions.",
+      "acceptance_criteria": [
+        "All placeholder forms render correctly, including on Windows paths with spaces",
+        "An unknown placeholder is a config error at load time, not a runtime surprise",
+        "Argv is never shell-interpolated (no shell injection via a prompt or a path)"
+      ],
+      "gate": "cargo test -p revlocal-engine template",
+      "notes": null,
+      "andare_key": "REVL-40",
+      "status": "todo"
+    },
+    {
+      "id": "RL-404",
+      "type": "story",
+      "title": "Output contract with the four-rung fallback ladder",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-402",
+        "RL-403",
+        "RL-203"
+      ],
+      "spec_refs": [
+        "\u00a78.2"
+      ],
+      "description": "Read $REVLOCAL_OUT/result.json. On failure: last fenced json block -> whole stdout\n-> one repair invocation -> fail with engine_output_unparseable. Any fallback sets\n`degraded`, which later escalates publish risk.",
+      "acceptance_criteria": [
+        "One test per mock-engine mode, asserting which rung handled it",
+        "The repair pass runs at most once and its tokens are charged to the budget",
+        "engine_output_unparseable preserves the transcript and never fabricates findings",
+        "`degraded` is set for rungs a, b and c, and unset for rung 0"
+      ],
+      "gate": "cargo test -p revlocal-engine --test fallback_ladder",
+      "notes": null,
+      "andare_key": "REVL-41",
+      "status": "todo"
+    },
+    {
+      "id": "RL-405",
+      "type": "story",
+      "title": "Process supervision: timeout, cancellation, no orphans",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine",
+        "platform"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-403"
+      ],
+      "spec_refs": [
+        "\u00a78.5"
+      ],
+      "description": "Depth-scaled wall-clock timeout, SIGTERM then 5s grace then SIGKILL. Unix: spawn in a\nnew process group and signal the group. Windows: Job Object so children die with the\nparent. Cancellation token wired to the kill switch.",
+      "acceptance_criteria": [
+        "Hung mock engine is killed within timeout + 2s",
+        "No orphan process survives \u2014 asserted by checking the recorded PID and its children",
+        "A grandchild process spawned by the engine also dies",
+        "Test passes on all three platforms in CI"
+      ],
+      "gate": "cargo test -p revlocal-engine --test process_supervision",
+      "notes": null,
+      "andare_key": "REVL-42",
+      "status": "todo"
+    },
+    {
+      "id": "RL-406",
+      "type": "story",
+      "title": "Environment denylist for engine processes",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine",
+        "security"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-403"
+      ],
+      "spec_refs": [
+        "\u00a78.5"
+      ],
+      "description": "Inherit the environment so CLI logins work, minus GITHUB_TOKEN, GH_TOKEN, *_API_KEY,\n*_SECRET, *_PASSWORD, unless explicitly allowed by engines.<id>.pass_env. The review\nengine has no business acting on remotes.",
+      "acceptance_criteria": [
+        "A GITHUB_TOKEN in the parent env is absent from the child env",
+        "pass_env allows a named variable through",
+        "Test asserts the child's actual environment, not just the builder's intent"
+      ],
+      "gate": "cargo test -p revlocal-engine env_denylist",
+      "notes": null,
+      "andare_key": "REVL-43",
+      "status": "todo"
+    },
+    {
+      "id": "RL-407",
+      "type": "story",
+      "title": "Claude Code and Codex runner implementations",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "rust",
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-404",
+        "RL-405",
+        "RL-406"
+      ],
+      "spec_refs": [
+        "\u00a78.4"
+      ],
+      "description": "Concrete Engine impls wiring the templates, plus probe() implementing version detection.",
+      "acceptance_criteria": [
+        "probe() reports binary present/absent, version, and whether a smoke task succeeded",
+        "Absence of the binary is a clear prerequisite error, never a panic",
+        "Both engines are selectable per repo"
+      ],
+      "gate": "cargo test -p revlocal-engine runners",
+      "notes": null,
+      "andare_key": "REVL-44",
+      "status": "todo"
+    },
+    {
+      "id": "RL-408",
+      "type": "spike",
+      "title": "SPIKE: Codex CLI structured-output and sandbox behaviour",
+      "parent": "RL-E4",
+      "milestone": "M5",
+      "labels": [
+        "spike",
+        "engine"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a78.2",
+        "\u00a78.4"
+      ],
+      "description": "Timeboxed investigation. `codex` is not currently installed on the build machine.\nDetermine: the exact exec invocation and flags for non-interactive use; whether the\nsandbox permits writing to REVLOCAL_OUT when it is outside --cd; what its JSON output\nactually looks like; and whether the default invocation template in SPEC \u00a78.4 is right.",
+      "acceptance_criteria": [
+        "Findings written to docs/adr/ as an ADR",
+        "SPEC \u00a78.4 codex defaults updated to match reality",
+        "If the sandbox blocks REVLOCAL_OUT, the ADR proposes a concrete fix (e.g. put out_dir inside cwd)"
+      ],
+      "gate": null,
+      "notes": "Timebox: 4 hours. Blocked until `codex` is installed on the build machine.",
+      "andare_key": "REVL-45",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E5",
+      "type": "epic",
+      "title": "Review pipeline",
+      "parent": null,
+      "milestone": "M6",
+      "labels": [
+        "pipeline"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E3",
+        "RL-E4"
+      ],
+      "spec_refs": [
+        "\u00a79",
+        "\u00a710"
+      ],
+      "description": "The stage machine that turns a detected change into normalized, deduplicated,\nrisk-classified findings.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-5",
+      "status": "todo"
+    },
+    {
+      "id": "RL-501",
+      "type": "story",
+      "title": "Run state machine and crash recovery",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-109"
+      ],
+      "spec_refs": [
+        "\u00a79.1"
+      ],
+      "description": "Stage transitions from SPEC \u00a79.1, each persisted and emitted as an event. On startup,\nnon-terminal runs older than stale_run_minutes become failed('interrupted') and are\nre-enqueued exactly once.",
+      "acceptance_criteria": [
+        "Illegal transitions are rejected",
+        "Simulated crash mid-`reviewing` recovers on next startup",
+        "Recovery re-enqueues once, not in a loop (attempt counter is respected)"
+      ],
+      "gate": "cargo test -p revlocal-daemon state_machine",
+      "notes": null,
+      "andare_key": "REVL-46",
+      "status": "todo"
+    },
+    {
+      "id": "RL-502",
+      "type": "story",
+      "title": "Prompt assembly with the seven required sections",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline",
+        "prompt"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-306"
+      ],
+      "spec_refs": [
+        "\u00a79.2"
+      ],
+      "description": "Render the review prompt template with the SPEC \u00a79.2 sections in order: role/output\ncontract, change metadata, diff, repo conventions, review scope, prior context, rules\nof engagement. Convention files are read from the materialized worktree and capped.",
+      "acceptance_criteria": [
+        "Section order matches \u00a79.2 exactly (snapshot test)",
+        "CLAUDE.md/AGENTS.md/CONTRIBUTING.md are picked up when present and their absence is not an error",
+        "Convention content is capped at max_convention_bytes with the truncation stated in the prompt",
+        "Suppressed fingerprints appear in the prior-context section as do-not-report",
+        "The rendered prompt is persisted next to the transcript"
+      ],
+      "gate": "cargo test -p revlocal-daemon prompt::",
+      "notes": null,
+      "andare_key": "REVL-47",
+      "status": "todo"
+    },
+    {
+      "id": "RL-503",
+      "type": "story",
+      "title": "Depth selection",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-501"
+      ],
+      "spec_refs": [
+        "\u00a79.3"
+      ],
+      "description": "Implement the \u00a79.3 tier table, including escalation to deep on a critical/high finding.",
+      "acceptance_criteria": [
+        "200-file fixture commit selects summary",
+        "A commit touching a sensitive_glob selects deep",
+        "A standard run producing a critical finding triggers a deep re-run exactly once",
+        "Timeouts scale with depth"
+      ],
+      "gate": "cargo test -p revlocal-daemon depth",
+      "notes": null,
+      "andare_key": "REVL-48",
+      "status": "todo"
+    },
+    {
+      "id": "RL-504",
+      "type": "story",
+      "title": "Diff truncation that never hides a file",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-502"
+      ],
+      "spec_refs": [
+        "\u00a79.4",
+        "\u00a718"
+      ],
+      "description": "Per-file and total diff caps with interest-ordered retention (source > tests > config\n> data). The omitted-file list is ALWAYS included in full \u2014 a review that saw 60% of\nthe diff must never look like one that saw all of it.",
+      "acceptance_criteria": [
+        "Truncated run sets context.truncated and the run surfaces it",
+        "Every omitted file is named in the prompt even when its content is dropped",
+        "Interest ordering is asserted with a mixed-type fixture commit",
+        "Binary files are summarized, never emitted as bytes"
+      ],
+      "gate": "cargo test -p revlocal-daemon truncation",
+      "notes": null,
+      "andare_key": "REVL-49",
+      "status": "todo"
+    },
+    {
+      "id": "RL-505",
+      "type": "story",
+      "title": "Finding normalization, suppression and dedupe",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-106",
+        "RL-402"
+      ],
+      "spec_refs": [
+        "\u00a79.5",
+        "\u00a710"
+      ],
+      "description": "Clamp severity, handle out-of-diff findings per \u00a79.5, apply suppressions, compute\nfingerprints, and mark repeats of an already-published fingerprint as superseded\nrather than re-filing.",
+      "acceptance_criteria": [
+        "Out-of-diff finding is retained but capped at medium when allow_out_of_diff_findings is false",
+        "A suppressed fingerprint never reaches the publish plan",
+        "A repeat fingerprint on the same PR is superseded, not duplicated",
+        "Unknown severity maps to medium rather than being dropped"
+      ],
+      "gate": "cargo test -p revlocal-daemon normalize",
+      "notes": null,
+      "andare_key": "REVL-50",
+      "status": "todo"
+    },
+    {
+      "id": "RL-506",
+      "type": "story",
+      "title": "End-to-end pipeline with the mock engine",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline",
+        "e2e"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-501",
+        "RL-502",
+        "RL-503",
+        "RL-504",
+        "RL-505"
+      ],
+      "spec_refs": [
+        "\u00a79"
+      ],
+      "description": "Wire every stage together and expose it as `revlocal review --repo R --rev X --json`.",
+      "acceptance_criteria": [
+        "Reviewing the planted-bug commit yields a done run with >= 1 finding",
+        "The 200-file commit yields depth=summary and truncated=true",
+        "Output is stable JSON suitable for test assertions",
+        "The whole flow runs with zero network access (asserted by a no-network test wrapper)"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test pipeline_e2e",
+      "notes": null,
+      "andare_key": "REVL-51",
+      "status": "todo"
+    },
+    {
+      "id": "RL-507",
+      "type": "story",
+      "title": "Determinism guarantee",
+      "parent": "RL-E5",
+      "milestone": "M6",
+      "labels": [
+        "rust",
+        "pipeline"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [
+        "RL-506"
+      ],
+      "spec_refs": [
+        "\u00a718"
+      ],
+      "description": "Same change + same engine output => same findings, fingerprints and publish plan.",
+      "acceptance_criteria": [
+        "Running the same review twice with a fixed mock engine yields byte-identical findings and publish plans",
+        "No HashMap iteration order leaks into output ordering"
+      ],
+      "gate": "cargo test -p revlocal-daemon determinism",
+      "notes": null,
+      "andare_key": "REVL-52",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E6",
+      "type": "epic",
+      "title": "MCP client and capability mapping",
+      "parent": null,
+      "milestone": "M7",
+      "labels": [
+        "mcp"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E2"
+      ],
+      "spec_refs": [
+        "\u00a711.2"
+      ],
+      "description": "Speak MCP to arbitrary servers, discover their real tool surface, and bind abstract\ncapabilities onto concrete tools \u2014 so integrating Andare does not require knowing\nAndare's tool names at build time.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-6",
+      "status": "todo"
+    },
+    {
+      "id": "RL-601",
+      "type": "story",
+      "title": "MCP client: stdio transport",
+      "parent": "RL-E6",
+      "milestone": "M7",
+      "labels": [
+        "rust",
+        "mcp"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a711.2"
+      ],
+      "description": "Spawn a server process, initialize, tools/list, tools/call, with lifecycle and error mapping.",
+      "acceptance_criteria": [
+        "Connects to fixtures/mock-mcp and lists tools",
+        "Server crash is surfaced as a typed error and the client reconnects on next use",
+        "Child process is reaped, not leaked, on drop"
+      ],
+      "gate": "cargo test -p revlocal-mcp stdio",
+      "notes": null,
+      "andare_key": "REVL-53",
+      "status": "todo"
+    },
+    {
+      "id": "RL-602",
+      "type": "story",
+      "title": "MCP client: streamable HTTP transport",
+      "parent": "RL-E6",
+      "milestone": "M7",
+      "labels": [
+        "rust",
+        "mcp"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-601"
+      ],
+      "spec_refs": [
+        "\u00a711.2"
+      ],
+      "description": "HTTP transport with bearer auth resolved from the keychain at connect time. This is\nthe transport Trama uses today, so it must work against a real remote server.",
+      "acceptance_criteria": [
+        "initialize + tools/list succeed against a local HTTP mock",
+        "Auth header value never appears in logs or error messages",
+        "Non-2xx responses map to typed, actionable errors",
+        "Handles both application/json and text/event-stream responses"
+      ],
+      "gate": "cargo test -p revlocal-mcp http",
+      "notes": null,
+      "andare_key": "REVL-54",
+      "status": "todo"
+    },
+    {
+      "id": "RL-603",
+      "type": "story",
+      "title": "Tool discovery cache and health reporting",
+      "parent": "RL-E6",
+      "milestone": "M7",
+      "labels": [
+        "rust",
+        "mcp"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [
+        "RL-601",
+        "RL-602"
+      ],
+      "spec_refs": [
+        "\u00a711.2"
+      ],
+      "description": "Cache tools/list with schemas per server; expose health for the UI and for doctor.",
+      "acceptance_criteria": [
+        "Cache invalidates on reconnect",
+        "doctor prints 'server: N tools, M capabilities mapped, K unmapped'",
+        "An unreachable server degrades that target only \u2014 other targets keep working"
+      ],
+      "gate": "cargo test -p revlocal-mcp discovery",
+      "notes": null,
+      "andare_key": "REVL-55",
+      "status": "todo"
+    },
+    {
+      "id": "RL-604",
+      "type": "story",
+      "title": "Capability mapping with candidate resolution and schema validation",
+      "parent": "RL-E6",
+      "milestone": "M7",
+      "labels": [
+        "rust",
+        "mcp"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-603"
+      ],
+      "spec_refs": [
+        "\u00a711.2"
+      ],
+      "description": "Resolve tool_candidates lists against discovered names, render arg templates, and\nvalidate the rendered args against the tool's own JSON Schema BEFORE calling it.\nAn unresolvable capability is reported as unmapped \u2014 never guessed at.",
+      "acceptance_criteria": [
+        "Resolves create_issue -> create_work_item when that is what the server exposes",
+        "Reports unmapped instead of calling a plausible-looking wrong tool",
+        "Refuses to send a payload that fails the tool's input schema, with a message naming the offending field",
+        "Mapping state is visible via `revlocal targets list`"
+      ],
+      "gate": "cargo test -p revlocal-mcp --test capability_mapping",
+      "notes": null,
+      "andare_key": "REVL-56",
+      "status": "todo"
+    },
+    {
+      "id": "RL-605",
+      "type": "story",
+      "title": "Manual capability override",
+      "parent": "RL-E6",
+      "milestone": "M7",
+      "labels": [
+        "rust",
+        "mcp",
+        "ux"
+      ],
+      "priority": "P2",
+      "estimate": 3,
+      "depends_on": [
+        "RL-604"
+      ],
+      "spec_refs": [
+        "\u00a711.2"
+      ],
+      "description": "`revlocal targets map <target> <capability> --tool T --arg k=template` persists an override.",
+      "acceptance_criteria": [
+        "Override survives restart",
+        "Override is validated against the tool schema at save time, not at first use",
+        "`revlocal targets test <target>` performs a dry-run render of every mapped capability"
+      ],
+      "gate": "cargo test -p revlocal-mcp override",
+      "notes": null,
+      "andare_key": "REVL-57",
+      "status": "todo"
+    },
+    {
+      "id": "RL-606",
+      "type": "spike",
+      "title": "SPIKE: discover Andare's real MCP tool surface",
+      "parent": "RL-E6",
+      "milestone": "M7",
+      "labels": [
+        "spike",
+        "mcp",
+        "andare"
+      ],
+      "priority": "P0",
+      "estimate": 2,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a711.4"
+      ],
+      "description": "BLOCKING for RL-E7 Andare work. The Andare MCP server is not currently configured on\nthe build machine (only `trama` is). Obtain its endpoint and token, connect, run\ntools/list, and record the real tool names and input schemas.",
+      "acceptance_criteria": [
+        "Andare MCP server reachable and `tools/list` captured into docs/adr/",
+        "targets.andare tool_candidates in the default config updated to the real names",
+        "Confirmed which of create_issue / set_status / comment / search are actually expressible",
+        "If a capability cannot be expressed even with manual mapping, escalate per BUILD_LOOP \u00a75"
+      ],
+      "gate": null,
+      "notes": "Timebox: 2 hours. Blocked on credentials from the product owner.",
+      "andare_key": "REVL-58",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E7",
+      "type": "epic",
+      "title": "Publish targets: GitHub, Andare, Trama",
+      "parent": null,
+      "milestone": "M8-M9",
+      "labels": [
+        "publish"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E5",
+        "RL-E6"
+      ],
+      "spec_refs": [
+        "\u00a711"
+      ],
+      "description": "Getting review outcomes into the systems of record, idempotently, with receipts.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-7",
+      "status": "todo"
+    },
+    {
+      "id": "RL-701",
+      "type": "story",
+      "title": "PublishTarget trait, action queue and receipts",
+      "parent": "RL-E7",
+      "milestone": "M8",
+      "labels": [
+        "rust",
+        "publish"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a711.1",
+        "\u00a711.6"
+      ],
+      "description": "Bounded queue with concurrency 4, per-target rate limiting, and the guarantee that\nevery action is persisted BEFORE it is attempted.",
+      "acceptance_criteria": [
+        "A crash between persist and send leaves a pending row that is retried on startup",
+        "A slow target cannot block reviewing",
+        "Per-target rate limits are honoured"
+      ],
+      "gate": "cargo test -p revlocal-publish queue",
+      "notes": null,
+      "andare_key": "REVL-59",
+      "status": "todo"
+    },
+    {
+      "id": "RL-702",
+      "type": "story",
+      "title": "Idempotency and retry policy",
+      "parent": "RL-E7",
+      "milestone": "M8",
+      "labels": [
+        "rust",
+        "publish",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-701"
+      ],
+      "spec_refs": [
+        "\u00a711.6"
+      ],
+      "description": "UNIQUE(target, idempotency_key) makes double-publish structurally impossible.\n5 attempts, exponential backoff with jitter capped at 60s, retry only on\ntransport/5xx/429. 4xx is terminal.",
+      "acceptance_criteria": [
+        "Replaying the same action is a no-op that returns the original receipt",
+        "429 is retried with backoff; 400 is not retried",
+        "Attempt count and last error are visible on the action row",
+        "Backoff has jitter (two concurrent retries do not align)"
+      ],
+      "gate": "cargo test -p revlocal-publish idempotency",
+      "notes": null,
+      "andare_key": "REVL-60",
+      "status": "todo"
+    },
+    {
+      "id": "RL-703",
+      "type": "story",
+      "title": "GitHub: PR review with inline comments",
+      "parent": "RL-E7",
+      "milestone": "M8",
+      "labels": [
+        "rust",
+        "publish",
+        "github"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-702",
+        "RL-307"
+      ],
+      "spec_refs": [
+        "\u00a711.3"
+      ],
+      "description": "One review per run: body = summary + findings table, inline comments anchored to\n(file, line range) on the head SHA. Unanchorable comments are demoted into a\n\"Findings outside the diff\" section rather than dropped.",
+      "acceptance_criteria": [
+        "Second publish for the same head SHA edits the existing review, does not post a second",
+        "An unanchorable comment appears in the body section",
+        "Review body renders correctly with zero findings",
+        "APPROVE is never submitted unless allow_approve is explicitly enabled"
+      ],
+      "gate": "cargo test -p revlocal-publish --test github_review",
+      "notes": null,
+      "andare_key": "REVL-61",
+      "status": "todo"
+    },
+    {
+      "id": "RL-704",
+      "type": "story",
+      "title": "GitHub: commit comments and check runs",
+      "parent": "RL-E7",
+      "milestone": "M8",
+      "labels": [
+        "rust",
+        "publish",
+        "github"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-703"
+      ],
+      "spec_refs": [
+        "\u00a711.3"
+      ],
+      "description": "Non-PR commit review posts a commit comment. The rev-local/review check run is\nin_progress during the run and resolves to success/neutral/failure per\nblock_on_findings.",
+      "acceptance_criteria": [
+        "Check is set in_progress at run start and always resolved, even on run failure",
+        "failure only when block_on_findings is on; neutral otherwise",
+        "A crashed run leaves no permanently in_progress check (startup reconciliation)"
+      ],
+      "gate": "cargo test -p revlocal-publish github_check",
+      "notes": null,
+      "andare_key": "REVL-62",
+      "status": "todo"
+    },
+    {
+      "id": "RL-705",
+      "type": "story",
+      "title": "Andare: file findings as issues with fingerprint dedupe",
+      "parent": "RL-E7",
+      "milestone": "M9",
+      "labels": [
+        "rust",
+        "publish",
+        "andare"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-702",
+        "RL-604",
+        "RL-606"
+      ],
+      "spec_refs": [
+        "\u00a711.4"
+      ],
+      "description": "Findings at or above andare_min_severity become issues carrying a\n`rev-local-fingerprint: <fp>` trailer. Before filing, search for an existing open\nissue with that trailer and comment on it instead of duplicating.",
+      "acceptance_criteria": [
+        "Re-running the same review produces a comment on the existing issue, not a second issue",
+        "Issue body contains claim, failure scenario, code excerpt, change link and Trama page link",
+        "Below-threshold findings do not create issues",
+        "If the search capability is unmapped, the target degrades to 'comment only' and says so, rather than duplicating"
+      ],
+      "gate": "cargo test -p revlocal-publish --test andare_issues",
+      "notes": null,
+      "andare_key": "REVL-63",
+      "status": "todo"
+    },
+    {
+      "id": "RL-706",
+      "type": "story",
+      "title": "Andare: report review outcome onto the linked work item",
+      "parent": "RL-E7",
+      "milestone": "M9",
+      "labels": [
+        "rust",
+        "publish",
+        "andare"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-705"
+      ],
+      "spec_refs": [
+        "\u00a711.4"
+      ],
+      "description": "Extract a work-item key from the commit message / PR title / SVN log using\nandare_key_regex, then comment the review outcome on that ticket and optionally\ntransition its status per andare_transition_on.",
+      "acceptance_criteria": [
+        "Key extraction handles multiple keys, no key, and a key inside a URL",
+        "A comment is always posted; a transition only when configured and valid",
+        "An invalid transition is a recorded failure, not a crash",
+        "Status transition is classified high risk (see RL-802)"
+      ],
+      "gate": "cargo test -p revlocal-publish andare_status",
+      "notes": null,
+      "andare_key": "REVL-64",
+      "status": "todo"
+    },
+    {
+      "id": "RL-707",
+      "type": "story",
+      "title": "Trama: read-before-write page upsert",
+      "parent": "RL-E7",
+      "milestone": "M9",
+      "labels": [
+        "rust",
+        "publish",
+        "trama"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-702",
+        "RL-604"
+      ],
+      "spec_refs": [
+        "\u00a711.5"
+      ],
+      "description": "Trama's update_page REPLACES the body. Therefore every update must get_page first,\nmerge, and send the whole document. Never send a fragment. Page identity, titling\nand parent placement per SPEC \u00a711.5.",
+      "acceptance_criteria": [
+        "Mock-MCP journal shows get_page immediately preceding every update_page for the same page",
+        "The update payload contains the full merged body, not a fragment",
+        "create_page is used only when the page genuinely does not exist (title collision is handled)",
+        "A hand-edited page is not clobbered: human-authored sections outside rev-local's markers survive an update"
+      ],
+      "gate": "cargo test -p revlocal-publish --test trama_upsert",
+      "notes": null,
+      "andare_key": "REVL-65",
+      "status": "todo"
+    },
+    {
+      "id": "RL-708",
+      "type": "story",
+      "title": "Trama: per-repo review index regenerated from SQLite",
+      "parent": "RL-E7",
+      "milestone": "M9",
+      "labels": [
+        "rust",
+        "publish",
+        "trama"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-707"
+      ],
+      "spec_refs": [
+        "\u00a711.5"
+      ],
+      "description": "A rolling '{repo} Review Index' page listing the last N reviews. Because updates\nreplace bodies, the index is regenerated from SQLite every time \u2014 SQLite is the\nsource of truth, Trama is a projection. This makes it safe to lose or hand-edit.",
+      "acceptance_criteria": [
+        "Deleting the index page and re-running restores it completely",
+        "Index respects the N-most-recent cap and states the cap on the page",
+        "Review pages link to the index with a [[wikilink]] and vice versa"
+      ],
+      "gate": "cargo test -p revlocal-publish trama_index",
+      "notes": null,
+      "andare_key": "REVL-66",
+      "status": "todo"
+    },
+    {
+      "id": "RL-709",
+      "type": "story",
+      "title": "Trama: publish_page gating and issue cross-linking",
+      "parent": "RL-E7",
+      "milestone": "M9",
+      "labels": [
+        "rust",
+        "publish",
+        "trama"
+      ],
+      "priority": "P2",
+      "estimate": 3,
+      "depends_on": [
+        "RL-707",
+        "RL-705"
+      ],
+      "spec_refs": [
+        "\u00a711.5"
+      ],
+      "description": "publish_page only when trama_publish is set; an unpublished draft is a low-risk\naction while publishing is high-risk. link_to_issue cross-links the review page to\nany Andare issue filed from it.",
+      "acceptance_criteria": [
+        "Draft creation is low risk, publish_page is high risk (asserted against the risk model)",
+        "link_to_issue is called with the real issue key returned by Andare, never a guessed one",
+        "Cross-link failure does not fail the run"
+      ],
+      "gate": "cargo test -p revlocal-publish trama_publish_gate",
+      "notes": null,
+      "andare_key": "REVL-67",
+      "status": "todo"
+    },
+    {
+      "id": "RL-710",
+      "type": "story",
+      "title": "Partial-failure reporting and per-target retry",
+      "parent": "RL-E7",
+      "milestone": "M9",
+      "labels": [
+        "rust",
+        "publish",
+        "ux"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [
+        "RL-701"
+      ],
+      "spec_refs": [
+        "\u00a711.6"
+      ],
+      "description": "A run can be done with GitHub posted and Andare failed. Report per-target status and allow retrying one target.",
+      "acceptance_criteria": [
+        "Run detail exposes status per target",
+        "`revlocal publish replay --run R --target T` retries only that target",
+        "A permanently failed target does not block the run from reaching a terminal state"
+      ],
+      "gate": "cargo test -p revlocal-publish partial_failure",
+      "notes": null,
+      "andare_key": "REVL-68",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E8",
+      "type": "epic",
+      "title": "Autonomy, risk gating, approvals and budgets",
+      "parent": null,
+      "milestone": "M10",
+      "labels": [
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E7"
+      ],
+      "spec_refs": [
+        "\u00a712"
+      ],
+      "description": "The controls that make unattended operation acceptable: modes, the kill switch, the\napprovals inbox, and spend limits.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-8",
+      "status": "todo"
+    },
+    {
+      "id": "RL-801",
+      "type": "story",
+      "title": "Autonomy modes and the global ceiling",
+      "parent": "RL-E8",
+      "milestone": "M10",
+      "labels": [
+        "rust",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-105",
+        "RL-701"
+      ],
+      "spec_refs": [
+        "\u00a712.2"
+      ],
+      "description": "off | dry_run | auto_low_ask_high | auto, per repo, with the effective mode being\nmin(global, repo) under that ordering.",
+      "acceptance_criteria": [
+        "dry_run performs zero MCP writes \u2014 asserted against the mock-MCP journal being empty of writes",
+        "dry_run still records the exact payload that would have been sent, and renders it in the UI",
+        "Global off overrides a repo set to auto",
+        "Mode changes take effect without restart and are audited"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test autonomy_modes",
+      "notes": null,
+      "andare_key": "REVL-69",
+      "status": "todo"
+    },
+    {
+      "id": "RL-802",
+      "type": "story",
+      "title": "Risk gating wired into the publish queue",
+      "parent": "RL-E8",
+      "milestone": "M10",
+      "labels": [
+        "rust",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-801"
+      ],
+      "spec_refs": [
+        "\u00a712.3"
+      ],
+      "description": "Every action is risk-classified at enqueue time; auto_low_ask_high sends low and queues high.",
+      "acceptance_criteria": [
+        "A PR comment is sent while an Andare issue from the same run is queued",
+        "First use of a (target, capability) pair classifies as high risk, so it is queued under auto_low_ask_high and sent under auto \u2014 the test asserts both halves",
+        "A degraded run escalates all of its actions to high",
+        "Burst threshold escalation triggers after the configured count within an hour"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test risk_gating",
+      "notes": null,
+      "andare_key": "REVL-70",
+      "status": "todo"
+    },
+    {
+      "id": "RL-803",
+      "type": "story",
+      "title": "Approvals inbox",
+      "parent": "RL-E8",
+      "milestone": "M10",
+      "labels": [
+        "rust",
+        "ux"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-802"
+      ],
+      "spec_refs": [
+        "\u00a712.4"
+      ],
+      "description": "Queued actions with the exact payload rendered as the target would render it.\nApprove / approve-all-for-run / reject / reject-and-suppress / edit-then-approve.\nTTL expiry to rejected('expired'), always audited.",
+      "acceptance_criteria": [
+        "Approve sends exactly the reviewed payload \u2014 an edit after approval is impossible",
+        "Reject-and-suppress creates a suppression that a later run honours",
+        "Expiry is audited and visible, not silent",
+        "CLI and UI operate on the same queue"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test approvals",
+      "notes": null,
+      "andare_key": "REVL-71",
+      "status": "todo"
+    },
+    {
+      "id": "RL-804",
+      "type": "story",
+      "title": "Kill switch",
+      "parent": "RL-E8",
+      "milestone": "M10",
+      "labels": [
+        "rust",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-405",
+        "RL-701"
+      ],
+      "spec_refs": [
+        "\u00a712.1"
+      ],
+      "description": "Cancel every in-flight engine process, drain the run queue to cancelled, HOLD the\npublish queue without losing it, stop all triggers, persist the paused state across\nrestart. `revlocal kill --hard` also reaps orphaned engine PIDs.",
+      "acceptance_criteria": [
+        "A running mock engine is cancelled within 3 seconds",
+        "Pending publish actions still exist after a kill and resume, and are sent on resume",
+        "Paused state survives a restart",
+        "No orphan engine process remains after kill --hard"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test kill_switch",
+      "notes": null,
+      "andare_key": "REVL-72",
+      "status": "todo"
+    },
+    {
+      "id": "RL-805",
+      "type": "story",
+      "title": "Budgets and concurrency caps",
+      "parent": "RL-E8",
+      "milestone": "M10",
+      "labels": [
+        "rust",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-110",
+        "RL-501"
+      ],
+      "spec_refs": [
+        "\u00a713.1",
+        "\u00a74.3"
+      ],
+      "description": "Per-repo daily token/run/cost ceilings and a global concurrency semaphore.\non_exhausted = pause | queue | skip \u2014 but never silent drop.",
+      "acceptance_criteria": [
+        "Exhausting the token budget pauses the repo and surfaces a reason",
+        "Changes detected while paused are still recorded and are reviewed after reset",
+        "max_concurrent_runs is genuinely enforced (a test with 5 queued runs observes at most N concurrent engine spawns)",
+        "Day rollover resumes automatically"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test budgets",
+      "notes": null,
+      "andare_key": "REVL-73",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E9",
+      "type": "epic",
+      "title": "Subversion support",
+      "parent": null,
+      "milestone": "M11",
+      "labels": [
+        "vcs",
+        "svn"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E5"
+      ],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "Per-revision review plus the synthesized branch-level pseudo-PR on reintegration \u2014\nthe feature that gives SVN users PR-grade review without PRs.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-9",
+      "status": "todo"
+    },
+    {
+      "id": "RL-901",
+      "type": "story",
+      "title": "SVN command wrapper and prerequisite detection",
+      "parent": "RL-E9",
+      "milestone": "M11",
+      "labels": [
+        "rust",
+        "svn"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "Choke point for svn/svnlook invocations with timeouts and non-interactive flags.\nAbsence of `svn` is a blocking prerequisite for SVN repos ONLY \u2014 git repos keep working.",
+      "acceptance_criteria": [
+        "Missing svn binary produces an actionable doctor message, not a panic",
+        "Git repos are unaffected when svn is absent",
+        "--non-interactive and --trust-server-cert-failures behaviour is explicit and configurable"
+      ],
+      "gate": "cargo test -p revlocal-vcs svn::cmd",
+      "notes": null,
+      "andare_key": "REVL-74",
+      "status": "todo"
+    },
+    {
+      "id": "RL-902",
+      "type": "story",
+      "title": "SVN revision discovery over watched paths",
+      "parent": "RL-E9",
+      "milestone": "M11",
+      "labels": [
+        "rust",
+        "svn"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-901",
+        "RL-202"
+      ],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "`svn log --xml -r cursor+1:HEAD -v` over trunk and optionally branches/*, oldest first.",
+      "acceptance_criteria": [
+        "Discovers the fixture's revisions in ascending order",
+        "Cursor is the revision number and advances only after recording",
+        "Path filtering excludes revisions touching only unwatched paths",
+        "Handles a revision with no changed paths without failing"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test svn_discover",
+      "notes": null,
+      "andare_key": "REVL-75",
+      "status": "todo"
+    },
+    {
+      "id": "RL-903",
+      "type": "story",
+      "title": "SVN materialization",
+      "parent": "RL-E9",
+      "milestone": "M11",
+      "labels": [
+        "rust",
+        "svn"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-902"
+      ],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "`svn diff -c REV` plus `svn export -r REV` into scratch. Binary and property-only changes summarized.",
+      "acceptance_criteria": [
+        "Export produces a tree at the correct revision",
+        "Property-only changes yield a summary, not an empty diff that looks like nothing happened",
+        "Binary files are summarized with size and type",
+        "The user's working copy is never touched"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test svn_materialize",
+      "notes": null,
+      "andare_key": "REVL-76",
+      "status": "todo"
+    },
+    {
+      "id": "RL-904",
+      "type": "feature",
+      "title": "SVN pseudo-PR synthesis on branch reintegration",
+      "parent": "RL-E9",
+      "milestone": "M11",
+      "labels": [
+        "rust",
+        "svn",
+        "feature"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-903"
+      ],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "Detect a reintegration via (1) svn:mergeinfo gaining ranges from a branch path,\n(2) the merge_detect_regex on the log message, or (3) file-count plus a named branch\nthat exists. Emit an ADDITIONAL svn_pseudo_pr change whose diff is the whole\nbranch-vs-trunk diff at the fork point, not the merge revision's diff.",
+      "acceptance_criteria": [
+        "The fixture's reintegration revision produces BOTH a svn_rev and a svn_pseudo_pr change",
+        "Each detection heuristic is independently unit-tested with the others disabled",
+        "The pseudo-PR diff equals `svn diff trunk@fork branch@rev` and differs from the merge revision's diff",
+        "Fork-point determination is tested against a branch with intervening trunk merges",
+        "A false positive (a commit merely mentioning the word 'merge') does not create a pseudo-PR"
+      ],
+      "gate": "cargo test -p revlocal-vcs --test svn_pseudo_pr",
+      "notes": null,
+      "andare_key": "REVL-77",
+      "status": "todo"
+    },
+    {
+      "id": "RL-905",
+      "type": "story",
+      "title": "Pseudo-PR authority and demotion of constituent reviews",
+      "parent": "RL-E9",
+      "milestone": "M11",
+      "labels": [
+        "rust",
+        "svn",
+        "publish"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-904"
+      ],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "The pseudo-PR review is authoritative for the merge; findings from per-revision\nbranch reviews are attached as prior context and demoted in the publish plan so the\nsame defect is not filed twice.",
+      "acceptance_criteria": [
+        "A defect found on both a branch revision and the pseudo-PR is filed once",
+        "Per-revision branch findings appear as prior context in the pseudo-PR prompt",
+        "Demotion is visible in the publish plan, not silently dropped"
+      ],
+      "gate": "cargo test -p revlocal-vcs svn_demotion",
+      "notes": null,
+      "andare_key": "REVL-78",
+      "status": "todo"
+    },
+    {
+      "id": "RL-906",
+      "type": "spike",
+      "title": "SPIKE: svn:mergeinfo reliability across SVN versions",
+      "parent": "RL-E9",
+      "milestone": "M11",
+      "labels": [
+        "spike",
+        "svn"
+      ],
+      "priority": "P2",
+      "estimate": 2,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a76.4"
+      ],
+      "description": "Timeboxed. Determine how reliable mergeinfo-based detection is across svn 1.8-1.14\nand across merge styles (reintegrate, sync merge, cherry-pick, --record-only).\nDecide whether heuristic ordering in SPEC \u00a76.4 needs revising.",
+      "acceptance_criteria": [
+        "ADR recording which merge styles each heuristic catches",
+        "SPEC \u00a76.4 updated if the ordering is wrong",
+        "Fixture extended with any merge style found to be mishandled"
+      ],
+      "gate": null,
+      "notes": "Timebox: 3 hours.",
+      "andare_key": "REVL-79",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E10",
+      "type": "epic",
+      "title": "Triggers: poll, git hooks, webhooks, manual",
+      "parent": null,
+      "milestone": "M12",
+      "labels": [
+        "triggers"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E5"
+      ],
+      "spec_refs": [
+        "\u00a77"
+      ],
+      "description": "Four ways to learn that something changed, all funnelling through one coalescing bus\nso that four simultaneous signals cannot produce four duplicate reviews.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-10",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1001",
+      "type": "story",
+      "title": "TriggerBus with coalescing",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-501"
+      ],
+      "spec_refs": [
+        "\u00a77"
+      ],
+      "description": "All sources emit TriggerEvent; events for the same repo within coalesce_window_ms\ncollapse into one discovery pass. Triggers never review directly.",
+      "acceptance_criteria": [
+        "Four simultaneous triggers for one repo produce exactly one discovery pass",
+        "Triggers for different repos are not coalesced together",
+        "An event arriving during a discovery pass schedules exactly one follow-up pass"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test trigger_coalescing",
+      "notes": null,
+      "andare_key": "REVL-80",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1002",
+      "type": "story",
+      "title": "Polling with jitter and exponential backoff",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-1001"
+      ],
+      "spec_refs": [
+        "\u00a77.1"
+      ],
+      "description": "Per-repo interval (min 30s) with \u00b110% jitter, backing off to 30 min after consecutive failures, surfacing repo health as degraded.",
+      "acceptance_criteria": [
+        "Interval below the minimum is clamped with a warning",
+        "Backoff escalates and then recovers on the first success",
+        "Health state is observable via `revlocal repo show --json`"
+      ],
+      "gate": "cargo test -p revlocal-daemon poll",
+      "notes": null,
+      "andare_key": "REVL-81",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1003",
+      "type": "story",
+      "title": "Loopback trigger receiver",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers",
+        "security"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-1001"
+      ],
+      "spec_refs": [
+        "\u00a77.2"
+      ],
+      "description": "Bind 127.0.0.1:{trigger_port} only, authenticate with a per-repo shared secret, emit a TriggerEvent.",
+      "acceptance_criteria": [
+        "Binds loopback only \u2014 a test asserts it is not reachable on a non-loopback interface",
+        "A request without the correct secret is rejected",
+        "Port conflict produces an actionable error and a suggested alternative port"
+      ],
+      "gate": "cargo test -p revlocal-daemon trigger_receiver",
+      "notes": null,
+      "andare_key": "REVL-82",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1004",
+      "type": "story",
+      "title": "Git hook installer that never breaks a developer's commit",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-1003"
+      ],
+      "spec_refs": [
+        "\u00a77.2"
+      ],
+      "description": "Install post-commit/post-merge/post-checkout (reference mode) or post-receive\n(bare-mirror mode). Hooks fire-and-forget with a 2s timeout and ALWAYS exit 0.\nExisting hooks are appended to inside delimited markers, never clobbered.",
+      "acceptance_criteria": [
+        "With the receiver DOWN, `git commit` in the fixture still succeeds in under 2 seconds",
+        "An existing user hook is byte-identical after install followed by uninstall",
+        "Install is idempotent \u2014 running it twice does not duplicate the block",
+        "Hooks work on Windows (correct line endings and a .cmd shim where needed)",
+        "bare-mirror mode installs post-receive on fixtures/out/git-bare and fires on push"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test git_hooks",
+      "notes": null,
+      "andare_key": "REVL-83",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1005",
+      "type": "story",
+      "title": "GitHub webhook listener with signature verification",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers",
+        "security"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1001"
+      ],
+      "spec_refs": [
+        "\u00a77.3"
+      ],
+      "description": "axum listener validating X-Hub-Signature-256 with a per-repo secret. Handles push and\npull_request events. OFF by default, explicit opt-in per repo.",
+      "acceptance_criteria": [
+        "A bad signature is rejected with 401 and audited",
+        "Signature comparison is constant-time",
+        "Replayed deliveries (same X-GitHub-Delivery) are ignored",
+        "Listener is disabled unless webhook_port is set AND the repo opted in"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test webhook",
+      "notes": null,
+      "andare_key": "REVL-84",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1006",
+      "type": "story",
+      "title": "Tunnel providers and webhook registration",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers"
+      ],
+      "priority": "P2",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1005"
+      ],
+      "spec_refs": [
+        "\u00a77.3"
+      ],
+      "description": "Pluggable cloudflared | ngrok | manual providers; capture the assigned public URL and offer one-click webhook registration via the GitHub transport.",
+      "acceptance_criteria": [
+        "Missing tunnel binary is reported clearly with install guidance, not a crash",
+        "Public URL is captured and displayed",
+        "Tunnel death is detected and surfaced; the app does not silently stop receiving events",
+        "Registering the webhook is classified high risk (it mutates a GitHub repo's settings)"
+      ],
+      "gate": "cargo test -p revlocal-daemon tunnel",
+      "notes": null,
+      "andare_key": "REVL-85",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1007",
+      "type": "story",
+      "title": "Manual review and resumable backfill",
+      "parent": "RL-E10",
+      "milestone": "M12",
+      "labels": [
+        "rust",
+        "triggers",
+        "cli"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1001"
+      ],
+      "spec_refs": [
+        "\u00a77.4"
+      ],
+      "description": "`revlocal review --rev` and `revlocal backfill --since`, the latter at low priority behind live work, respecting budgets and resumable via its own cursor.",
+      "acceptance_criteria": [
+        "Backfill yields to live triggers rather than starving them",
+        "Interrupting and re-running backfill resumes rather than restarting",
+        "--dry-run enumerates without spending engine tokens",
+        "--limit is honoured exactly"
+      ],
+      "gate": "cargo test -p revlocal-daemon --test backfill",
+      "notes": null,
+      "andare_key": "REVL-86",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E11",
+      "type": "epic",
+      "title": "Desktop UI and Framewatch visual verification",
+      "parent": null,
+      "milestone": "M13",
+      "labels": [
+        "ui"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E8"
+      ],
+      "spec_refs": [
+        "\u00a715",
+        "\u00a716.4"
+      ],
+      "description": "Six screens plus tray, and \u2014 importantly for autonomous building \u2014 a Framewatch\nharness so the loop can SEE the GUI it just built instead of assuming it renders.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-11",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1101",
+      "type": "story",
+      "title": "Tauri shell, IPC commands and event bridge",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "tauri",
+        "ui"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a74.2",
+        "\u00a715"
+      ],
+      "description": "Tauri v2 app hosting the in-process daemon. Commands delegate to the daemon; the\nEventBus is bridged to Tauri events so the UI updates live rather than polling.",
+      "acceptance_criteria": [
+        "App launches on all three platforms",
+        "A daemon event appears in the UI without a poll",
+        "Closing the window to tray keeps the daemon running; quitting stops it cleanly",
+        "IPC surface is a thin delegation layer with no business logic (asserted by review)"
+      ],
+      "gate": "cargo test -p revlocal-tauri ipc",
+      "notes": null,
+      "andare_key": "REVL-87",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1102",
+      "type": "story",
+      "title": "Framewatch GUI verification harness",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "framewatch",
+        "testing",
+        "ui"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1101"
+      ],
+      "spec_refs": [
+        "\u00a716.4"
+      ],
+      "description": "scripts/gui-verify.sh (+ .ps1) wrapping `framewatch shot --launch` to capture a\nsettled PNG of a named screen into artifacts/gui/<name>.png, deterministically.\nROI cropping clips host chrome so captures are comparable. This is how the build loop\nverifies the UI actually renders.",
+      "acceptance_criteria": [
+        "`scripts/gui-verify.sh dashboard` writes artifacts/gui/dashboard.png and exits 0",
+        "Uses --settle-ms and --timeout so a slow first paint does not produce a blank frame",
+        "Exits non-zero when the window never appears \u2014 a missing UI must fail the gate, not pass silently",
+        "--roi is configured per screen so window chrome is excluded",
+        "Documented in docs/GUI_VERIFICATION.md with the exact commands"
+      ],
+      "gate": "scripts/gui-verify.sh dashboard && test -s artifacts/gui/dashboard.png",
+      "notes": null,
+      "andare_key": "REVL-88",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1103",
+      "type": "story",
+      "title": "Framewatch scripted flow capture with marks",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "framewatch",
+        "testing",
+        "ui"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1102"
+      ],
+      "spec_refs": [
+        "\u00a716.4"
+      ],
+      "description": "For multi-step flows (add repo -> dry-run review -> open run detail -> approvals),\nrun `framewatch watch --labels-file` alongside a driver script that writes step labels,\nso each captured frame is captioned with the step that produced it. Produces a session\ndirectory the loop agent can read frame-by-frame.",
+      "acceptance_criteria": [
+        "A flow session contains one captioned settled frame per step",
+        "Labels come from the driver via --labels-file, so captions and actions cannot drift apart",
+        "`--until-settled`/`--frames` bound the session so it always terminates",
+        "Session directory path is printed for the agent to consume"
+      ],
+      "gate": "scripts/gui-flow.sh add-repo-to-review && test -d .framewatch",
+      "notes": null,
+      "andare_key": "REVL-89",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1104",
+      "type": "spike",
+      "title": "SPIKE: Framewatch in headless CI",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "spike",
+        "framewatch",
+        "ci"
+      ],
+      "priority": "P1",
+      "estimate": 2,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a716.3",
+        "\u00a716.4"
+      ],
+      "description": "Timeboxed. Determine whether framewatch can capture under Xvfb/Wayland on the Linux\nCI runner and what the Windows/macOS runner story is (screen recording permissions on\nmacOS in particular). Decide: gate on GUI capture in CI, or make it a local-only\ndeveloper/loop gate with CI running only the vitest layer.",
+      "acceptance_criteria": [
+        "ADR recording the decision and the reasoning",
+        "If CI capture is viable, the workflow uploads artifacts/gui/*.png on every run",
+        "If not, docs state clearly that GUI gates are local-only and CI covers the rest"
+      ],
+      "gate": null,
+      "notes": "Timebox: 3 hours. macOS screen-recording consent is the likely blocker.",
+      "andare_key": "REVL-90",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1105",
+      "type": "story",
+      "title": "Dashboard screen",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "react"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1101",
+        "RL-1102"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "Repo cards with health, last run, queue depth and today's budget bar; global mode selector; kill switch; live activity feed.",
+      "acceptance_criteria": [
+        "Kill switch is present and functional",
+        "Activity feed updates from events, not polling",
+        "Budget bar reflects the ledger",
+        "Framewatch capture of the dashboard is reviewed and shows all four regions populated with fixture data"
+      ],
+      "gate": "npm --prefix ui test -- dashboard && scripts/gui-verify.sh dashboard",
+      "notes": null,
+      "andare_key": "REVL-91",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1106",
+      "type": "story",
+      "title": "Repository screen",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "react"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1105"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "Config editor, watched branches/paths, per-trigger live status indicators, recent runs, per-repo budget.",
+      "acceptance_criteria": [
+        "Each of the four triggers has an independent live indicator",
+        "Config edits validate before save and show the validation error inline",
+        "An SVN repo shows path/branch watching rather than git branch semantics",
+        "Framewatch capture reviewed for both a git repo and an SVN repo"
+      ],
+      "gate": "npm --prefix ui test -- repository && scripts/gui-verify.sh repository",
+      "notes": null,
+      "andare_key": "REVL-92",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1107",
+      "type": "story",
+      "title": "Run detail screen",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "react"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [
+        "RL-1105"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "Stage timeline with durations, the rendered prompt, collapsible raw transcript, diff with findings anchored inline, per-target publish status with retry.",
+      "acceptance_criteria": [
+        "Findings anchor to the correct diff lines",
+        "Truncated reviews visibly say so, per the no-silent-caps rule",
+        "Per-target retry buttons work and reflect state",
+        "The transcript is collapsed by default and does not block rendering on a large log",
+        "Framewatch capture reviewed for a run with findings and one with none"
+      ],
+      "gate": "npm --prefix ui test -- run-detail && scripts/gui-verify.sh run-detail",
+      "notes": null,
+      "andare_key": "REVL-93",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1108",
+      "type": "story",
+      "title": "Findings screen",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "react"
+      ],
+      "priority": "P2",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1105"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "Cross-repo table with severity/category/state filters, suppress, jump to run, manual 'file to Andare'.",
+      "acceptance_criteria": [
+        "Filters compose",
+        "Suppress creates a suppression and the row updates immediately",
+        "Manual file-to-Andare is risk-gated like any other publish",
+        "Framewatch capture reviewed"
+      ],
+      "gate": "npm --prefix ui test -- findings && scripts/gui-verify.sh findings",
+      "notes": null,
+      "andare_key": "REVL-94",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1109",
+      "type": "story",
+      "title": "Approvals screen",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "react",
+        "safety"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-803",
+        "RL-1105"
+      ],
+      "spec_refs": [
+        "\u00a712.4",
+        "\u00a715"
+      ],
+      "description": "The inbox rendering each queued payload as the target would render it, with the five actions from SPEC \u00a712.4.",
+      "acceptance_criteria": [
+        "The rendered preview matches what is actually sent (same renderer, asserted by test)",
+        "Every action names its target explicitly",
+        "Approve-all-for-run is confirmed before executing",
+        "Framewatch capture reviewed showing a queued GitHub review and a queued Andare issue side by side"
+      ],
+      "gate": "npm --prefix ui test -- approvals && scripts/gui-verify.sh approvals",
+      "notes": null,
+      "andare_key": "REVL-95",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1110",
+      "type": "story",
+      "title": "Settings screen with doctor output and capability mapping",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "react"
+      ],
+      "priority": "P1",
+      "estimate": 5,
+      "depends_on": [
+        "RL-603",
+        "RL-1105"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "Engines with inline doctor output, MCP servers with discovered tool lists, the capability mapping table with manual override, budgets and retention.",
+      "acceptance_criteria": [
+        "Unmapped capabilities are called out visibly with a fix affordance",
+        "doctor can be re-run from the UI",
+        "Secrets are never displayed, only their presence",
+        "Framewatch capture reviewed showing an unmapped capability state"
+      ],
+      "gate": "npm --prefix ui test -- settings && scripts/gui-verify.sh settings",
+      "notes": null,
+      "andare_key": "REVL-96",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1111",
+      "type": "story",
+      "title": "Tray, notifications and global kill switch reachability",
+      "parent": "RL-E11",
+      "milestone": "M13",
+      "labels": [
+        "ui",
+        "tauri",
+        "safety"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [
+        "RL-1105"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "System tray with status and kill switch; native notification on high-severity findings and on actions awaiting approval.",
+      "acceptance_criteria": [
+        "Kill switch reachable from every screen AND from the tray",
+        "Notifications are rate-limited so a backfill cannot spam the user",
+        "Tray reflects paused state",
+        "Framewatch capture of each screen confirms the kill switch is visible in all six"
+      ],
+      "gate": "npm --prefix ui test -- tray && scripts/gui-verify.sh all",
+      "notes": null,
+      "andare_key": "REVL-97",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E12",
+      "type": "epic",
+      "title": "CLI surface, live engines, packaging and release",
+      "parent": null,
+      "milestone": "M14",
+      "labels": [
+        "release"
+      ],
+      "priority": "P0",
+      "estimate": null,
+      "depends_on": [
+        "RL-E11"
+      ],
+      "spec_refs": [
+        "\u00a714",
+        "\u00a716.1"
+      ],
+      "description": "The headless surface that makes everything testable, real-engine validation, and\nshippable installers for three platforms.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-12",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1201",
+      "type": "story",
+      "title": "Complete CLI surface with --json everywhere",
+      "parent": "RL-E12",
+      "milestone": "M14",
+      "labels": [
+        "cli"
+      ],
+      "priority": "P0",
+      "estimate": 8,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a714"
+      ],
+      "description": "Every command in SPEC \u00a714, each supporting --json. This surface IS the acceptance-test\nAPI, so it must be complete and stable before M14 closes.",
+      "acceptance_criteria": [
+        "Every command in \u00a714 exists and is exercised by at least one test",
+        "--json output is schema-stable and documented",
+        "Exit codes are meaningful and documented (0 ok, 1 error, 2 usage, 3 blocked-by-budget, 4 awaiting-approval)",
+        "`revlocal --help` is coherent for someone who has not read the spec"
+      ],
+      "gate": "cargo test -p revlocal-cli --test cli_surface",
+      "notes": null,
+      "andare_key": "REVL-98",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1202",
+      "type": "story",
+      "title": "revlocal doctor",
+      "parent": "RL-E12",
+      "milestone": "M14",
+      "labels": [
+        "cli",
+        "ux"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-407",
+        "RL-603"
+      ],
+      "spec_refs": [
+        "\u00a78.4",
+        "\u00a714"
+      ],
+      "description": "Prerequisites, engine probes (including a real smoke task), MCP target reachability,\ncapability mapping status, and platform-specific checks. Every failure carries\nremediation text. This is the first thing a user runs on a fresh install.",
+      "acceptance_criteria": [
+        "Reports each engine as usable/unusable with a reason",
+        "Reports each MCP target with tool count and mapped/unmapped capability counts",
+        "Missing svn is reported as blocking for SVN repos only",
+        "Every failure line includes a concrete next action",
+        "--json output is machine-consumable by the build loop"
+      ],
+      "gate": "./target/debug/revlocal doctor --json",
+      "notes": null,
+      "andare_key": "REVL-99",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1203",
+      "type": "story",
+      "title": "Live engine acceptance suite",
+      "parent": "RL-E12",
+      "milestone": "M14",
+      "labels": [
+        "testing",
+        "engine"
+      ],
+      "priority": "P0",
+      "estimate": 5,
+      "depends_on": [
+        "RL-407",
+        "RL-506"
+      ],
+      "spec_refs": [
+        "\u00a716.1"
+      ],
+      "description": "`--features engine-live` tests that actually invoke claude and codex against the\nplanted-bug fixtures. Informational before M14, blocking at M14.",
+      "acceptance_criteria": [
+        "Claude Code finds the planted SQL injection in src/db.rs",
+        "Codex finds the planted SQL injection in src/db.rs",
+        "Both produce schema-valid result.json without hitting the repair rung",
+        "The suite skips cleanly with a clear message when a binary is absent",
+        "Token usage per run is recorded so the cost of the suite is known"
+      ],
+      "gate": "cargo test --features engine-live -- --ignored",
+      "notes": null,
+      "andare_key": "REVL-100",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1204",
+      "type": "story",
+      "title": "Packaging and installers for macOS, Windows and Linux",
+      "parent": "RL-E12",
+      "milestone": "M14",
+      "labels": [
+        "release",
+        "packaging"
+      ],
+      "priority": "P1",
+      "estimate": 8,
+      "depends_on": [
+        "RL-1101"
+      ],
+      "spec_refs": [
+        "\u00a79"
+      ],
+      "description": "Tauri bundles: .dmg, .msi, .AppImage/.deb. Signing where credentials exist; unsigned with clear docs where they do not.",
+      "acceptance_criteria": [
+        "All three bundles build in CI",
+        "The bundled app launches and passes the dashboard Framewatch capture",
+        "First-run experience lands on doctor output when prerequisites are missing",
+        "Unsigned-build implications are documented rather than hidden"
+      ],
+      "gate": "npm --prefix ui run build && cargo tauri build",
+      "notes": null,
+      "andare_key": "REVL-101",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1205",
+      "type": "story",
+      "title": "First-run onboarding",
+      "parent": "RL-E12",
+      "milestone": "M14",
+      "labels": [
+        "ui",
+        "ux"
+      ],
+      "priority": "P2",
+      "estimate": 5,
+      "depends_on": [
+        "RL-1202",
+        "RL-1110"
+      ],
+      "spec_refs": [
+        "\u00a715"
+      ],
+      "description": "Guided path: doctor -> add first repo -> pick engine -> choose autonomy -> dry-run first review -> show the result.",
+      "acceptance_criteria": [
+        "A user with no config reaches a completed dry-run review without editing a file",
+        "Default autonomy for a newly added repo is never `auto`",
+        "Onboarding can be re-run from Settings",
+        "Framewatch flow capture of the whole onboarding path is reviewed"
+      ],
+      "gate": "scripts/gui-flow.sh onboarding",
+      "notes": null,
+      "andare_key": "REVL-102",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1206",
+      "type": "task",
+      "title": "README and operator documentation",
+      "parent": "RL-E12",
+      "milestone": "M14",
+      "labels": [
+        "docs"
+      ],
+      "priority": "P2",
+      "estimate": 3,
+      "depends_on": [
+        "RL-1202"
+      ],
+      "spec_refs": [],
+      "description": "README, docs/GUI_VERIFICATION.md, docs/OPERATIONS.md (what to do when a target fails, how budgets behave, how to recover a stuck run).",
+      "acceptance_criteria": [
+        "README gets a new user to a first review",
+        "Operations doc covers: target down, budget exhausted, stuck run, force-push recovery, orphaned check run",
+        "Every doc claim is verified against the built binary, not assumed"
+      ],
+      "gate": "test -f README.md && test -f docs/OPERATIONS.md",
+      "notes": null,
+      "andare_key": "REVL-103",
+      "status": "todo"
+    },
+    {
+      "id": "RL-E13",
+      "type": "epic",
+      "title": "Cross-cutting quality gates",
+      "parent": null,
+      "milestone": "all",
+      "labels": [
+        "quality"
+      ],
+      "priority": "P1",
+      "estimate": null,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a718"
+      ],
+      "description": "Standing requirements that apply to every other epic and are re-checked at each\nmilestone close.",
+      "acceptance_criteria": [
+        "Every child item is closed with an observed passing gate",
+        "The milestone exit criteria in SPEC \u00a717 are met",
+        "`cargo clippy --workspace --all-targets -- -D warnings` is clean"
+      ],
+      "gate": null,
+      "notes": null,
+      "andare_key": "REVL-13",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1301",
+      "type": "task",
+      "title": "Error taxonomy and remediation text",
+      "parent": "RL-E13",
+      "milestone": null,
+      "labels": [
+        "rust",
+        "ux"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a718"
+      ],
+      "description": "One thiserror enum per crate, anyhow only at the binary edge, every user-visible error carrying a remediation sentence.",
+      "acceptance_criteria": [
+        "No anyhow in library crate public APIs",
+        "A test enumerates user-visible error variants and asserts each has non-empty remediation text"
+      ],
+      "gate": "cargo test --workspace errors::",
+      "notes": null,
+      "andare_key": "REVL-104",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1302",
+      "type": "task",
+      "title": "No-silent-caps audit",
+      "parent": "RL-E13",
+      "milestone": null,
+      "labels": [
+        "safety",
+        "quality"
+      ],
+      "priority": "P0",
+      "estimate": 2,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a718"
+      ],
+      "description": "Standing audit: every place the system truncates, samples, caps or drops must record\nit on the run and surface it in the UI and CLI output.",
+      "acceptance_criteria": [
+        "Each cap site has a corresponding recorded field and a test asserting it is set",
+        "The UI displays every such field",
+        "A grep-based check lists cap sites and fails if one has no recorded counterpart"
+      ],
+      "gate": "cargo test --workspace no_silent_caps",
+      "notes": null,
+      "andare_key": "REVL-105",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1303",
+      "type": "task",
+      "title": "Cross-platform path and process audit",
+      "parent": "RL-E13",
+      "milestone": null,
+      "labels": [
+        "platform",
+        "quality"
+      ],
+      "priority": "P1",
+      "estimate": 3,
+      "depends_on": [],
+      "spec_refs": [
+        "\u00a716.3",
+        "\u00a718"
+      ],
+      "description": "camino UTF-8 paths, internal normalization to '/', Windows process groups, WAL under Windows file locking, hook line endings.",
+      "acceptance_criteria": [
+        "Path normalization tested with Windows-style inputs on every platform",
+        "The full integration suite is green on all three OSes in CI",
+        "No test is skipped on Windows without an explicit documented reason"
+      ],
+      "gate": "cargo test --workspace",
+      "notes": null,
+      "andare_key": "REVL-106",
+      "status": "todo"
+    },
+    {
+      "id": "RL-1304",
+      "type": "task",
+      "title": "Security review of the publish and secrets paths",
+      "parent": "RL-E13",
+      "milestone": null,
+      "labels": [
+        "security"
+      ],
+      "priority": "P0",
+      "estimate": 3,
+      "depends_on": [
+        "RL-111",
+        "RL-406",
+        "RL-602"
+      ],
+      "spec_refs": [
+        "\u00a78.5",
+        "\u00a713.1",
+        "\u00a718"
+      ],
+      "description": "Targeted review: no credentials in config or logs, keychain resolution is lazy, engine env denylist holds, webhook signature verification is constant-time, no shell interpolation of untrusted strings.",
+      "acceptance_criteria": [
+        "Each item verified by a test, not by inspection alone",
+        "Findings recorded as issues and closed before M14",
+        "A deliberately planted secret in a config is not written to any log or transcript"
+      ],
+      "gate": "cargo test --workspace security::",
+      "notes": null,
+      "andare_key": "REVL-107",
+      "status": "todo"
+    }
+  ]
+}

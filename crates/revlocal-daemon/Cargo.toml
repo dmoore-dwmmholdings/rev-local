@@ -1,0 +1,14 @@
+[package]
+name = "revlocal-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Scheduler, trigger sources, run orchestrator and budget guard."
+
+[dependencies]
+
+[lints]
+workspace = true

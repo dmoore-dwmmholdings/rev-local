@@ -1,0 +1,14 @@
+[package]
+name = "revlocal-vcs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "`VcsAdapter` trait plus git, GitHub and Subversion implementations."
+
+[dependencies]
+
+[lints]
+workspace = true
