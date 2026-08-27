@@ -1383,9 +1383,11 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "revlocal-core",
+ "revlocal-store",
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

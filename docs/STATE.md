@@ -1,15 +1,25 @@
 # Build state
-- current_milestone: M5
-- current_item: RL-408
-- item_status: blocked
-- last_gate_command: cargo test -p revlocal-engine runners
-- last_gate_result: PASS — exit 0, 12 passed.
+
+- current_milestone: M6
+- current_item: RL-502
+- item_status: not_started
+- last_gate_command: cargo test -p revlocal-daemon state_machine
+- last_gate_result: PASS — exit 0, 10 passed.
 - last_visual: n/a
-- next_action: RL-408 (REVL-45) is the Codex spike and `codex` is NOT installed — it
-    is blocked (blocker 2 in BUILD_PROMPT). Take the next unblocked item instead.
-    **Recommended: REVL-115 (RL-409)** — budgets are currently unenforceable against a
-    real engine, silently; see `silent caps found` below. Also outstanding:
-    REVL-113 (RL-305b).
+- next_action: RL-502 (REVL-47) — prompt assembly. Open items that are NOT next by
+    priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
+    engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
+
+## config gap: no attempt ceiling
+
+`RL-501` needed a maximum retry count and SPEC §13.1 has none — it has
+`stale_run_minutes` but nothing bounding attempts. Without a ceiling, a change that
+crashes the daemon is recovered on every startup, crashes again, and rev-local spends
+its life re-reviewing one commit while never reaching the rest.
+
+`DEFAULT_MAX_ATTEMPTS = 3` lives in `revlocal-daemon` and is a **parameter**, not a
+constant read at the call site, so it can become config without a rewrite. Worth
+adding to §13.1's `[global]` when someone touches it.
 
 ## a gate that selected nothing
 

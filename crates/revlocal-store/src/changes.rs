@@ -4,7 +4,7 @@ use crate::repos::{format_time, parse_enum, parse_time};
 use crate::{Pool, Result, StoreError};
 use revlocal_core::{
     Category, Change, ChangeId, ChangeKind, Depth, DiffStat, EngineKind, Finding, FindingId,
-    FindingState, RepoId, Run, RunId, RunStatus, Severity, TriggerSource, Usage,
+    FindingState, RepoId, Run, RunId, RunStatus, Severity, Timestamp, TriggerSource, Usage,
 };
 
 /// Unwrap the id an `INSERT ... RETURNING id` produced.
@@ -363,6 +363,72 @@ impl<'a> RunStore<'a> {
                     to: next,
                 }),
         ))
+    }
+
+    /// Runs stuck in a non-terminal stage since before `now - stale_after`.
+    ///
+    /// "Stuck" is judged on the most recent timestamp the run has — `started_at` if
+    /// it ever started, `created_at` otherwise. A run that has been queued for an
+    /// hour is as abandoned as one that has been reviewing for an hour; both mean
+    /// nothing is going to move them.
+    ///
+    /// Terminal runs are excluded by status rather than by age, because a run that
+    /// finished last year is not stale, it is done.
+    pub async fn list_stale(
+        &self,
+        now: Timestamp,
+        stale_after: chrono::Duration,
+    ) -> Result<Vec<Run>> {
+        let cutoff = format_time(now - stale_after);
+
+        let rows = sqlx::query!(
+            "SELECT id FROM run
+             WHERE status NOT IN ('done','failed','skipped','cancelled')
+               AND COALESCE(started_at, created_at) < ?
+             ORDER BY id",
+            cutoff
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut runs = Vec::with_capacity(rows.len());
+        for row in rows {
+            runs.push(self.get(RunId::new(row.id)).await?);
+        }
+        Ok(runs)
+    }
+
+    /// Fail a run that a previous process abandoned.
+    ///
+    /// Not routed through `transition`: the lifecycle allows `queued -> failed` and
+    /// so on, but recovery must work from *whatever* stage the run was stuck in,
+    /// including ones a caller cannot know in advance. The compare-and-swap that
+    /// protects ordinary transitions is not what protects this — the run being
+    /// non-terminal is.
+    ///
+    /// SPEC §18: the error is recorded, so an interrupted run is distinguishable
+    /// from one that failed on its own merits.
+    pub async fn mark_interrupted(&self, id: RunId, error: &str) -> Result<()> {
+        let raw = id.get();
+        let failed = RunStatus::Failed.as_str();
+
+        let affected = sqlx::query!(
+            "UPDATE run SET status = ?, error = ?
+             WHERE id = ? AND status NOT IN ('done','failed','skipped','cancelled')",
+            failed,
+            error,
+            raw
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        if affected == 0 {
+            // Already terminal. Recovery racing with a run that finished on its own
+            // is normal, and finishing wins — the run really did complete.
+            return Ok(());
+        }
+        Ok(())
     }
 
     /// Every run for one change, oldest attempt first.

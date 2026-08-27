@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id FROM run\n             WHERE status NOT IN ('done','failed','skipped','cancelled')\n               AND COALESCE(started_at, created_at) < ?\n             ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a5ccfaf56892abc68d23dfa9f4d98b69e740efdfd12b83f18afe8395bf250090"
+}

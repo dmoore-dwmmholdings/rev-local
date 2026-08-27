@@ -3,9 +3,14 @@
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
 pub mod logging;
+pub mod state_machine;
 
 pub use logging::{
     init as init_logging, LoggingError, LoggingHandle, RedactingJsonLayer, RedactingVisitor,
+};
+pub use state_machine::{
+    recover_interrupted, transition, NullSink, RecoveryReport, RunEvent, RunEventSink,
+    DEFAULT_MAX_ATTEMPTS, INTERRUPTED,
 };
 
 /// The name of this crate, used by the workspace layout test in `revlocal-cli`.
