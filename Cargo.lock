@@ -1330,6 +1330,9 @@ dependencies = [
 [[package]]
 name = "revlocal-mcp"
 version = "0.1.0"
+dependencies = [
+ "revlocal-core",
+]
 
 [[package]]
 name = "revlocal-publish"

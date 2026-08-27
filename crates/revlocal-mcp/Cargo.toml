@@ -9,6 +9,7 @@ authors.workspace = true
 description = "MCP client over stdio and streamable HTTP, with tool discovery."
 
 [dependencies]
+revlocal-core = { workspace = true }
 
 [lints]
 workspace = true

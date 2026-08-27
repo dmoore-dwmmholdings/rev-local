@@ -1,11 +1,13 @@
 # Build state
 - current_milestone: M3
-- current_item: RL-204
+- current_item: RL-205
 - item_status: not_started
-- last_gate_command: MOCK_ENGINE_MODE=valid REVLOCAL_OUT=$(mktemp -d) fixtures/mock-engine/run
-- last_gate_result: PASS — exit 0, result.json written and schema-valid.
+- last_gate_command: node fixtures/mock-mcp/selftest.js
+- last_gate_result: PASS — exit 0, 32/32 checks.
 - last_visual: n/a
-- next_action: RL-204 (REVL-28) — mock MCP server with a request journal
+- next_action: RL-205 (REVL-29) — Windows fixture parity (build.ps1). Note it is the LAST
+    M3 item; check the M3 exit gate in SPEC §17 before closing the milestone, and remember
+    the svn half of that gate skips cleanly here rather than passing.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -77,6 +79,10 @@ milestone. **Trama's `update_page` replaces a body — `get_page` first (§11.5)
 A guard that has only ever passed is not known to work. Where an item's criteria say
 a check must *fail* on bad input, the failure was produced deliberately and observed:
 
+- **RL-204** — read-before-write enforcement was disabled in `server.js` and the
+  selftest observed FAILING 4 of 32 checks with exit 1; restored, `git diff` empty,
+  32/32 again.
+
 - **RL-111** — redaction was disabled in `RedactingVisitor` and **7 of the 9 layer
   tests failed**; the 2 that still passed are the ones asserting ordinary logging is
   unharmed and still valid JSON, which correctly do not depend on redaction. Then
@@ -117,6 +123,14 @@ make a downstream test pass for the wrong reason.
 - **Two SVN reintegrations** (`RL-202`), one detectable by both §6.4 heuristics and
   one by `svn:mergeinfo` alone. A fixture where every signal fires cannot tell you
   which signal the code is using.
+- **The mock MCP's read-before-write is per PAGE, not global** (`RL-204`). A rule
+  tracking "has read anything" would be satisfied by any startup read and would let
+  every page be overwritten blind. The selftest reads one page and asserts writing a
+  *different* one is still refused.
+- **`profiles/andare-renamed.json` exposes `create_work_item` and NOT
+  `create_issue`** (`RL-204`). If it exposed both, capability resolution would never
+  be exercised — the client would find the name it looks for first and the §11.2
+  claim would go untested.
 - **The git merge commit has two parents** (`RL-201`) — a fast-forward would have
   one and M4's merge skip rule would never fire.
 
