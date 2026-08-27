@@ -4,6 +4,7 @@
 
 pub mod depth;
 pub mod logging;
+pub mod normalize;
 pub mod prompt;
 pub mod state_machine;
 pub mod truncation;

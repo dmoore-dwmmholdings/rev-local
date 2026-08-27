@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M6
-- current_item: RL-504 (REVL-49)
+- current_item: RL-505 (REVL-50)
 - item_status: done
-- last_gate_command: cargo test -p revlocal-daemon truncation
-- last_gate_result: PASS — 24 tests selected, 24 passed; workspace 550 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-daemon normalize
+- last_gate_result: PASS — 27 tests selected, 27 passed; workspace 577 passed / 0 failed
 - last_visual: n/a
-- next_action: RL-505 (REVL-50) — finding normalization per §9.5
+- next_action: RL-506 (REVL-51) — the pipeline end to end, which is what REVL-47..50 were blocking
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -479,3 +479,51 @@ is testing the assumption.** Derive the boundary from the actual artefact.
 render and asserts every omitted name appears in the **rendered prompt**. Criterion 2
 says "named in the prompt", and asserting it on `TruncationOutcome` alone would have
 been asserting it on the wrong artefact — the struct is not what the engine reads.
+
+## §9.5 contradicted itself, §18, and this item's own criteria
+
+Three conflicts, resolved in ADR 0021 (sixth SPEC amendment):
+
+1. §9.5 says "clamp severity; unknown → medium", but §8.3's schema rejects an unknown
+   severity before normalization sees it. **The clamp was unreachable as specified.**
+   Resolved by salvaging from the recorded drop rather than relaxing §8.3.
+2. §9.5 says "drop out-of-diff findings unless allow=true — an out-of-diff finding is
+   retained but forced to ≤medium". The two halves of one sentence disagree, and
+   criterion 1 states the second. Resolved for retain-and-cap.
+3. §9.5 says "drop findings matching a suppression"; criterion 2 says they must not
+   reach the *publish plan*. Resolved by labelling, not dropping.
+
+The through-line: **normalization labels, it never discards.** A dropped finding is
+unanswerable — "why didn't it mention src/other.rs?" has an answer from a labelled
+row and only silence from a discarded one. `FindingState` already had `Suppressed`
+and `Superseded` for this.
+
+## the assumption that would have failed silently
+
+The severity salvage recognises a severity-only failure by looking for `"severity"` in
+the violation text **`revlocal-engine` produced**. That is an assumption about another
+crate's wording. Had it been wrong, salvage would never fire in production while every
+hand-written test in this module still passed — a silent cap behind a green suite.
+
+`normalize_salvages_what_the_real_validator_actually_drops` runs the real validator on
+a real document and feeds its real output in. It passed, so the assumption held; it is
+now pinned rather than assumed.
+
+**Generalise: when a test's fixture stands in for another component's output, at least
+one test must use the real output.** Same shape as RL-504's "a test whose setup
+computes a boundary from an assumption is testing the assumption."
+
+## two glob rules that err in opposite directions, on purpose
+
+- `sensitive_globs` uncompilable → **everything** sensitive (ADR 0019).
+- suppression glob uncompilable → **nothing** suppressed (ADR 0021).
+
+Both err toward *saying more*. Worth stating that way, because "fail safe" alone would
+have given the wrong answer for one of them.
+
+## negative cases observed (RL-505)
+
+- Don't cap out-of-diff severity → 1 fails.
+- Suppressed findings become publishable → 3 fail.
+- Don't supersede repeats → 4 fail.
+- Stop salvaging severities → 2 fail, including the real-validator cross-check.

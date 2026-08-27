@@ -700,12 +700,16 @@ in full.
 
 ### 9.5 Finding normalization
 
-- Clamp `severity` to the allowed set; unknown → `medium`.
-- Drop findings whose `file` doesn't exist in the change's file set **unless**
-  `allow_out_of_diff_findings = true` (default `true` for `deep`, `false` otherwise)
-  — an out-of-diff finding is retained but forced to `severity <= medium` and
-  categorized `info` when publishing inline (GitHub can't anchor it).
-- Drop findings matching an active `suppression`.
+- Clamp `severity` to the allowed set; unknown → `medium`. A finding whose *only*
+  schema violation is its severity is salvaged rather than dropped; one with any
+  other violation is still dropped per §8.3.
+- A finding whose `file` isn't in the change's file set is **retained, never
+  dropped**. When `allow_out_of_diff_findings = false` (the default outside `deep`,
+  where it is `true`) it is forced to `severity <= medium` and published inline as
+  `info` (GitHub can't anchor it). Amended by ADR 0021; the earlier wording said
+  "drop ... unless", which contradicted both §18 and this section's own next clause.
+- Findings matching an active `suppression` are marked `suppressed` and never reach
+  the publish plan. They are recorded, not discarded — see ADR 0021.
 - Compute `fingerprint` (§10.3) and mark duplicates of an already-`published`
   fingerprint on the same PR as `superseded` instead of re-filing.
 
