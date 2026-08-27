@@ -1,14 +1,14 @@
 # Build state
 - current_milestone: M5
-- current_item: RL-404
+- current_item: RL-405
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-engine template
-- last_gate_result: PASS — exit 0, 22 passed.
+- last_gate_command: cargo test -p revlocal-engine --test fallback_ladder
+- last_gate_result: PASS — exit 0, 16 passed.
 - last_visual: n/a
-- next_action: RL-404 (REVL-41). Two mocks exist and are NOT interchangeable:
-    `fixtures/mock-engine` is a real subprocess and is what the runner must drive to
-    exercise §8.2's ladder; `revlocal_engine::MockEngine` is in-process, for pipeline
-    tests. Also outstanding: REVL-113 (RL-305b).
+- next_action: RL-405 (REVL-42). The ladder takes `Option<&dyn RepairPass>` — whether
+    to spend tokens on a repair is the BUDGET GUARD's decision, not the ladder's, so
+    the runner must pass `None` when there is no budget left. Also outstanding:
+    REVL-113 (RL-305b).
 
 ## a correction
 

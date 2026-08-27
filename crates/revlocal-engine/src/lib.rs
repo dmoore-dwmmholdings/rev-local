@@ -3,6 +3,7 @@
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
 pub mod engine;
+pub mod ladder;
 pub mod mock;
 pub mod schema;
 pub mod template;
@@ -10,6 +11,10 @@ pub mod template;
 pub use engine::{
     Engine, EngineError, EngineId, EngineOutcome, EngineProbe, EngineProblem, EngineTask,
     RawFinding, Result,
+};
+pub use ladder::{
+    last_fenced_json_block, resolve, LadderOutcome, RepairPass, RepairResult, Rung, OUT_DIR_ENV,
+    RESULT_FILE,
 };
 pub use mock::{MockBehaviour, MockEngine};
 pub use schema::{
