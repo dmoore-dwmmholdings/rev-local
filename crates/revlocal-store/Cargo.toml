@@ -9,6 +9,14 @@ authors.workspace = true
 description = "SQLite persistence: migrations, entity repositories, audit log and budget ledger."
 
 [dependencies]
+revlocal-core = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,17 +1,18 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-108
+- current_item: RL-109
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-core config::
-- last_gate_result: PASS — exit 0, 42 passed.
+- last_gate_command: cargo test -p revlocal-store migrations
+- last_gate_result: PASS — exit 0, 12 passed.
 - last_visual: n/a
-- next_action: RL-108 (REVL-21) — SQLite schema and migrations. `0001_init.sql` MUST
-    include the `run.degraded TEXT` column added under spec_amendments below.
+- next_action: RL-109 (REVL-22) — store repositories (CRUD) for every entity. First
+    decide compile-time-checked `query!` + committed `.sqlx/` vs runtime `query()`;
+    see the note at the end of ADR 0008.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
 - items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105, RL-106, RL-107,
-                 RL-107b]
+                 RL-107b, RL-108]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -40,6 +41,13 @@
 
 A guard that has only ever passed is not known to work. Where an item's criteria say
 a check must *fail* on bad input, the failure was produced deliberately and observed:
+
+- **RL-108** — the `UNIQUE (target, idempotency_key)` constraint on
+  `publish_action` was exercised by inserting a duplicate and observing the
+  rejection, and by inserting the same key against a *different* target and
+  observing acceptance. `repo.kind = 'mercurial'` observed rejected by its CHECK.
+  `an_unmigrated_database_has_no_spec_tables` keeps the positive schema test from
+  passing vacuously.
 
 - **RL-104** — `tokio` added to `revlocal-core`'s manifest, test run, observed
   `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
@@ -86,7 +94,8 @@ commit").
 - **`run.degraded TEXT`** added to the `run` table in SPEC §5 (`RL-103b`, ADR 0005).
   §8.1 gives `EngineOutcome` a `degraded: Option<String>` and §12.3 escalates every
   action on a degraded run to high risk, but the `run` table had nowhere to keep it.
-  Nullable reason, not a flag. **`RL-108`'s `0001_init.sql` must include it.**
+  Nullable reason, not a flag. **Carried into `0001_init.up.sql` by `RL-108`, with a
+  test asserting the column exists — done.**
 
 ## ci_green_unobserved
 

@@ -21,6 +21,7 @@ revlocal-mcp = { workspace = true }
 revlocal-publish = { workspace = true }
 revlocal-daemon = { workspace = true }
 clap = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 serde_norway = { workspace = true }
