@@ -24,6 +24,14 @@
 //   MOCK_MCP_FAIL_MODE   rate_limit | server_error | invalid_params | none
 //   MOCK_MCP_FAIL_TIMES  fail this many calls, then succeed (default: always)
 //   MOCK_MCP_FAIL_TOOL   restrict induced failures to one tool name
+//   MOCK_MCP_IGNORE_EOF  keep running after stdin closes, and ignore SIGTERM
+//
+// MOCK_MCP_IGNORE_EOF exists for the same reason the mock engine's `hang` mode
+// does. A well-behaved server exits by itself when its stdin closes, so a client
+// that reaps NOTHING still passes a "the process is gone afterwards" test — the
+// server left on its own and the client took the credit. This mode is a server
+// that will not leave, so the client has to actually kill it. Without it, RL-601's
+// "reaped, not leaked, on drop" criterion is untested.
 
 import { appendFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -221,6 +229,14 @@ function handle(message) {
         replyError(id, -32601, `method not found: ${method}`);
       }
   }
+}
+
+// See the header: a server that refuses to exit, so a client's reaping is testable.
+if (process.env.MOCK_MCP_IGNORE_EOF === "1") {
+  process.on("SIGTERM", () => {});
+  process.on("SIGINT", () => {});
+  // Something on the event loop forever, so closing stdin does not end the process.
+  setInterval(() => {}, 1000);
 }
 
 const lines = createInterface({ input: process.stdin, terminal: false });

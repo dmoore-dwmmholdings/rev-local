@@ -1577,7 +1577,14 @@ dependencies = [
 name = "revlocal-mcp"
 version = "0.1.0"
 dependencies = [
+ "nix",
  "revlocal-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,12 +1,12 @@
 # Build state
 
 - current_milestone: M7
-- current_item: RL-508 (REVL-118)
+- current_item: RL-601 (REVL-53)
 - item_status: done
-- last_gate_command: SPEC §17 M6 exit gate, run by hand; plus cargo test --workspace
-- last_gate_result: PASS — part 1 done/2 findings; part 2 summary/truncated/58 omitted; workspace 613 passed / 0 failed
+- last_gate_command: cargo test -p revlocal-mcp stdio
+- last_gate_result: PASS — 15 tests, 15 passed; workspace 628 passed / 0 failed
 - last_visual: n/a
-- next_action: start M7 (§11 publish) — first unblocked item in epic REVL-6
+- next_action: RL-602 (REVL-54) — streamable HTTP transport
     priority but matter: REVL-115 (RL-409, budgets unenforceable against a real
     engine), REVL-113 (RL-305b), REVL-45 (RL-408, blocked on `codex`).
 
@@ -750,3 +750,40 @@ Both now on the Trama index, because they generalise past this project:
    subject; collectively the shipped default never reached the rule.
 2. **Never write a string match against another tool's output without running the
    tool.** Four occurrences in M6; one shipped a code path that had never once fired.
+
+## a criterion that no test could have failed (RL-601)
+
+Criterion 3 was "the child process is reaped, not leaked, on drop". Removing
+`kill_on_drop` **and** the `Drop` kill changed no test.
+
+Investigated per RL-506a's rule. Real hole: **a well-behaved server exits by itself
+when its stdin closes**, so a client that reaps nothing still passes "the process is
+gone afterwards" — the server left on its own and the client took the credit.
+
+Added `MOCK_MCP_IGNORE_EOF=1` to the mock MCP server: keeps its event loop alive and
+ignores SIGTERM, so it will not leave. Same reasoning as the mock engine's `hang`
+mode, whose header already explains it — **the pattern was already written down and I
+did not apply it until a probe forced me to.**
+
+### the finding underneath the finding
+
+Re-probing with reaping removed does not fail, it **hangs the test harness**. `stderr`
+is inherited (a server's diagnostics belong in the daemon's log; capturing without
+draining would fill the pipe and wedge the server), so a leaked server holds its
+parent's stderr open forever. Reaping is not tidiness — a leak wedges whatever
+launched the daemon.
+
+Practical note for future probes: that one required `pkill -9 -f mock-mcp/server.js`
+to clean up. A probe that removes a cleanup path can leak; kill the strays.
+
+## camelCase — another silently-dead path
+
+`InitializeResult` lacked `rename_all = "camelCase"`. MCP is camelCase on the wire, so
+`protocol_version` was `None` against **every** server, and the version-skew warning
+could never fire.
+
+Caught only because the test asserted the handshake's *contents* rather than that a
+handshake occurred. Same class as RL-506b's guessed `invalid reference`.
+
+**Assert on content, not on the event.** "It connected" and "it connected and told us
+what it is" are different tests, and only the second can fail usefully.
