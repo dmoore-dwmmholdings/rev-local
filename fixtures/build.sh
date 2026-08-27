@@ -300,3 +300,23 @@ echo "fixtures: building ${GIT_BARE}"
 git clone --quiet --mirror "$GIT_BASIC" "$GIT_BARE"
 
 echo "fixtures: git-basic has ${COMMIT_COUNT} commits; manifest at ${GIT_BASIC}/.manifest.json"
+
+# --- svn-basic --------------------------------------------------------------
+#
+# The SVN half is optional at build time. `svn` is not installed everywhere the
+# inner loop runs, and M3's gate says the svn portion must skip cleanly when it
+# is absent. Skipping writes a manifest that SAYS it skipped, so a test can tell
+# "svn was absent" from "the generator failed" — SPEC §18's no-silent-caps rule
+# applies to fixtures too.
+
+# shellcheck source=fixtures/svn.sh
+source "${FIXTURE_ROOT}/svn.sh"
+
+if command -v svn >/dev/null 2>&1 && command -v svnadmin >/dev/null 2>&1; then
+  echo "fixtures: building ${OUT_DIR}/svn-basic"
+  build_svn_fixture "$OUT_DIR"
+else
+  echo "fixtures: SKIPPING svn-basic — svn/svnadmin not on PATH."
+  echo "fixtures:   SVN tests will skip. Install Subversion and re-run to enable them."
+  write_svn_skip_manifest "$OUT_DIR" "svn and svnadmin are not on PATH"
+fi

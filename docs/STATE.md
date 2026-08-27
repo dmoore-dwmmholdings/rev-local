@@ -1,13 +1,11 @@
 # Build state
 - current_milestone: M3
-- current_item: RL-202
+- current_item: RL-203
 - item_status: not_started
-- last_gate_command: ./fixtures/build.sh && test -f fixtures/out/git-basic/.manifest.json
-- last_gate_result: PASS — exit 0; 12 commits, manifest written, bare mirror created.
+- last_gate_command: ./fixtures/build.sh && test -f fixtures/out/svn-basic/.manifest.json
+- last_gate_result: PASS — exit 0. Skip path taken; svn content UNVERIFIED (see below).
 - last_visual: n/a
-- next_action: RL-202 (REVL-26) — SVN fixture generator. **`svn` is not installed in this
-    container**; the M3 gate says the svn portion must skip cleanly when it is absent, so
-    that skip path is the deliverable here and the svn content itself may be unverifiable.
+- next_action: RL-203 (REVL-27) — mock engine binary. Unblocked and independent of svn.
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
@@ -36,6 +34,29 @@
    Everything else proceeds — the mock engine covers the inner loop.
 3. `svn` is not installed. Needed from `RL-202` onward; not yet blocking.
 4. Framewatch in headless CI is unverified (`RL-1104`). GUI gates are loop-local.
+
+## unverified_here
+
+Work that is complete but whose verification cannot run in this container. Each has
+a test that **activates itself** where the prerequisite exists, so this is a gap in
+where it ran, not a gap in what exists.
+
+- **`svn` is not installed and cannot be** — no root, `apt-get` refuses the dpkg
+  lock. `RL-202`'s generator (`fixtures/svn.sh`) is written but **never executed**.
+  Two of its three acceptance criteria — the revision→role manifest including
+  `reintegration_rev`, and `svn:mergeinfo` verified with `svn propget` — are
+  **NOT OBSERVED**. The third (clean skip, exit 0, manifest says so) is observed.
+
+  `crates/revlocal-vcs/tests/svn_fixtures.rs` covers both worlds. The load-bearing
+  one is `svn_the_manifest_agrees_with_whether_svn_is_installed`: it **fails** if a
+  machine that has `svn` produced a skipped manifest, which is how a broken
+  generator would otherwise hide behind a green run. The svn-gated tests print
+  `SKIPPED (svn not installed, nothing verified)` so a passing run here cannot be
+  read as coverage.
+
+  **CI installs Subversion on all three runners (`RL-102`), so this runs there.**
+  It is therefore blocked on the same thing as `ci_green_unobserved`: a git remote.
+  If those tests come back red, RL-202 reopens.
 
 ## milestone gates observed
 
