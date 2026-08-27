@@ -1,16 +1,15 @@
 # Build state
 - current_milestone: M1
-- current_item: RL-105
+- current_item: RL-106
 - item_status: not_started
-- last_gate_command: cargo test -p revlocal-core --test no_io_deps
-- last_gate_result: PASS — exit 0, 2 passed. Negative case observed by injection (below).
+- last_gate_command: cargo test -p revlocal-core risk::
+- last_gate_result: PASS — exit 0, 14 passed.
 - last_visual: n/a
-- next_action: RL-105 (REVL-18) — risk classification model (SPEC §12.3), including
-    "first use of a capability is always high risk", which is a decision of record.
+- next_action: RL-106 (REVL-19) — finding fingerprint algorithm (SPEC §10.3)
 - blocked_on: none
 - adrs_open: none
 - iterations_this_item: 1
-- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104]
+- items_closed: [RL-101, RL-102, RL-103, RL-103b, RL-104, RL-105]
 - andare_connected: true
 
 ## Environment observed (2026-08-27)
@@ -44,6 +43,18 @@ a check must *fail* on bad input, the failure was produced deliberately and obse
   `FAILED` with `revlocal-core -> tokio (normal)`; then `tokio-util` substituted to
   force a transitive arrival, observed `revlocal-core -> tokio-util (normal) ->
   tokio (normal)`. Manifest restored, `git diff` empty, test green again.
+
+## spec_gaps_resolved_by_principle
+
+Places where the spec's lists are not exhaustive over the input space, resolved
+against the principle the spec itself states. Each has a named test; each is one
+line to change if a decision comes back differently.
+
+- **SPEC §12.3 risk lists** (`RL-105`, ADR 0006). Two action shapes are not
+  enumerated. Both taken as **low**, per §12.3's own "additive, easily reversible,
+  low blast radius": a `Check { in_progress }` (a progress report that blocks
+  nobody — §11.3 says the check is always in-progress while a run is active), and
+  `LinkDocToIssue` (an additive, reversible cross-reference).
 
 ## spec_amendments
 

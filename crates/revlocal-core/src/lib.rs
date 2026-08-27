@@ -25,6 +25,7 @@ mod finding;
 pub mod ids;
 mod publish;
 mod repo;
+pub mod risk;
 mod run;
 
 /// A point in time, as stored in SPEC §5's `TEXT` timestamp columns.
@@ -45,4 +46,8 @@ pub use finding::{Finding, Suppression, LOW_CONFIDENCE_THRESHOLD, TITLE_MAX_CHAR
 pub use ids::{AuditId, ChangeId, FindingId, PublishActionId, RepoId, RunId, SuppressionId};
 pub use publish::{CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
 pub use repo::{Cursor, Repo};
+pub use risk::{
+    classify, ActionIntent, CheckConclusion, RiskAssessment, RiskInputs, RiskReason,
+    DEFAULT_BURST_THRESHOLD,
+};
 pub use run::{Run, Usage};
