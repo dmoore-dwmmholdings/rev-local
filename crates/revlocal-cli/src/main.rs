@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod publish;
+mod repo;
 mod review;
 mod targets;
 
@@ -38,6 +39,12 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Inspect configured repositories and their polling health.
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
     },
 
     /// Review one change and print the result.
@@ -149,6 +156,29 @@ enum TargetsCommand {
     },
 }
 
+/// `revlocal repo …`.
+#[derive(Debug, Subcommand)]
+enum RepoCommand {
+    /// Show configured repositories and their polling health (SPEC §7.1).
+    ///
+    /// Reports only. A command that shows you a repository's state must not be
+    /// able to change it.
+    Show {
+        /// One repository by name. Omit for every configured repository.
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Print the machine-readable report instead of the human one.
+        ///
+        /// Exactly one JSON document reaches stdout; anything else goes to stderr,
+        /// so the output is safe to pipe.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -194,6 +224,10 @@ enum CliError {
     /// A publish command failed.
     #[error(transparent)]
     Publish(#[from] Box<publish::PublishCommandError>),
+
+    /// A repository could not be shown.
+    #[error(transparent)]
+    Repo(#[from] repo::RepoCommandError),
 }
 
 /// Dispatch one command.
@@ -230,6 +264,20 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Repo { command } => match command {
+            RepoCommand::Show {
+                name,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let out = repo::run(&pool, name.as_deref(), json).await?;
+                pool.close().await;
+                println!("{out}");
+                Ok(())
+            }
+        },
+
         Command::Targets { command } => {
             match command {
                 TargetsCommand::List { config, json } => targets::run(&config, json).await?,

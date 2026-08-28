@@ -23,6 +23,13 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A hang is the failure mode this matrix exists to catch, and without a bound
+    # it is also the failure mode that produces no signal: GitHub's default is six
+    # hours, during which the job is neither passing nor failing and the logs are
+    # never uploaded. Forty-five minutes is roughly three times the slowest green
+    # run (Windows, ~15 min), so a real slowdown still passes and a deadlock fails
+    # with its artifacts intact.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
