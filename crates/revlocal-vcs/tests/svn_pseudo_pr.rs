@@ -42,16 +42,28 @@ fn svn_is_installed() -> bool {
 }
 
 /// Run a command, failing with its output rather than a bare status.
+///
+/// `svn` gets `--non-interactive` injected, exactly as `SvnRunner` does in
+/// production. Without it a prompt — for credentials, for a certificate, for
+/// conflict resolution — blocks on stdin that no CI runner will ever answer, and
+/// the test does not fail, it *hangs*. A hung job is worse than a failing one: it
+/// produces no logs and no signal until the runner's own timeout fires.
 fn run(program: &str, args: &[&str], cwd: &Path) -> Result<String, String> {
+    let mut full: Vec<&str> = Vec::with_capacity(args.len() + 1);
+    full.extend_from_slice(args);
+    if program == "svn" {
+        full.push("--non-interactive");
+    }
+
     let output = std::process::Command::new(program)
-        .args(args)
+        .args(&full)
         .current_dir(cwd)
         .output()
         .map_err(|e| format!("running {program}: {e}"))?;
 
     if !output.status.success() {
         return Err(format!(
-            "{program} {args:?} failed: {}",
+            "{program} {full:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }

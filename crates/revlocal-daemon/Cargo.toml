@@ -9,6 +9,7 @@ authors.workspace = true
 description = "Scheduler, trigger sources, run orchestrator and budget guard."
 
 [dependencies]
+axum = { workspace = true }
 chrono = { workspace = true }
 globset = { workspace = true }
 handlebars = { workspace = true }
@@ -30,6 +31,7 @@ tracing-appender = "0.2"
 nix = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }
 sqlx = { workspace = true }
 revlocal-mcp = { workspace = true }
 revlocal-publish = { workspace = true }
