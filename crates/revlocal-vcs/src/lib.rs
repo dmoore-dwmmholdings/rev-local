@@ -17,6 +17,7 @@ pub mod git;
 pub mod github;
 mod scratch;
 pub mod skip_rules;
+pub mod svn;
 
 pub use adapter::{
     ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem, ProbeReport, Result,
@@ -26,6 +27,7 @@ pub use git::{CursorState, DiscoveryEvent, GitAdapter, GitError, GitOutput, GitR
 pub use github::{GitHubTransport, GitHubWrite, TransportSelection, WriteRefused};
 pub use scratch::{RunOutcome, ScratchDir};
 pub use skip_rules::{evaluate as evaluate_skip, reviewable_paths, Skip, SkipReason};
+pub use svn::{SvnError, SvnOutput, SvnRunner};
 
 /// The `bash` that can actually run a POSIX script on this machine.
 ///
