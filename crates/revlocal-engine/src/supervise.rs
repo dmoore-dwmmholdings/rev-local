@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use revlocal_core::Depth;
@@ -244,8 +245,8 @@ pub async fn supervise(
     // consumes the child and would leave nothing to signal. Draining also matters
     // on its own: a child filling a full pipe blocks forever, and would look
     // exactly like a hang.
-    let stdout_reader = child.stdout.take().map(read_to_string);
-    let stderr_reader = child.stderr.take().map(read_to_string);
+    let stdout_reader = child.stdout.take().map(read_into_shared);
+    let stderr_reader = child.stderr.take().map(read_into_shared);
 
     let killed = tokio::select! {
         status = child.wait() => {
@@ -328,17 +329,89 @@ fn signal_group(pid: u32, signal: nix::sys::signal::Signal) {
     }
 }
 
-/// Read a pipe to a string on its own task.
-fn read_to_string<R>(mut reader: R) -> tokio::task::JoinHandle<String>
+/// How long the drain is given once the child has been killed.
+///
+/// The drain cannot be unbounded. A pipe stays open while **any** process holds
+/// its write end, so a grandchild that survived the kill keeps a read waiting
+/// forever — and on Windows that is not hypothetical: §8.5's Job Object is
+/// RL-1303's, and until it lands, killing the shim leaves `node` running. The
+/// Windows CI leg hung for half an hour on exactly this.
+///
+/// A supervisor that can hang forever waiting on a process it already killed is
+/// worse than the timeout it was enforcing.
+pub const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// A buffer a reader task fills and the supervisor can read at any point.
+type SharedBuffer = Arc<Mutex<Vec<u8>>>;
+
+/// Drain a pipe into a buffer the caller can read even if the task is abandoned.
+///
+/// Shared rather than returned, so output read *before* a hang is still
+/// available. §8.2's ladder reads stdout and a killed engine may already have
+/// emitted a usable fenced block; throwing that away because a grandchild held
+/// the pipe open would lose a review that was recoverable.
+fn read_into_shared<R>(mut reader: R) -> (tokio::task::JoinHandle<()>, SharedBuffer)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
-    tokio::spawn(async move {
+    let buffer: SharedBuffer = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buffer);
+
+    let handle = tokio::spawn(async move {
         use tokio::io::AsyncReadExt as _;
-        let mut buffer = Vec::new();
-        let _ = reader.read_to_end(&mut buffer).await;
-        String::from_utf8_lossy(&buffer).into_owned()
-    })
+        let mut chunk = [0_u8; 8192];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if let Ok(mut sink) = sink.lock() {
+                        sink.extend_from_slice(&chunk[..read]);
+                    }
+                }
+            }
+        }
+    });
+
+    (handle, buffer)
+}
+
+/// Whatever has been read so far.
+fn snapshot(buffer: &SharedBuffer) -> String {
+    buffer
+        .lock()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default()
+}
+
+/// Wait for a reader, giving up after `grace` and keeping what it read.
+async fn drain(
+    reader: Option<(tokio::task::JoinHandle<()>, SharedBuffer)>,
+    grace: Option<Duration>,
+) -> String {
+    let Some((handle, buffer)) = reader else {
+        return String::new();
+    };
+
+    match grace {
+        Some(grace) => {
+            if tokio::time::timeout(grace, handle).await.is_err() {
+                // Whoever is holding the pipe is not ours to wait for. Take what
+                // arrived and move on; the run records that it was killed, so
+                // truncated output is visible rather than passed off as all of it.
+                tracing::warn!(
+                    bytes = snapshot(&buffer).len(),
+                    ?grace,
+                    "an engine's output pipe was still open after the process was \
+                     killed; something it spawned is still holding it"
+                );
+            }
+        }
+        None => {
+            let _ = handle.await;
+        }
+    }
+
+    snapshot(&buffer)
 }
 
 /// Collect what the readers gathered, however the process ended.
@@ -346,21 +419,20 @@ where
 /// Output is kept even for a killed process: §8.2's ladder reads stdout, and a
 /// timed-out engine may still have emitted a usable fenced block before it hung.
 async fn finish(
-    stdout: Option<tokio::task::JoinHandle<String>>,
-    stderr: Option<tokio::task::JoinHandle<String>>,
+    stdout: Option<(tokio::task::JoinHandle<()>, SharedBuffer)>,
+    stderr: Option<(tokio::task::JoinHandle<()>, SharedBuffer)>,
     exit_code: Option<i32>,
     killed: Option<KillReason>,
     pid: Option<u32>,
     started: Instant,
 ) -> Result<Supervised, EngineError> {
-    let stdout = match stdout {
-        Some(handle) => handle.await.unwrap_or_default(),
-        None => String::new(),
-    };
-    let stderr = match stderr {
-        Some(handle) => handle.await.unwrap_or_default(),
-        None => String::new(),
-    };
+    // Bounded only when the process was killed. One that exited on its own has
+    // closed its pipes, so the drain finishes immediately and waiting costs
+    // nothing; a killed one may have left a grandchild holding them.
+    let grace = killed.map(|_| DRAIN_GRACE);
+
+    let stdout = drain(stdout, grace).await;
+    let stderr = drain(stderr, grace).await;
 
     Ok(Supervised {
         stdout,
