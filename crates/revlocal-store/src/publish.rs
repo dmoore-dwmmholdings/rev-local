@@ -228,7 +228,35 @@ impl<'a> PublishActionStore<'a> {
             .transpose()
     }
 
-    /// Every action belonging to one run, in creation order.
+    /// Every action that is due to be attempted, oldest first.
+    ///
+    /// "Due" is `pending` with no scheduled retry, or a scheduled retry that has
+    /// come round. `awaiting_approval` is deliberately excluded: §12 makes that a
+    /// human's decision, and a queue that delivered those would route around the
+    /// approval gate.
+    ///
+    /// Oldest first so a backlog drains in the order it was created rather than
+    /// letting new findings starve old ones.
+    pub async fn list_pending(&self, now: Timestamp) -> Result<Vec<PublishAction>> {
+        let cutoff = format_time(now);
+        let rows = sqlx::query!(
+            "SELECT id FROM publish_action
+             WHERE status = 'pending'
+               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+             ORDER BY id",
+            cutoff
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut actions = Vec::with_capacity(rows.len());
+        for row in rows {
+            actions.push(self.get(PublishActionId::new(row.id)).await?);
+        }
+        Ok(actions)
+    }
+
+    /// Every action belonging to one run, in creation order.    /// Every action belonging to one run, in creation order.
     pub async fn list_for_run(&self, run_id: RunId) -> Result<Vec<PublishAction>> {
         let raw = run_id.get();
         let rows = sqlx::query!(

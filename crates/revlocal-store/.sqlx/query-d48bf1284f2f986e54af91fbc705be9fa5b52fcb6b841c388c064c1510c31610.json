@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id FROM publish_action\n             WHERE status = 'pending'\n               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)\n             ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "publish_action",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d48bf1284f2f986e54af91fbc705be9fa5b52fcb6b841c388c064c1510c31610"
+}
