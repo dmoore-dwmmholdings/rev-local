@@ -6,10 +6,14 @@
 //! version we do not, and may name its tools whatever it likes. None of those is
 //! allowed to take the daemon down with it.
 
+pub mod discovery;
 pub mod http;
 pub mod protocol;
 pub mod stdio;
 
+pub use discovery::{
+    Discovery, DiscoveryError, HealthReport, McpClient, ServerHealth, ServerState,
+};
 pub use http::{
     parse_sse, HttpClient, HttpEndpoint, HttpError, NoSecrets, SecretResolver, SESSION_HEADER,
 };

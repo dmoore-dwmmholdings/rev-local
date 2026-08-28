@@ -318,6 +318,17 @@ impl HttpClient {
         self.session.as_ref().map(|s| &s.handshake)
     }
 
+    /// Drop the session, so the next call establishes a new one.
+    ///
+    /// The stdio client's `shutdown` has a process to reap; this one only has
+    /// state to forget. It exists so a caller holding both transports behind one
+    /// enum can say "disconnect" without knowing which it holds — and so secrets
+    /// resolved at the last connect are not kept alive by a session nobody intends
+    /// to use again.
+    pub fn disconnect(&mut self) {
+        self.session = None;
+    }
+
     /// The session id the server assigned, if any.
     pub fn session_id(&self) -> Option<&str> {
         self.session.as_ref().and_then(|s| s.session_id.as_deref())
