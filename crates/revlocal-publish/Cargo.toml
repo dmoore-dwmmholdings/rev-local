@@ -10,6 +10,7 @@ description = "`PublishTarget` trait plus the GitHub, Andare, Trama and generic 
 
 [dependencies]
 revlocal-core = { workspace = true }
+revlocal-mcp = { workspace = true }
 revlocal-store = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }

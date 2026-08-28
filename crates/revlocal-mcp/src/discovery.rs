@@ -131,7 +131,32 @@ impl McpClient {
     }
 }
 
-/// A discovery failure, from either transport.
+impl McpClient {
+    /// Call one tool, connecting first if necessary.
+    ///
+    /// Lives beside `list_tools` for the same reason: a caller holding a target
+    /// behind this enum should not have to know which transport it holds to make
+    /// a call, and the two clients take their arguments in a different order.
+    pub async fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+        resolver: &dyn SecretResolver,
+    ) -> Result<crate::protocol::ToolResult, DiscoveryError> {
+        match self {
+            Self::Stdio(c) => c
+                .call_tool(name, arguments)
+                .await
+                .map_err(DiscoveryError::from),
+            Self::Http(c) => c
+                .call_tool(resolver, name, arguments)
+                .await
+                .map_err(DiscoveryError::from),
+        }
+    }
+}
+
+/// A discovery failure, from either transport./// A discovery failure, from either transport.
 ///
 /// The two transports fail in genuinely different ways — a binary that will not
 /// spawn has no HTTP equivalent, and a 401 has no stdio equivalent — so the

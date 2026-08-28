@@ -1873,6 +1873,7 @@ dependencies = [
  "chrono",
  "regex",
  "revlocal-core",
+ "revlocal-mcp",
  "revlocal-store",
  "serde",
  "serde_json",

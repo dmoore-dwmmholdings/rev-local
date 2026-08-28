@@ -13,6 +13,7 @@ pub mod queue;
 pub mod report;
 pub mod retry;
 pub mod target;
+pub mod trama;
 pub mod work_item;
 
 pub use andare::{
@@ -35,6 +36,11 @@ pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_C
 pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};
+pub use trama::{
+    human_content, index_page_title, marked_section, merge_body, parent_page_title,
+    review_page_title, McpTramaWriter, PagePayload, TramaTarget, TramaToolNames, TramaWriter,
+    MARKER_BEGIN, MARKER_END,
+};
 pub use work_item::{
     outcome_comment, plan_outcomes, transition_for, KeyPattern, KeyPatternError, OutcomeReport,
 };
