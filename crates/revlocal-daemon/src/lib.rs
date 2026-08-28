@@ -4,6 +4,7 @@
 
 pub mod approvals;
 pub mod autonomy;
+pub mod budgets;
 pub mod depth;
 pub mod gating;
 pub mod kill_switch;
@@ -21,6 +22,10 @@ pub use approvals::{
 };
 pub use autonomy::{
     disposition, mode_change_detail, reviews_run, widens, Disposition, AUDIT_KIND_MODE_CHANGED,
+};
+pub use budgets::{
+    check as check_budget, day_of, exhausted_detail, records_the_change, resumes_after_reset,
+    BudgetVerdict, Exhausted, RunSlots, AUDIT_KIND_BUDGET_EXHAUSTED, DEFAULT_MAX_CONCURRENT_RUNS,
 };
 pub use gating::{gate, GateContext, GatedAction};
 pub use kill_switch::{
