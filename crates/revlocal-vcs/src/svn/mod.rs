@@ -8,9 +8,14 @@
 
 pub mod cmd;
 pub mod discover;
+pub mod materialize;
 
 pub use cmd::{
     doctor_line, is_available, non_interactive_env, CertFailure, SvnError, SvnOutput, SvnRunner,
     DEFAULT_TIMEOUT,
 };
 pub use discover::{discover, parse_log_xml, Discovery, SvnPath, SvnRevision, WatchedPaths};
+pub use materialize::{
+    export_path, materialize, parse_summary, render_property_only, BinarySummary, ChangedPath,
+    EXPORT_SUBDIR,
+};
