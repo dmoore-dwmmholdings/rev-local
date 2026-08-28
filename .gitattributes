@@ -1,0 +1,12 @@
+# Line endings are LF in the working tree on every platform.
+#
+# Two things depend on this. rustfmt.toml sets newline_style = "Unix", so a
+# CRLF checkout makes `cargo fmt --check` report every file as unformatted —
+# which is exactly what the first Windows CI leg did. And the git fixture is
+# built by copying files from fixtures/content byte for byte, so a CRLF checkout
+# would change every committed blob and therefore every fixture commit SHA,
+# breaking the determinism the fixture exists to provide.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
