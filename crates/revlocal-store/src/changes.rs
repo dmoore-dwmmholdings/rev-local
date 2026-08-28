@@ -432,6 +432,56 @@ impl<'a> RunStore<'a> {
     }
 
     /// Every run for one change, oldest attempt first.
+    /// Record the engine process this run spawned (SPEC §12.1).
+    ///
+    /// Written while the process is alive and cleared when it finishes, so a
+    /// non-NULL pid on a run that is no longer active is exactly the orphan
+    /// `kill --hard` looks for. Stored rather than held in memory because a crash
+    /// is how orphans happen, and an in-memory list dies with the daemon that
+    /// would have needed it.
+    pub async fn set_engine_pid(&self, id: RunId, pid: Option<u32>) -> Result<()> {
+        let raw = id.get();
+        let pid = pid.map(i64::from);
+        let affected = sqlx::query!("UPDATE run SET engine_pid = ? WHERE id = ?", pid, raw)
+            .execute(self.pool)
+            .await?
+            .rows_affected();
+
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "run",
+                key: format!("id={raw}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Pids recorded against runs that are no longer active.
+    ///
+    /// The orphan candidates: a process rev-local started, on a run that has since
+    /// finished, failed or been cancelled. Whether they are still alive is the
+    /// caller's question — this only says which pids to ask about.
+    pub async fn orphan_pids(&self) -> Result<Vec<(RunId, u32)>> {
+        let rows = sqlx::query!(
+            "SELECT id, engine_pid FROM run
+             WHERE engine_pid IS NOT NULL
+               AND status IN ('done','failed','cancelled','skipped')
+             ORDER BY id"
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                row.engine_pid
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .map(|pid| (RunId::new(row.id), pid))
+            })
+            .collect())
+    }
+
+    /// Every run belonging to one change, in creation order.
     pub async fn list_for_change(&self, change_id: ChangeId) -> Result<Vec<Run>> {
         let raw = change_id.get();
         let rows = sqlx::query!(

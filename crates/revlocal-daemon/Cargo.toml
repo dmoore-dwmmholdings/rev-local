@@ -25,6 +25,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 
+# `nix` is a Unix API crate; on Windows it compiles to almost nothing.
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["signal"] }
+
 [dev-dependencies]
 sqlx = { workspace = true }
 revlocal-mcp = { workspace = true }
