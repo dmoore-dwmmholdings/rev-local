@@ -6,11 +6,16 @@
 //! version we do not, and may name its tools whatever it likes. None of those is
 //! allowed to take the daemon down with it.
 
+pub mod capability;
 pub mod discovery;
 pub mod http;
 pub mod protocol;
 pub mod stdio;
 
+pub use capability::{
+    resolve, Binding, CapabilitySpec, MappingError, RenderContext, SpecError, TargetMapping,
+    TargetSpec, Unmapped,
+};
 pub use discovery::{
     Discovery, DiscoveryError, HealthReport, McpClient, ServerHealth, ServerState,
 };

@@ -46,6 +46,33 @@ revlocal review --repo . --rev HEAD --json | jq '.findings[].severity'
 Output is byte-stable: the same change and the same engine output produce the same
 document, including finding order and fingerprints.
 
+## Publish targets and capability mapping
+
+```
+revlocal targets list --config <PATH> [--json]
+```
+
+Contacts every MCP server named in your config, discovers the tools each one
+actually exposes, and reports which of your configured capabilities bound to which
+tool — and which did not bind at all.
+
+```
+$ revlocal targets list --config ~/.config/rev-local/config.toml
+servers:
+  andare: 5 tools, 0 capabilities mapped, 0 unmapped
+targets:
+  andare → andare: 1 mapped, 1 unmapped
+    create_issue → create_issue
+    `upload_attachment` is unmapped: none of [upload_attachment, add_attachment] is exposed by the server, which has [create_issue, set_issue_status, get_page, update_page, create_page]
+```
+
+Capabilities are bound by name from a candidate list, so a server that calls the
+operation something else still works as long as the name is listed. Nothing is
+guessed: a capability that matches no candidate is reported, never bound to a
+tool that merely looks similar.
+
+This command reads configuration and calls no tools.
+
 ## The local database
 
 ```
