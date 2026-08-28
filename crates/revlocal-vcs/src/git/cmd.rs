@@ -590,19 +590,24 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("write: {e}"));
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .unwrap_or_else(|e| panic!("chmod: {e}"));
-        }
-
+        // Run the script through `bash` rather than exec'ing it directly, and no
+        // chmod. Exec'ing a file this process has just written races with any
+        // other test thread that forks in the window before the write's descriptor
+        // is out of every child's table: the kernel answers ETXTBSY, and the test
+        // fails as `ExecutableFileBusy` for reasons that have nothing to do with
+        // what it is testing. It failed exactly that way on CI. `bash` only
+        // *opens* the file, which ETXTBSY does not apply to.
+        //
+        // The process shape is unchanged: bash is the child, the backgrounded
+        // subshell is the grandchild, which is what the assertions are about.
         let runner = GitRunner::new()
-            .with_program(&script)
+            .with_program("bash")
             .with_timeout(Duration::from_millis(700));
 
         let started = std::time::Instant::now();
-        let result = runner.run(dir.path(), &[] as &[&str]).await;
+        let result = runner
+            .run(dir.path(), &[script.display().to_string().as_str()])
+            .await;
         let elapsed = started.elapsed();
 
         assert!(

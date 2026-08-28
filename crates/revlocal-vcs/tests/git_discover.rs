@@ -67,7 +67,9 @@ mod git_discover {
             .map_err(|e| format!("build.sh: {e}"))?;
         if !output.status.success() {
             return Err(format!(
-                "build.sh failed: {}",
+                "build.sh failed (exit {}):\nstdout: {}\nstderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
