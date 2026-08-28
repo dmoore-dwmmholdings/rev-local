@@ -19,16 +19,9 @@ mod runners {
     use revlocal_engine::template::InvocationTemplate;
     use revlocal_engine::CliEngine;
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
-
-    fn workspace_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-    }
 
     /// A runner pointed at the fixture engine, in `mode`.
     ///

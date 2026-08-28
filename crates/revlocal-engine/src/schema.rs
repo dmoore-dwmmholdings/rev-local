@@ -616,7 +616,6 @@ mod tests {
         //
         // So this runs the fixture and validates what it actually wrote, rather than
         // grepping its source for shapes that look right.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let out = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
 
         let status = std::process::Command::new(crate::mock_engine_program())
@@ -650,7 +649,6 @@ mod tests {
         // The fixture has a mode built specifically for §8.3's "drop individually,
         // keep the run" behaviour. If that mode stopped producing invalid findings,
         // the drop path would silently stop being tested anywhere.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let out = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
 
         let status = std::process::Command::new(crate::mock_engine_program())
