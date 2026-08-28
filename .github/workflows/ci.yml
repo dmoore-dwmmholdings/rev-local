@@ -49,11 +49,28 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install subversion
 
+      # Chocolatey edits the *machine* PATH, which a later step's shell does not
+      # inherit — and the package's own layout is not guessable: `choco install svn`
+      # is win32svn, which lands in "Program Files (x86)\Subversion", not the
+      # SlikSVN path this step used to assume. So find the binary and put its real
+      # directory on GITHUB_PATH, failing loudly if it is not there at all.
       - name: Install Subversion (Windows)
         if: runner.os == 'Windows'
         run: |
           choco install svn --no-progress -y
-          echo "C:\Program Files\SlikSvn\bin" >> "$GITHUB_PATH"
+          svn_dir=""
+          for root in "/c/Program Files (x86)/Subversion/bin" "/c/Program Files/Subversion/bin" "/c/Program Files/SlikSvn/bin"; do
+            if [ -x "$root/svn.exe" ]; then svn_dir="$root"; break; fi
+          done
+          if [ -z "$svn_dir" ]; then
+            svn_dir="$(dirname "$(find '/c/Program Files' '/c/Program Files (x86)' -name svn.exe -print -quit 2>/dev/null)")"
+          fi
+          if [ ! -x "$svn_dir/svn.exe" ]; then
+            echo "svn.exe not found after choco install svn" >&2
+            exit 1
+          fi
+          echo "found svn at $svn_dir"
+          cygpath -w "$svn_dir" >> "$GITHUB_PATH"
 
       - name: Verify svn is on PATH
         run: svn --version --quiet

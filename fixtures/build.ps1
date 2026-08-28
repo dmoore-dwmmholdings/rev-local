@@ -61,10 +61,17 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 # so every generated file would differ from the bash build and every SHA would
 # change. Copied files are safe because Copy-Item moves bytes; only files this
 # script GENERATES need this.
+# The path is resolved against PowerShell's *current location* before it reaches
+# .NET. Push-Location moves the PowerShell provider location and leaves the
+# process's working directory where it was, so a relative path handed straight to
+# [System.IO.File] resolves against the directory the script was launched from —
+# the repository root — and the write fails, or worse, succeeds in the wrong place.
+# Every caller here passes a path relative to the fixture being built.
 function Write-LfFile {
     param([string] $Path, [string] $Text)
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     $normalized = $Text -replace "`r`n", "`n"
-    [System.IO.File]::WriteAllText($Path, $normalized, $Utf8NoBom)
+    [System.IO.File]::WriteAllText($full, $normalized, $Utf8NoBom)
 }
 
 function Set-CommitTime {
