@@ -1816,6 +1816,7 @@ dependencies = [
  "handlebars",
  "revlocal-core",
  "revlocal-engine",
+ "revlocal-mcp",
  "revlocal-store",
  "revlocal-vcs",
  "serde",

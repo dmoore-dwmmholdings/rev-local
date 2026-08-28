@@ -24,7 +24,7 @@ mod fallback_ladder {
     /// Returns `Result`; helpers are not `#[test]` fns (ADR 0003).
     fn run_fixture(mode: &str) -> Result<(TempDir, String), String> {
         let out = TempDir::new().map_err(|e| format!("temp dir: {e}"))?;
-        let output = std::process::Command::new(workspace_root().join("fixtures/mock-engine/run"))
+        let output = std::process::Command::new(revlocal_engine::mock_engine_program())
             .env("MOCK_ENGINE_MODE", mode)
             .env("REVLOCAL_OUT", out.path())
             .output()

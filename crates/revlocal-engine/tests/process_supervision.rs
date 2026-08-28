@@ -26,10 +26,7 @@ mod process_supervision {
     /// An invocation of the fixture engine in `mode`.
     fn fixture(mode: &str, out: &std::path::Path) -> (Invocation, BTreeMap<String, String>) {
         let invocation = Invocation {
-            program: workspace_root()
-                .join("fixtures/mock-engine/run")
-                .display()
-                .to_string(),
+            program: revlocal_engine::mock_engine_program().display().to_string(),
             args: Vec::new(),
             stdin: None,
         };
