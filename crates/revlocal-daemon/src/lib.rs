@@ -2,6 +2,7 @@
 //!
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
+pub mod approvals;
 pub mod autonomy;
 pub mod depth;
 pub mod gating;
@@ -12,6 +13,11 @@ pub mod prompt;
 pub mod state_machine;
 pub mod truncation;
 
+pub use approvals::{
+    decision_detail, expires_at, expiry_detail, payload_digest, payload_matches_approval,
+    verify_before_send, ApprovalError, Decision, InboxItem, AUDIT_KIND_EXPIRED,
+    DEFAULT_APPROVAL_TTL_HOURS, REASON_EXPIRED,
+};
 pub use autonomy::{
     disposition, mode_change_detail, reviews_run, widens, Disposition, AUDIT_KIND_MODE_CHANGED,
 };

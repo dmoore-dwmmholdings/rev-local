@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT decision_reason FROM publish_action WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "decision_reason",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "publish_action",
+            "name": "decision_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8f2ea62151c00cd3e3100d14df2fc4cc18ce1d9583b51dbd5f4763e344c1dd1b"
+}

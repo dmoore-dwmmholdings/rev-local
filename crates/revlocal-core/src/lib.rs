@@ -55,7 +55,7 @@ pub use error::{DomainError, ParseEnumError, Result};
 pub use finding::{Finding, Suppression, LOW_CONFIDENCE_THRESHOLD, TITLE_MAX_CHARS};
 pub use fingerprint::{fingerprint, normalize_path, normalize_title, FINGERPRINT_HEX_LEN};
 pub use ids::{AuditId, ChangeId, FindingId, PublishActionId, RepoId, RunId, SuppressionId};
-pub use publish::{CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
+pub use publish::{payload_digest, CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
 pub use redact::{is_sensitive_field, redact, redact_field, REDACTED};
 pub use repo::{Cursor, Repo};
 pub use risk::{

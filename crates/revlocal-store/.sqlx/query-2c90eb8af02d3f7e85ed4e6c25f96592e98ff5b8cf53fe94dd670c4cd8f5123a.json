@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE publish_action\n             SET status = ?, approved_payload_digest = ?\n             WHERE id = ? AND status = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2c90eb8af02d3f7e85ed4e6c25f96592e98ff5b8cf53fe94dd670c4cd8f5123a"
+}

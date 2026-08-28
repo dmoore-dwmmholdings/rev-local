@@ -29,7 +29,7 @@ mod repos;
 
 pub use changes::{ChangeStore, FindingStore, RunStore};
 pub use error::{Result, StoreError};
-pub use publish::{AuditStore, BudgetLedgerStore, PublishActionStore};
+pub use publish::{AuditStore, BudgetLedgerStore, PublishActionStore, SuppressionStore};
 pub use repos::{CursorStore, RepoStore};
 
 /// A pool of connections to one rev-local database.
