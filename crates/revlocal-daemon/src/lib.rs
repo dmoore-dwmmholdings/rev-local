@@ -18,6 +18,7 @@ pub mod state_machine;
 pub mod trigger_receiver;
 pub mod triggers;
 pub mod truncation;
+pub mod webhook;
 
 pub use approvals::{
     decision_detail, expires_at, expiry_detail, payload_digest, payload_matches_approval,

@@ -10,6 +10,8 @@ description = "Scheduler, trigger sources, run orchestrator and budget guard."
 
 [dependencies]
 axum = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
 chrono = { workspace = true }
 globset = { workspace = true }
 handlebars = { workspace = true }

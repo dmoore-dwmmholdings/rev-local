@@ -66,6 +66,10 @@ serde_norway = "0.9"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "chrono"] }
 tempfile = "3"   # YAML: maintained fork of the deprecated serde_yaml
 sha2 = "0.10"
+# GitHub signs webhook deliveries with HMAC-SHA256 (§7.3). Hand-rolling HMAC is
+# the kind of "it's only twenty lines" that gets the ipad/opad padding subtly
+# wrong and still passes a round-trip test against itself.
+hmac = "0.12"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
