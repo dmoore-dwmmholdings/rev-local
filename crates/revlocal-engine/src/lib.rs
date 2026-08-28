@@ -33,7 +33,7 @@ pub use schema::{
 };
 pub use supervise::{
     filtered_env, is_denied, supervise, timeout_for, withheld_auth_remediation,
-    withheld_auth_variables, KillReason, Supervised, GRACE,
+    withheld_auth_variables, KillReason, Supervised, CANCEL_GRACE, GRACE,
 };
 pub use template::{Invocation, InvocationTemplate, RenderContext, TemplateError, PLACEHOLDERS};
 

@@ -42,6 +42,19 @@ pub const fn timeout_for(depth: Depth) -> Duration {
 /// How long a process gets between SIGTERM and SIGKILL (SPEC §8.5).
 pub const GRACE: Duration = Duration::from_secs(5);
 
+/// How long a **cancelled** engine gets before SIGKILL (SPEC §12.1, ADR 0030).
+///
+/// Shorter than [`GRACE`] on purpose. A timeout is "you have had long enough,
+/// finish up", and ADR 0017 kept five seconds because a CLI cut off mid-write
+/// loses a review whose tokens were already spent. A kill switch is a person
+/// saying *stop now*, and they have already accepted losing the run — spending
+/// five seconds of their emergency budget on a courtesy they explicitly declined
+/// is the wrong trade, and §12.1 gives the whole cancellation three seconds.
+///
+/// Two seconds still lets a well-behaved engine flush; it only shortens the wait
+/// for one that is ignoring SIGTERM, which is the case the budget is about.
+pub const CANCEL_GRACE: Duration = Duration::from_secs(2);
+
 /// Environment variables never passed to an engine (SPEC §8.5).
 ///
 /// Exact names, plus the suffix rules below. A review engine has no business
@@ -243,7 +256,11 @@ pub async fn supervise(
         () = cancel.cancelled() => KillReason::Cancelled,
     };
 
-    terminate(&mut child, pid).await;
+    let grace = match killed {
+        KillReason::Timeout => GRACE,
+        KillReason::Cancelled => CANCEL_GRACE,
+    };
+    terminate(&mut child, pid, grace).await;
 
     finish(
         stdout_reader,
@@ -256,18 +273,19 @@ pub async fn supervise(
     .await
 }
 
-/// SIGTERM, five seconds of grace, then SIGKILL — to the whole group.
+/// SIGTERM, `grace`, then SIGKILL — to the whole group.
 ///
 /// The grace period is not politeness for its own sake: a CLI given no chance to
-/// flush `result.json` loses a review whose tokens were already spent.
-async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>) {
+/// flush `result.json` loses a review whose tokens were already spent. How much
+/// of it a kill gets depends on why: see [`GRACE`] and [`CANCEL_GRACE`].
+async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>, grace: Duration) {
     #[cfg(unix)]
     if let Some(pid) = pid {
         signal_group(pid, nix::sys::signal::Signal::SIGTERM);
 
         // Poll rather than `wait()`, so the grace period is bounded even if the
         // child ignores the signal — which the fixture's `hang` mode does on purpose.
-        let deadline = Instant::now() + GRACE;
+        let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
             if matches!(child.try_wait(), Ok(Some(_))) {
                 return;

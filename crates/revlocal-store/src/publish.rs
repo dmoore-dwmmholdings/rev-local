@@ -474,6 +474,64 @@ impl<'a> PublishActionStore<'a> {
     }
 }
 
+/// Operator state that is not configuration (SPEC §12.1).
+///
+/// The kill switch lives here rather than in `config.toml` for ADR 0015's reason:
+/// config is what the user wrote, this is what rev-local was told to do at
+/// runtime, and a report has to be able to say which it is looking at.
+#[derive(Debug, Clone)]
+pub struct SettingStore<'a> {
+    pool: &'a Pool,
+}
+
+/// The key the kill switch is stored under.
+pub const SETTING_PAUSED: &str = "paused";
+
+impl<'a> SettingStore<'a> {
+    /// Open the repository over `pool`.
+    pub const fn new(pool: &'a Pool) -> Self {
+        Self { pool }
+    }
+
+    /// Read a setting.
+    pub async fn get(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query!("SELECT value FROM setting WHERE key = ?", key)
+            .fetch_optional(self.pool)
+            .await?;
+        Ok(row.map(|r| r.value))
+    }
+
+    /// Write a setting.
+    pub async fn set(&self, key: &str, value: &str, at: Timestamp) -> Result<()> {
+        let when = format_time(at);
+        sqlx::query!(
+            "INSERT INTO setting (key, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                            updated_at = excluded.updated_at",
+            key,
+            value,
+            when
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Whether the kill switch is engaged.
+    ///
+    /// Absent means running. A fresh install is not paused, and defaulting the
+    /// other way would make a first start look like somebody had stopped it.
+    pub async fn is_paused(&self) -> Result<bool> {
+        Ok(self.get(SETTING_PAUSED).await?.as_deref() == Some("true"))
+    }
+
+    /// Engage or release the kill switch.
+    pub async fn set_paused(&self, paused: bool, at: Timestamp) -> Result<()> {
+        self.set(SETTING_PAUSED, if paused { "true" } else { "false" }, at)
+            .await
+    }
+}
+
 /// The `suppression` table (SPEC §5, §12.4's reject-and-suppress).
 #[derive(Debug, Clone)]
 pub struct SuppressionStore<'a> {

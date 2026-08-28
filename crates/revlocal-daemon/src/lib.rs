@@ -6,6 +6,7 @@ pub mod approvals;
 pub mod autonomy;
 pub mod depth;
 pub mod gating;
+pub mod kill_switch;
 pub mod logging;
 pub mod normalize;
 pub mod pipeline;
@@ -22,6 +23,10 @@ pub use autonomy::{
     disposition, mode_change_detail, reviews_run, widens, Disposition, AUDIT_KIND_MODE_CHANGED,
 };
 pub use gating::{gate, GateContext, GatedAction};
+pub use kill_switch::{
+    cancels, may_dispatch, process_is_alive, reap, switch_detail, KillSwitch, PauseReport,
+    AUDIT_KIND_PAUSED, AUDIT_KIND_RESUMED, CANCELLABLE,
+};
 pub use logging::{
     init as init_logging, LoggingError, LoggingHandle, RedactingJsonLayer, RedactingVisitor,
 };
