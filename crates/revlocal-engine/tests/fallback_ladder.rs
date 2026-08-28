@@ -9,15 +9,9 @@ mod fallback_ladder {
     use revlocal_core::{EngineKind, Usage, Verdict};
     use revlocal_engine::ladder::{resolve, RepairPass, RepairResult, Rung};
     use revlocal_engine::EngineError;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
-
-    fn workspace_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-    }
 
     /// Run the fixture engine in `mode`, returning its out dir and stdout.
     ///
