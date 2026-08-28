@@ -136,6 +136,12 @@ pub struct PagePayload {
     pub section: String,
     /// Whether to publish it (§11.5: high risk, so opt-in).
     pub publish: bool,
+    /// The Andare issue to cross-link, when one was actually filed.
+    ///
+    /// The key comes from the Andare target's receipt (RL-705), never from
+    /// composing one: a guessed key links the review to somebody else's ticket,
+    /// and the reader has no way to tell it is wrong.
+    pub issue_key: Option<String>,
 }
 
 /// The Trama operations this target needs.
@@ -166,6 +172,14 @@ pub trait TramaWriter: Send + Sync {
 
     /// Publish a page (§11.5: only when `trama_publish` is set).
     async fn publish_page(&self, space: &str, title: &str) -> Result<(), PublishError>;
+
+    /// Cross-link a page to an issue (§11.5, RL-709).
+    async fn link_to_issue(
+        &self,
+        space: &str,
+        title: &str,
+        issue_key: &str,
+    ) -> Result<(), PublishError>;
 }
 
 /// The Trama publish target.
@@ -226,6 +240,26 @@ impl<W: TramaWriter> TramaTarget<W> {
             self.writer
                 .publish_page(&payload.space, &payload.title)
                 .await?;
+        }
+
+        if let Some(key) = &payload.issue_key {
+            // §11.5's cross-link is a convenience, not the deliverable. The review
+            // page exists and the issue exists; a link that did not attach leaves
+            // both readable and costs a click. Failing the run over it would throw
+            // away work that succeeded.
+            if let Err(error) = self
+                .writer
+                .link_to_issue(&payload.space, &payload.title, key)
+                .await
+            {
+                tracing::warn!(
+                    issue = %key,
+                    page = %payload.title,
+                    %error,
+                    "could not cross-link the review page to its issue; the page and \
+                     the issue are both fine"
+                );
+            }
         }
 
         Ok(reference)
@@ -301,6 +335,8 @@ pub struct TramaToolNames {
     pub update_page: String,
     /// Publish a page.
     pub publish_page: String,
+    /// Cross-link a page to an issue.
+    pub link_to_issue: String,
 }
 
 impl Default for TramaToolNames {
@@ -310,6 +346,7 @@ impl Default for TramaToolNames {
             create_page: "create_page".to_owned(),
             update_page: "update_page".to_owned(),
             publish_page: "publish_page".to_owned(),
+            link_to_issue: "link_to_issue".to_owned(),
         }
     }
 }
@@ -434,10 +471,101 @@ impl TramaWriter for McpTramaWriter {
         .await
         .map(|_| ())
     }
+
+    async fn link_to_issue(
+        &self,
+        space: &str,
+        title: &str,
+        issue_key: &str,
+    ) -> Result<(), PublishError> {
+        self.call(
+            &self.tools.link_to_issue,
+            serde_json::json!({ "space": space, "title": title, "issue": issue_key }),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 /// Whether a refusal means the page does not exist.
 fn is_missing_page(detail: &str) -> bool {
     let lower = detail.to_lowercase();
     lower.contains("no such page") || lower.contains("not found")
+}
+
+// --- the rolling review index (RL-708, §11.5) ------------------------------
+
+/// §11.5's default: the last 50 reviews.
+pub const DEFAULT_INDEX_LIMIT: usize = 50;
+
+/// One review, as the index lists it.
+///
+/// Read from SQLite, which §11.5 makes the source of truth — Trama is a
+/// projection of it. That is what makes the index safe to lose or hand-edit: it
+/// is regenerated whole every time, so a deleted page comes back complete and a
+/// hand-edited one is corrected rather than merged with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexEntry {
+    /// The review page's title, used as the wikilink target.
+    pub page_title: String,
+    /// The change reviewed — a PR URL, a commit, `r1234`.
+    pub change_ref: Option<String>,
+    /// What the review concluded.
+    pub verdict: String,
+    /// How many findings it recorded.
+    pub findings: usize,
+    /// When, rendered by the caller so this stays free of a clock.
+    pub reviewed_at: String,
+}
+
+/// The whole index body, regenerated from `entries`.
+///
+/// `entries` are expected newest-first; the caller orders them, because SQLite
+/// already can and re-sorting here would be a second opinion about "recent".
+pub fn render_index(repo: &str, entries: &[IndexEntry], limit: usize) -> String {
+    let mut body = format!("# {repo} reviews\n\n");
+
+    let shown = entries.len().min(limit);
+    // §18: where the system caps, it says so. An index silently showing 50 of 700
+    // reads as "there have been 50 reviews".
+    let _ = std::fmt::Write::write_fmt(
+        &mut body,
+        format_args!(
+            "Showing the {limit} most recent reviews ({shown} of {total} recorded). \
+             Regenerated from rev-local's database on every run — edits here are \
+             replaced.\n\n",
+            total = entries.len()
+        ),
+    );
+
+    if entries.is_empty() {
+        body.push_str("No reviews yet.\n");
+        return body;
+    }
+
+    body.push_str("| Reviewed | Change | Verdict | Findings | Review |\n");
+    body.push_str("|---|---|---|---|---|\n");
+
+    for entry in entries.iter().take(limit) {
+        let change = entry.change_ref.as_deref().unwrap_or("—");
+        let _ = std::fmt::Write::write_fmt(
+            &mut body,
+            format_args!(
+                "| {} | {} | {} | {} | [[{}]] |\n",
+                entry.reviewed_at, change, entry.verdict, entry.findings, entry.page_title
+            ),
+        );
+    }
+
+    body
+}
+
+/// The link a review page carries back to its index (§11.5).
+pub fn index_backlink(repo: &str) -> String {
+    format!("[[{}]]", index_page_title(repo))
+}
+
+/// A review page's section, including the backlink §11.5 requires.
+pub fn review_page_section(repo: &str, body: &str) -> String {
+    format!("{}\n\nPart of {}\n", body.trim_end(), index_backlink(repo))
 }

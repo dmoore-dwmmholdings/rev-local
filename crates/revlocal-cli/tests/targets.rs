@@ -24,6 +24,11 @@ fn node_is_installed() -> bool {
 
 /// A config naming the mock server and one target with a capability that binds
 /// and one that cannot.
+///
+/// The script path goes in a TOML **literal** string. A Windows path is full of
+/// backslashes, and `\a` or `\r` in a basic string is an invalid escape — which
+/// is how this presented on the Windows CI leg, as a config the CLI could not
+/// parse rather than anything to do with targets.
 fn config_text() -> String {
     let script = workspace_root().join("fixtures/mock-mcp/server.js");
     format!(
@@ -31,7 +36,7 @@ fn config_text() -> String {
 [mcpServers.andare]
 type = "stdio"
 command = "node"
-args = ["{script}"]
+args = ['{script}']
 
 [targets.andare]
 mcp_server = "andare"
