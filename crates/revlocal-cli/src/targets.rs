@@ -14,8 +14,8 @@ use std::path::Path;
 
 use revlocal_core::{GlobalConfig, McpServerSettings};
 use revlocal_mcp::{
-    resolve, Discovery, HttpClient, HttpEndpoint, NoSecrets, ServerCommand, ServerState,
-    StdioClient, TargetSpec,
+    parse_arg, resolve, Discovery, HttpClient, HttpEndpoint, NoSecrets, Override, Overrides,
+    RenderContext, ServerCommand, ServerState, StdioClient, TargetSpec, Tool,
 };
 
 /// Why `targets list` could not report.
@@ -74,6 +74,39 @@ pub enum TargetsCommandError {
     /// The report could not be serialized.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// An override could not be saved, loaded or validated.
+    #[error(transparent)]
+    Override(#[from] revlocal_mcp::OverrideError),
+
+    /// The config names no such target.
+    #[error("no target `{target}` in your config\n  try: one of [{}]", known.join(", "))]
+    NoSuchTarget {
+        /// What was asked for.
+        target: String,
+        /// What is configured.
+        known: Vec<String>,
+    },
+
+    /// A server could not be contacted, or is not configured.
+    #[error("{0}")]
+    Discovery(String),
+
+    /// An `--arg` was not `key=value`.
+    #[error("`{text}` is not `key=value`\n  try: --arg summary={{finding.title}}")]
+    BadArg {
+        /// What was passed.
+        text: String,
+    },
+
+    /// A dry run produced at least one capability that would not render.
+    #[error("{failed} of {total} mapped capabilities would not render")]
+    DryRunFailed {
+        /// How many failed.
+        failed: usize,
+        /// How many were tried.
+        total: usize,
+    },
 }
 
 /// Build one client from a `[mcpServers.<id>]` entry.
@@ -264,4 +297,194 @@ fn as_json(reports: &[Report]) -> serde_json::Value {
             })
             .collect::<Vec<_>>()
     })
+}
+
+/// Where overrides are kept when `--overrides` is not given: beside the config.
+///
+/// Predictable rather than clever. A user who moves their config moves the
+/// overrides that go with it, and a test can point both at a temp directory.
+pub fn default_overrides_path(config_path: &Path) -> std::path::PathBuf {
+    config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("target-overrides.json")
+}
+
+/// Discover one target's server tools, for `map` and `test`.
+async fn tools_for(
+    config: &GlobalConfig,
+    target: &str,
+) -> Result<(TargetSpec, Vec<Tool>), TargetsCommandError> {
+    let table = config
+        .targets
+        .get(target)
+        .ok_or_else(|| TargetsCommandError::NoSuchTarget {
+            target: target.to_owned(),
+            known: config.targets.keys().cloned().collect(),
+        })?;
+    let spec = TargetSpec::from_toml(target, table)?;
+
+    let mut discovery = Discovery::new();
+    for (id, settings) in &config.mcp_servers {
+        match client(id, settings)? {
+            Client::Stdio(command) => discovery.insert(StdioClient::new(command)),
+            Client::Http(endpoint) => discovery.insert(HttpClient::new(endpoint)?),
+        }
+    }
+
+    let tools = match discovery.tools(&spec.mcp_server, &NoSecrets).await {
+        Some(Ok(tools)) => tools.to_vec(),
+        Some(Err(error)) => return Err(TargetsCommandError::Discovery(error.to_string())),
+        None => {
+            return Err(TargetsCommandError::Discovery(format!(
+                "no MCP server `{}` is configured",
+                spec.mcp_server
+            )))
+        }
+    };
+
+    Ok((spec, tools))
+}
+
+/// Read the config file.
+fn read_config(config_path: &Path) -> Result<GlobalConfig, TargetsCommandError> {
+    let text =
+        std::fs::read_to_string(config_path).map_err(|source| TargetsCommandError::Unreadable {
+            path: config_path.display().to_string(),
+            source,
+        })?;
+    let (config, warnings) =
+        GlobalConfig::parse(&text).map_err(|source| TargetsCommandError::Malformed {
+            path: config_path.display().to_string(),
+            source,
+        })?;
+    for warning in &warnings {
+        eprintln!("revlocal: {}", warning.message());
+    }
+    Ok(config)
+}
+
+/// Run `revlocal targets map`.
+///
+/// The override is checked against the tool's schema **before** it is written, so
+/// a typo'd tool name or a template missing a required field is refused here
+/// rather than at the first publish that needed it (RL-605 criterion 2).
+pub async fn map(
+    config_path: &Path,
+    overrides_path: Option<&Path>,
+    target: &str,
+    capability: &str,
+    tool: &str,
+    args: &[String],
+) -> Result<(), TargetsCommandError> {
+    let config = read_config(config_path)?;
+    let (_spec, tools) = tools_for(&config, target).await?;
+
+    let mut template = serde_json::Map::new();
+    for text in args {
+        let (name, value) =
+            parse_arg(text).ok_or_else(|| TargetsCommandError::BadArg { text: text.clone() })?;
+        template.insert(name, value);
+    }
+
+    let entry = Override {
+        target: target.to_owned(),
+        capability: capability.to_owned(),
+        tool: tool.to_owned(),
+        args: serde_json::Value::Object(template),
+    };
+    entry.check_against(&tools)?;
+
+    let path = overrides_path.map_or_else(
+        || default_overrides_path(config_path),
+        std::path::Path::to_path_buf,
+    );
+    let mut overrides = Overrides::load(&path)?;
+    overrides.set(entry);
+    overrides.save(&path)?;
+
+    println!(
+        "revlocal: {target}/{capability} → {tool} (saved to {})",
+        path.display()
+    );
+    Ok(())
+}
+
+/// A representative context for a dry run.
+///
+/// Fixed rather than drawn from the database: `targets test` answers "would this
+/// template render at all", and a real finding would make the answer depend on
+/// which finding happened to be lying around.
+fn sample_context() -> RenderContext {
+    RenderContext::new(serde_json::json!({
+        "finding": {
+            "title": "Sample finding for a dry run",
+            "body_md": "This is a dry run. No tool was called.",
+            "category": "correctness",
+            "severity": "high",
+            "line": 1,
+            "file": "src/main.rs",
+        },
+        "repo": { "name": "sample", "config": { "andare_project": "SAMPLE" } },
+        "issue_ref": "SAMPLE-1",
+        "status": "In Review",
+        "query": "text ~ \"sample\"",
+        "comment": { "body_md": "Sample comment." },
+    }))
+}
+
+/// Run `revlocal targets test` — render every mapped capability, call nothing.
+pub async fn test(
+    config_path: &Path,
+    overrides_path: Option<&Path>,
+    target: &str,
+) -> Result<(), TargetsCommandError> {
+    let config = read_config(config_path)?;
+    let (spec, tools) = tools_for(&config, target).await?;
+
+    let mut mapping = resolve(&spec, &tools);
+    let path = overrides_path.map_or_else(
+        || default_overrides_path(config_path),
+        std::path::Path::to_path_buf,
+    );
+    Overrides::load(&path)?.apply(&mut mapping, &tools);
+
+    let context = sample_context();
+    let mut failed = 0;
+
+    println!("{}", mapping.summary_line());
+    for binding in &mapping.bound {
+        let source = if binding.from_override {
+            " (override)"
+        } else {
+            ""
+        };
+        match binding.render(&context) {
+            Ok(payload) => println!(
+                "  ok   {} → {}{source}: {payload}",
+                binding.capability, binding.tool
+            ),
+            Err(error) => {
+                failed += 1;
+                println!(
+                    "  FAIL {} → {}{source}: {error}",
+                    binding.capability, binding.tool
+                );
+            }
+        }
+    }
+    for unmapped in &mapping.unmapped {
+        println!("  --   {}", unmapped.explain());
+    }
+
+    println!("revlocal: dry run only — no tool was called");
+
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(TargetsCommandError::DryRunFailed {
+            failed,
+            total: mapping.bound.len(),
+        })
+    }
 }

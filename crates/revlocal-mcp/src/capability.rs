@@ -123,6 +123,51 @@ impl TargetSpec {
     }
 }
 
+/// Built-in candidate lists for targets rev-local knows about (§11.2's "built-in
+/// profile per known target").
+///
+/// The names come from a live server's `tools/list`, recorded in ADR 0028, and the
+/// real name is listed first because candidate order is priority order. The
+/// alternatives after it are what a differently-named server might call the same
+/// operation — which is the whole point: a built-in profile is a starting guess,
+/// not a requirement.
+///
+/// `None` for a target with no built-in profile; the user's config supplies it.
+pub fn builtin_target(id: &str) -> Option<TargetSpec> {
+    let toml_text = match id {
+        "andare" => ANDARE_PROFILE,
+        _ => return None,
+    };
+
+    // Parsed through the same path as user config, so a malformed built-in fails
+    // the same way a malformed config would — and the test that parses these is
+    // testing what production parses.
+    let table: toml::Value = toml_text.parse().ok()?;
+    TargetSpec::from_toml(id, &table).ok()
+}
+
+/// Andare's profile. Argument names are Andare's own: `summary` not `title`,
+/// `description` not `body` (ADR 0028).
+const ANDARE_PROFILE: &str = r#"
+mcp_server = "andare"
+
+[map.create_issue]
+tool_candidates = ["create_issue", "create_work_item", "issue_create", "create_ticket"]
+args = { project = "{repo.config.andare_project}", summary = "{finding.title}", description = "{finding.body_md}" }
+
+[map.set_status]
+tool_candidates = ["set_issue_status", "update_issue", "transition_issue"]
+args = { key = "{issue_ref}", status = "{status}" }
+
+[map.comment]
+tool_candidates = ["comment_on_issue", "add_comment", "create_comment"]
+args = { key = "{issue_ref}", body = "{comment.body_md}" }
+
+[map.search]
+tool_candidates = ["search_issues", "search", "find_issues"]
+args = { project = "{repo.config.andare_project}", aql = "{query}" }
+"#;
+
 /// A `[targets.*]` table this module could not read.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SpecError {
@@ -192,6 +237,13 @@ pub struct Binding {
     pub schema: Value,
     /// The argument template.
     pub args: Value,
+    /// Whether this binding came from a manual override rather than from
+    /// resolution (RL-605).
+    ///
+    /// §11.2 needs the two to be distinguishable in the UI, and ADR 0015's rule
+    /// applies: "you told us to" and "we worked it out" are different answers to
+    /// the question a report exists to answer.
+    pub from_override: bool,
 }
 
 /// Why a capability could not be bound.
@@ -279,6 +331,7 @@ pub fn resolve(spec: &TargetSpec, tools: &[Tool]) -> TargetMapping {
                 candidate_index,
                 schema: tool.input_schema.clone(),
                 args: capability.args.clone(),
+                from_override: false,
             }),
             None => unmapped.push(Unmapped {
                 capability: capability.name.clone(),

@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use revlocal_mcp::{
-    resolve, Discovery, MappingError, NoSecrets, RenderContext, ServerCommand, SpecError,
-    StdioClient, TargetSpec, Tool,
+    builtin_target, resolve, Discovery, MappingError, NoSecrets, RenderContext, ServerCommand,
+    SpecError, StdioClient, TargetSpec, Tool,
 };
 use serde_json::json;
 
@@ -430,4 +430,82 @@ fn tool(name: &str, schema: serde_json::Value) -> Tool {
         description: String::new(),
         input_schema: schema,
     }
+}
+
+// --- built-in profiles (RL-606, ADR 0028) ---------------------------------
+
+#[test]
+fn mapping_the_builtin_andare_profile_parses_and_uses_andare_s_own_argument_names() {
+    let spec = builtin_target("andare").expect("andare has a built-in profile");
+
+    assert_eq!(spec.mcp_server, "andare");
+    let names: Vec<&str> = spec.capabilities.iter().map(|c| c.name.as_str()).collect();
+    for expected in ["comment", "create_issue", "search", "set_status"] {
+        assert!(
+            names.contains(&expected),
+            "{expected} missing from {names:?}"
+        );
+    }
+
+    let create = spec
+        .capabilities
+        .iter()
+        .find(|c| c.name == "create_issue")
+        .expect("create_issue");
+
+    // ADR 0028: Andare takes `summary`/`description`, not the `title`/`body` of
+    // SPEC §11.2's illustrative example. Copying the example verbatim would fail
+    // schema validation, which is the check earning itself.
+    assert!(create.args.get("summary").is_some(), "{:?}", create.args);
+    assert!(
+        create.args.get("description").is_some(),
+        "{:?}",
+        create.args
+    );
+    assert!(create.args.get("title").is_none(), "{:?}", create.args);
+    assert!(create.args.get("body").is_none(), "{:?}", create.args);
+
+    assert_eq!(
+        create.tool_candidates.first().map(String::as_str),
+        Some("create_issue"),
+        "the real name is listed first; candidate order is priority order"
+    );
+
+    let status = spec
+        .capabilities
+        .iter()
+        .find(|c| c.name == "set_status")
+        .expect("set_status");
+    assert_eq!(
+        status.tool_candidates.first().map(String::as_str),
+        Some("set_issue_status"),
+        "Andare has both `set_issue_status` and `update_issue`, and `update_issue` \
+         does not accept a status — so the order here is load-bearing"
+    );
+}
+
+#[test]
+fn mapping_a_target_with_no_builtin_profile_is_none() {
+    assert!(
+        builtin_target("jira").is_none(),
+        "a built-in profile is a convenience, not a requirement; an unknown target \
+         is configured by the user rather than guessed at"
+    );
+}
+
+#[test]
+fn mapping_the_builtin_profile_binds_against_the_mock_default_server() {
+    // The mock's default profile exposes `create_issue` and `set_issue_status`,
+    // which are two of Andare's four. The other two are absent there, so this also
+    // shows a partial bind reported as such rather than as a failure.
+    let spec = builtin_target("andare").expect("built-in");
+    let tools = vec![
+        tool("create_issue", json!({"type": "object"})),
+        tool("set_issue_status", json!({"type": "object"})),
+    ];
+
+    let mapping = resolve(&spec, &tools);
+    assert_eq!(mapping.bound.len(), 2);
+    assert_eq!(mapping.unmapped.len(), 2);
+    assert!(!mapping.is_complete());
 }
