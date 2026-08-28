@@ -1099,11 +1099,11 @@ Non-negotiable UI behaviours:
   truncation, config merge, capability mapping resolution.
 - **Integration** (`cargo test -p revlocal-* --test '*'`): against fixture repos and
   a mock MCP server, using `Engine = mock`. **No network. No real model calls.**
-  This is the tier the build loop runs constantly.
+  This is the tier that runs constantly.
 - **Engine-live** (`cargo test --features engine-live -- --ignored`): actually
   invokes `claude` and `codex` against a fixture with a planted bug and asserts a
-  finding is produced. Run manually / in the loop's periodic checkpoint, never in
-  the fast inner loop.
+  finding is produced. Run manually or at a periodic checkpoint, never in the fast
+  inner loop.
 - **UI** (`vitest` + Testing Library) for component logic, and **Framewatch visual
   verification** (§16.4) against the built Tauri binary for the launch → add repo →
   dry-run review path.
@@ -1142,11 +1142,11 @@ shim, and SQLite file locking under WAL on a non-NTFS-mounted path.
 
 The desktop UI is verified visually, not by assertion alone. `framewatch` (0.8.x) is
 an event-driven window capture tool: it waits for a window to *settle* and writes a
-deterministic PNG. This is what lets an autonomous build loop confirm the UI it just
-wrote actually renders, instead of assuming it does.
+deterministic PNG. That is what makes it possible to confirm the UI actually
+renders, instead of assuming it does.
 
-Two harnesses, both committed as scripts so CI, a developer, and the loop all use the
-identical command:
+Two harnesses, both committed as scripts so CI and a developer use the identical
+command:
 
 **Single-screen capture** — `scripts/gui-verify.sh <screen>`:
 

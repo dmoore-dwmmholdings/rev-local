@@ -63,6 +63,28 @@ if [[ -n "$LEAKED" ]]; then
   exit 1
 fi
 
+# Path exclusion is not enough: a published file can *mention* the process. ADR
+# 0002 shipped once describing the private backlog import, because the first guard
+# only looked at filenames. This one reads the tree's contents.
+MARKERS='BUILD_LOOP|BUILD_PROMPT|AGENTS\.md is|docs/STATE|docs/backlog|gen_backlog|build loop|autonomous agent|implementing agent'
+MENTIONS=""
+while read -r file; do
+  case "$file" in
+    Cargo.lock|ui/*|src-tauri/target/*) continue ;;
+  esac
+  hit="$(git show "$TREE:$file" 2>/dev/null | grep -nE "$MARKERS" || true)"
+  if [[ -n "$hit" ]]; then
+    MENTIONS="$MENTIONS
+$file: $hit"
+  fi
+done < <(git ls-tree -r --name-only "$TREE")
+
+if [[ -n "$MENTIONS" ]]; then
+  echo "publish: refusing — published files mention the build process:" >&2
+  echo "$MENTIONS" >&2
+  exit 1
+fi
+
 PARENT=""
 if git rev-parse --verify --quiet public >/dev/null; then
   PARENT="-p public"
