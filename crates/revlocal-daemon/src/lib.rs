@@ -4,6 +4,7 @@
 
 pub mod autonomy;
 pub mod depth;
+pub mod gating;
 pub mod logging;
 pub mod normalize;
 pub mod pipeline;
@@ -14,6 +15,7 @@ pub mod truncation;
 pub use autonomy::{
     disposition, mode_change_detail, reviews_run, widens, Disposition, AUDIT_KIND_MODE_CHANGED,
 };
+pub use gating::{gate, GateContext, GatedAction};
 pub use logging::{
     init as init_logging, LoggingError, LoggingHandle, RedactingJsonLayer, RedactingVisitor,
 };
