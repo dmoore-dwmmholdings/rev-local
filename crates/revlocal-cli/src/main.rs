@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod review;
+mod targets;
 
 /// Autonomous local code review for git, GitHub and Subversion.
 #[derive(Debug, Parser)]
@@ -26,6 +27,12 @@ enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
+    /// Inspect publish targets and their capability mapping.
+    Targets {
+        #[command(subcommand)]
+        command: TargetsCommand,
+    },
+
     /// Review one change and print the result.
     Review {
         /// The repository's working copy or mirror.
@@ -51,6 +58,23 @@ enum DbCommand {
         /// Database file. Created if it does not exist.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+    },
+}
+
+/// `revlocal targets …`.
+#[derive(Debug, Subcommand)]
+enum TargetsCommand {
+    /// Show each target's capability mapping, and what did not bind.
+    List {
+        /// The global config file to read.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// Print the machine-readable report instead of the human one.
+        ///
+        /// Exactly one JSON document reaches stdout; warnings and progress go to
+        /// stderr, so the output is safe to pipe.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -91,6 +115,10 @@ enum CliError {
     /// A review could not be run.
     #[error(transparent)]
     Review(#[from] review::ReviewCommandError),
+
+    /// Targets could not be listed.
+    #[error(transparent)]
+    Targets(#[from] targets::TargetsCommandError),
 }
 
 /// Dispatch one command.
@@ -106,6 +134,12 @@ async fn run(command: Command) -> Result<(), CliError> {
         }
         Command::Review { repo, rev, json } => {
             review::run(&repo, &rev, json).await?;
+            Ok(())
+        }
+        Command::Targets {
+            command: TargetsCommand::List { config, json },
+        } => {
+            targets::run(&config, json).await?;
             Ok(())
         }
     }
