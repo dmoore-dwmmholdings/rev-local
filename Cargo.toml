@@ -45,7 +45,11 @@ jsonschema = { version = "0.33", default-features = false }
 # The first regex in the workspace. `andare_key_regex` and `merge_detect_regex`
 # are user-configurable patterns (SPEC §13.1), so a real engine is required —
 # they cannot be hand-parsed.
-regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl"] }
+# `unicode-case` is not optional decoration: SPEC §13.2's own default
+# `merge_detect_regex` opens with `(?i)`, and without this feature that pattern
+# fails to compile *at runtime* — a default that ships broken. Same for any
+# case-insensitive pattern a user writes in `work_item_regex`.
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case"] }
 # `svn log --xml` is the only machine-readable form svn offers, and its attribute
 # order varies between revisions — a hand-rolled parser would be guessing at
 # another tool's output, which ADR 0023 is about.

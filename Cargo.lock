@@ -1921,6 +1921,7 @@ dependencies = [
  "globset",
  "nix",
  "quick-xml",
+ "regex",
  "revlocal-core",
  "revlocal-store",
  "serde",
