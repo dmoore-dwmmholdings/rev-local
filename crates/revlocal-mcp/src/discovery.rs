@@ -38,11 +38,22 @@ use crate::stdio::{McpError, StdioClient};
 /// `dyn` that implies servers could speak something else. It also keeps the two
 /// clients' distinct error types intact rather than erasing them behind a boxed
 /// trait.
+///
+/// **Both** variants are boxed, not just the larger one. `StdioClient` holds a
+/// child process and its pipes — 672 bytes on Windows against `HttpClient`'s 312,
+/// enough of a gap for clippy's `large_enum_variant`. Boxing only the bigger one
+/// inverts the imbalance rather than fixing it: 8 bytes against 312 trips the same
+/// lint from the other side. Two boxes make the enum a pointer either way.
+///
+/// The gap is platform-dependent — the Windows leg caught this while Linux stayed
+/// quiet — which is a reason to read CI's clippy output rather than only the local
+/// one.
 pub enum McpClient {
     /// A server spawned as a child process.
-    Stdio(StdioClient),
+    ///
+    Stdio(Box<StdioClient>),
     /// A server reached over HTTP.
-    Http(HttpClient),
+    Http(Box<HttpClient>),
 }
 
 /// Written by hand rather than derived, for the reason `HttpClient`'s own `Debug`
@@ -68,13 +79,13 @@ impl std::fmt::Debug for McpClient {
 
 impl From<StdioClient> for McpClient {
     fn from(client: StdioClient) -> Self {
-        Self::Stdio(client)
+        Self::Stdio(Box::new(client))
     }
 }
 
 impl From<HttpClient> for McpClient {
     fn from(client: HttpClient) -> Self {
-        Self::Http(client)
+        Self::Http(Box::new(client))
     }
 }
 
