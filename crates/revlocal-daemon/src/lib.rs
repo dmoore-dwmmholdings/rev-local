@@ -19,6 +19,7 @@ pub mod state_machine;
 pub mod trigger_receiver;
 pub mod triggers;
 pub mod truncation;
+pub mod tunnel;
 pub mod webhook;
 
 pub use approvals::{
