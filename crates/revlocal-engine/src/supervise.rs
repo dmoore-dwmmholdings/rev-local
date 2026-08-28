@@ -306,10 +306,19 @@ async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>, grace: D
     #[cfg(not(unix))]
     {
         let _ = pid;
+        // `grace` has nothing to apply to here. Windows has no graceful-termination
+        // signal a console process is obliged to honour, so `start_kill` above is
+        // TerminateProcess — immediate by definition, with no window in which the
+        // child could have chosen to flush. That is a real difference from the Unix
+        // path, not an oversight: a Windows engine gets no chance to write
+        // `result.json` on the way out.
+        let _ = grace;
         tracing::warn!(
+            ?grace,
             "process-group kill is not implemented on this platform; a timed-out \
-             engine may leave grandchildren running. SPEC §8.5 requires a Job \
-             Object here — see RL-1303."
+             engine may leave grandchildren running, and it is terminated without \
+             the grace period Unix gives it. SPEC §8.5 requires a Job Object here \
+             — see RL-1303."
         );
     }
 }

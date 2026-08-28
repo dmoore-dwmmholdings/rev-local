@@ -7,8 +7,10 @@
 //! of it handling absence gracefully.
 
 pub mod cmd;
+pub mod discover;
 
 pub use cmd::{
     doctor_line, is_available, non_interactive_env, CertFailure, SvnError, SvnOutput, SvnRunner,
     DEFAULT_TIMEOUT,
 };
+pub use discover::{discover, parse_log_xml, Discovery, SvnPath, SvnRevision, WatchedPaths};
