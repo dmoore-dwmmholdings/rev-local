@@ -7,6 +7,7 @@ pub mod autonomy;
 pub mod budgets;
 pub mod depth;
 pub mod gating;
+pub mod hooks;
 pub mod kill_switch;
 pub mod logging;
 pub mod normalize;
