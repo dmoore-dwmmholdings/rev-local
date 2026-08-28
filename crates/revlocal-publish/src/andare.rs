@@ -292,6 +292,24 @@ pub trait AndareWriter: Send + Sync {
 
     /// Comment on an issue.
     async fn comment(&self, key: &str, body: &str) -> Result<(), PublishError>;
+
+    /// Move an issue to a named state.
+    ///
+    /// A project may define a workflow, so not every state is reachable from
+    /// every other; a refusal is an ordinary answer and comes back as
+    /// [`PublishError::Rejected`].
+    async fn set_status(&self, key: &str, status: &str) -> Result<(), PublishError>;
+}
+
+/// What a `SetStatus` action carries: the outcome to report onto one work item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomePayload {
+    /// The work item.
+    pub key: String,
+    /// What to say. Posted first, and posted whatever happens next.
+    pub comment: String,
+    /// The state to move it to, when one is configured.
+    pub transition: Option<String>,
 }
 
 /// Everything the stored action carries for one filing.
@@ -318,6 +336,53 @@ impl<W: AndareWriter> AndareTarget<W> {
     }
 }
 
+impl<W: AndareWriter> AndareTarget<W> {
+    /// Report a review outcome onto one work item (RL-706).
+    ///
+    /// The comment goes first, and it goes even when the transition will not. A
+    /// transition can be refused for reasons that have nothing to do with the
+    /// review — the project's workflow may not allow that move from the ticket's
+    /// current state, the state may have been renamed, the ticket may be closed —
+    /// and none of that makes the outcome less worth recording.
+    ///
+    /// Doing it the other way round loses the comment exactly when somebody most
+    /// needs to read why the transition was refused.
+    async fn report_outcome(&self, action: &PublishAction) -> Result<PublishReceipt, PublishError> {
+        let payload: OutcomePayload =
+            serde_json::from_str(&action.payload_json).map_err(|e| PublishError::Rejected {
+                target: "andare".to_owned(),
+                status: None,
+                detail: format!("the stored payload is not an outcome report: {e}"),
+            })?;
+
+        self.writer.comment(&payload.key, &payload.comment).await?;
+
+        if let Some(status) = &payload.transition {
+            self.writer
+                .set_status(&payload.key, status)
+                .await
+                .map_err(|error| PublishError::Rejected {
+                    target: "andare".to_owned(),
+                    status: None,
+                    // The comment landed. Saying so turns "the action failed" into
+                    // something an operator can act on without re-reading the
+                    // ticket to find out what actually happened.
+                    detail: format!(
+                        "the comment was posted on {}, but the transition to `{status}` was \
+                         refused: {error}",
+                        payload.key
+                    ),
+                })?;
+        }
+
+        Ok(PublishReceipt {
+            external_ref: Some(payload.key),
+            response_json: None,
+            deduplicated: false,
+        })
+    }
+}
+
 #[async_trait]
 impl<W: AndareWriter> PublishTarget for AndareTarget<W> {
     fn id(&self) -> &str {
@@ -339,6 +404,13 @@ impl<W: AndareWriter> PublishTarget for AndareTarget<W> {
     }
 
     async fn execute(&self, action: &PublishAction) -> Result<PublishReceipt, PublishError> {
+        if matches!(
+            action.capability,
+            Capability::SetStatus | Capability::Comment
+        ) {
+            return self.report_outcome(action).await;
+        }
+
         let payload: AndarePayload =
             serde_json::from_str(&action.payload_json).map_err(|e| PublishError::Rejected {
                 target: "andare".to_owned(),

@@ -13,11 +13,12 @@ pub mod queue;
 pub mod report;
 pub mod retry;
 pub mod target;
+pub mod work_item;
 
 pub use andare::{
     compose_issue, filing_candidates, is_filable, plan, recurrence_comment, search_query,
     AndareOptions, AndarePayload, AndareTarget, AndareWriter, FilingPlan, IssueContext, IssueDraft,
-    SearchOutcome, FINGERPRINT_TRAILER,
+    OutcomePayload, SearchOutcome, FINGERPRINT_TRAILER,
 };
 pub use check::{
     conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckPayload, CheckStatus,
@@ -34,6 +35,9 @@ pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_C
 pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};
+pub use work_item::{
+    outcome_comment, plan_outcomes, transition_for, KeyPattern, KeyPatternError, OutcomeReport,
+};
 
 /// The name of this crate, used by the workspace layout test in `revlocal-cli`.
 pub const CRATE_NAME: &str = "revlocal-publish";

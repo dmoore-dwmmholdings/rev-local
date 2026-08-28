@@ -1871,6 +1871,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "regex",
  "revlocal-core",
  "revlocal-store",
  "serde",

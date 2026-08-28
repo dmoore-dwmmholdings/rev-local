@@ -273,6 +273,11 @@ impl AndareWriter for FakeAndare {
         comments.push((key.to_owned(), body.to_owned()));
         Ok(())
     }
+
+    async fn set_status(&self, _key: &str, _status: &str) -> Result<(), PublishError> {
+        // RL-706's path; this fixture is about filing.
+        Ok(())
+    }
 }
 
 fn andare_action(payload: &AndarePayload) -> PublishAction {
