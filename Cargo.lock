@@ -1811,12 +1811,14 @@ dependencies = [
 name = "revlocal-daemon"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "globset",
  "handlebars",
  "revlocal-core",
  "revlocal-engine",
  "revlocal-mcp",
+ "revlocal-publish",
  "revlocal-store",
  "revlocal-vcs",
  "serde",
