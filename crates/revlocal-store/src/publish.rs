@@ -4,7 +4,7 @@ use crate::repos::{format_time, parse_enum, parse_time};
 use crate::{Pool, Result, StoreError};
 use revlocal_core::{
     AuditEntry, AuditId, BudgetLedgerEntry, Capability, FindingId, PublishAction, PublishActionId,
-    PublishActionStatus, RepoId, RiskClass, RunId, Timestamp, Usage,
+    PublishActionStatus, RepoId, RiskClass, RunId, Suppression, SuppressionId, Timestamp, Usage,
 };
 
 /// Insert and dispatch publish actions (SPEC §5, §11.6).
@@ -273,7 +273,125 @@ impl<'a> PublishActionStore<'a> {
         Ok(actions)
     }
 
-    /// Put one target's failed actions for one run back in the queue.
+    /// Every action waiting on a human, oldest first (§12.4).
+    pub async fn list_awaiting_approval(&self) -> Result<Vec<PublishAction>> {
+        let status = PublishActionStatus::AwaitingApproval.as_str();
+        let rows = sqlx::query!(
+            "SELECT id FROM publish_action WHERE status = ? ORDER BY id",
+            status
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut actions = Vec::with_capacity(rows.len());
+        for row in rows {
+            actions.push(self.get(PublishActionId::new(row.id)).await?);
+        }
+        Ok(actions)
+    }
+
+    /// Record an approval, together with a digest of the payload that was shown.
+    ///
+    /// The digest is what makes "an edit after approval is impossible" checkable:
+    /// the queue re-computes it at dispatch and refuses an action whose payload has
+    /// moved since a human looked at it. Storing the approval without it would
+    /// leave the criterion as an intention.
+    ///
+    /// Only an `awaiting_approval` row can be approved — approving something
+    /// already sent, failed or rejected is a caller bug, and the row count says so
+    /// rather than silently rewriting a settled action.
+    pub async fn approve(&self, id: PublishActionId, digest: &str) -> Result<()> {
+        let raw = id.get();
+        let approved = PublishActionStatus::Approved.as_str();
+        let awaiting = PublishActionStatus::AwaitingApproval.as_str();
+
+        let affected = sqlx::query!(
+            "UPDATE publish_action
+             SET status = ?, approved_payload_digest = ?
+             WHERE id = ? AND status = ?",
+            approved,
+            digest,
+            raw,
+            awaiting
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "publish_action awaiting approval",
+                key: format!("id={raw}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Record a rejection and why.
+    ///
+    /// `reason` carries `expired` for a timeout, which §12.4 names explicitly and
+    /// which must stay distinguishable from a person saying no: one is a decision,
+    /// the other is that nobody looked.
+    pub async fn reject(&self, id: PublishActionId, reason: &str) -> Result<()> {
+        let raw = id.get();
+        let rejected = PublishActionStatus::Rejected.as_str();
+        let awaiting = PublishActionStatus::AwaitingApproval.as_str();
+
+        let affected = sqlx::query!(
+            "UPDATE publish_action
+             SET status = ?, decision_reason = ?
+             WHERE id = ? AND status = ?",
+            rejected,
+            reason,
+            raw,
+            awaiting
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "publish_action awaiting approval",
+                key: format!("id={raw}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// The digest recorded when this action was approved, if it was.
+    pub async fn approved_digest(&self, id: PublishActionId) -> Result<Option<String>> {
+        let raw = id.get();
+        let row = sqlx::query!(
+            "SELECT approved_payload_digest FROM publish_action WHERE id = ?",
+            raw
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::NotFound {
+            entity: "publish_action",
+            key: format!("id={raw}"),
+        })?;
+        Ok(row.approved_payload_digest)
+    }
+
+    /// Why an action was rejected, if it was.
+    pub async fn decision_reason(&self, id: PublishActionId) -> Result<Option<String>> {
+        let raw = id.get();
+        let row = sqlx::query!(
+            "SELECT decision_reason FROM publish_action WHERE id = ?",
+            raw
+        )
+        .fetch_optional(self.pool)
+        .await?
+        .ok_or_else(|| StoreError::NotFound {
+            entity: "publish_action",
+            key: format!("id={raw}"),
+        })?;
+        Ok(row.decision_reason)
+    }
+
+    /// Put one target's failed actions for one run back in the queue.    /// Put one target's failed actions for one run back in the queue.
     ///
     /// `attempts` is reset to zero, and this is deliberate. A replay is a person
     /// saying "try again", and leaving the count at five would mean the retry
@@ -353,6 +471,75 @@ impl<'a> PublishActionStore<'a> {
         .await?;
 
         Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    }
+}
+
+/// The `suppression` table (SPEC §5, §12.4's reject-and-suppress).
+#[derive(Debug, Clone)]
+pub struct SuppressionStore<'a> {
+    pool: &'a Pool,
+}
+
+impl<'a> SuppressionStore<'a> {
+    /// Open the repository over `pool`.
+    pub const fn new(pool: &'a Pool) -> Self {
+        Self { pool }
+    }
+
+    /// Record a suppression.
+    pub async fn insert(&self, suppression: &Suppression) -> Result<Suppression> {
+        let repo_id = suppression.repo_id.map(RepoId::get);
+        let created = format_time(suppression.created_at);
+
+        let id = sqlx::query!(
+            "INSERT INTO suppression (repo_id, fingerprint, glob, reason, created_at)
+             VALUES (?, ?, ?, ?, ?)
+             RETURNING id",
+            repo_id,
+            suppression.fingerprint,
+            suppression.glob,
+            suppression.reason,
+            created
+        )
+        .fetch_one(self.pool)
+        .await?
+        .id;
+
+        Ok(Suppression {
+            id: SuppressionId::new(id),
+            ..suppression.clone()
+        })
+    }
+
+    /// Every suppression that applies to `repo_id`, including global ones.
+    ///
+    /// Global suppressions (`repo_id IS NULL`) are included deliberately: a user
+    /// who said "never tell me this again" about a finding did not mean "in this
+    /// repository only" unless they scoped it.
+    pub async fn list_for_repo(&self, repo_id: RepoId) -> Result<Vec<Suppression>> {
+        let raw = repo_id.get();
+        let rows = sqlx::query!(
+            "SELECT id, repo_id, fingerprint, glob, reason, created_at
+             FROM suppression
+             WHERE repo_id IS NULL OR repo_id = ?
+             ORDER BY id",
+            raw
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(Suppression {
+                id: SuppressionId::new(row.id),
+                repo_id: row.repo_id.map(RepoId::new),
+                fingerprint: row.fingerprint,
+                glob: row.glob,
+                reason: row.reason,
+                created_at: parse_time("suppression.created_at", &row.created_at)?,
+            });
+        }
+        Ok(out)
     }
 }
 

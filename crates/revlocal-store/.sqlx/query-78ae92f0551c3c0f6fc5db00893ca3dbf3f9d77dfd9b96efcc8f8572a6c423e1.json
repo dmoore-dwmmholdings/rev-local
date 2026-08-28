@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE publish_action\n             SET status = ?, decision_reason = ?\n             WHERE id = ? AND status = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "78ae92f0551c3c0f6fc5db00893ca3dbf3f9d77dfd9b96efcc8f8572a6c423e1"
+}

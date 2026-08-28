@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT approved_payload_digest FROM publish_action WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "approved_payload_digest",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "publish_action",
+            "name": "approved_payload_digest"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "89ea66e86e79f2e98fff4332a611bddbeea67743c656fb927e82987a94d619fd"
+}

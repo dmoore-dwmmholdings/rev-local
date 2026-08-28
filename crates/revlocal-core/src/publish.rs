@@ -111,3 +111,21 @@ pub struct TargetHealth {
     /// Why it is unhealthy, when it is.
     pub detail: Option<String>,
 }
+
+/// A digest of the payload a human was shown before approving it (§12.4).
+///
+/// SHA-256 over the payload bytes exactly as stored. Deliberately not over a
+/// normalised or re-serialised form: the question is whether the stored bytes
+/// changed, and normalising first would forgive exactly the class of edit that
+/// reformats a payload while changing what it says.
+///
+/// Lives here rather than in the daemon because the publish queue re-computes it
+/// at dispatch, and a second implementation of the same hash is one refactor away
+/// from disagreeing with the first — in the check that decides whether an
+/// approval still means anything.
+pub fn payload_digest(payload_json: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(payload_json.as_bytes());
+    format!("{:x}", hasher.finalize())
+}

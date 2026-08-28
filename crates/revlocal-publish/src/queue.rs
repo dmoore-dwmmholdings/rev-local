@@ -110,6 +110,8 @@ pub struct DispatchReport {
     pub failed: usize,
     /// Actions whose target is not registered, so nothing was attempted.
     pub unroutable: usize,
+    /// Actions approved and then edited, which are refused rather than sent.
+    pub approval_stale: usize,
 }
 
 impl DispatchReport {
@@ -283,7 +285,21 @@ impl PublishQueue {
         let permits = Arc::new(Semaphore::new(self.config.concurrency.max(1)));
         let mut tasks = tokio::task::JoinSet::new();
 
+        let store_for_digests = PublishActionStore::new(&self.pool);
+
         for action in actions {
+            // RL-803: the bytes a human approved are the bytes that go. Checked
+            // here rather than at approval time because anything can write
+            // `payload_json` in between — a replay, a second run, a bug. An action
+            // nobody approved has no digest and passes straight through; the check
+            // is about honouring an approval, not requiring one.
+            if let Some(digest) = store_for_digests.approved_digest(action.id).await? {
+                if revlocal_core::payload_digest(&action.payload_json) != digest {
+                    tasks.spawn(async move { Outcome::ApprovalStale(action.id) });
+                    continue;
+                }
+            }
+
             let Some(target) = self.targets.get(&action.target).cloned() else {
                 tasks.spawn(async move { Outcome::Unroutable(action.id) });
                 continue;
@@ -372,6 +388,21 @@ impl PublishQueue {
                         report.failed += 1;
                     }
                 }
+                Outcome::ApprovalStale(id) => {
+                    // Terminal: the bytes a human agreed to are gone, and retrying
+                    // would send the replacement they never saw.
+                    store
+                        .record_outcome(
+                            id,
+                            PublishActionStatus::Failed,
+                            None,
+                            None,
+                            Some("the payload changed after it was approved; it was not sent"),
+                            now,
+                        )
+                        .await?;
+                    report.approval_stale += 1;
+                }
                 Outcome::Unroutable(id) => {
                     store
                         .record_outcome(
@@ -399,4 +430,6 @@ enum Outcome {
     /// failed.
     Failed(PublishActionId, u32, Box<PublishError>),
     Unroutable(PublishActionId),
+    /// Approved, then edited. Never sent.
+    ApprovalStale(PublishActionId),
 }
