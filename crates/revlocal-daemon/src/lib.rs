@@ -4,9 +4,11 @@
 
 pub mod approvals;
 pub mod autonomy;
+pub mod backfill;
 pub mod budgets;
 pub mod depth;
 pub mod gating;
+pub mod hooks;
 pub mod kill_switch;
 pub mod logging;
 pub mod normalize;
@@ -17,6 +19,8 @@ pub mod state_machine;
 pub mod trigger_receiver;
 pub mod triggers;
 pub mod truncation;
+pub mod tunnel;
+pub mod webhook;
 
 pub use approvals::{
     decision_detail, expires_at, expiry_detail, payload_digest, payload_matches_approval,
