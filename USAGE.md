@@ -73,6 +73,39 @@ tool that merely looks similar.
 
 This command reads configuration and calls no tools.
 
+### Binding a capability by hand
+
+When a server calls an operation something no candidate list mentions, bind it
+yourself:
+
+```
+revlocal targets map <target> <capability> --tool <TOOL> --arg key=template ...
+```
+
+The override is checked against the tool's schema **before** it is saved — a tool
+name the server does not have, or a template missing a field the tool requires, is
+refused there rather than at the first publish that needed it. Values are checked
+when they are rendered, since that is when they exist.
+
+```
+revlocal targets map andare create_issue --tool file_a_thing \
+  --arg project=REVL --arg headline="{finding.title}"
+```
+
+Overrides are stored beside your config as `target-overrides.json` (or wherever
+`--overrides` points), so they survive a restart. An override wins over automatic
+resolution, and `targets list` and `targets test` both mark it as one.
+
+### Dry-running a target
+
+```
+revlocal targets test <target>
+```
+
+Renders every mapped capability against a sample finding and reports what would be
+sent. Nothing is called. Exits non-zero if any capability would not render, so it
+works as a check.
+
 ## The local database
 
 ```

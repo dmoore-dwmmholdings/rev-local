@@ -9,12 +9,13 @@
 pub mod capability;
 pub mod discovery;
 pub mod http;
+pub mod overrides;
 pub mod protocol;
 pub mod stdio;
 
 pub use capability::{
-    resolve, Binding, CapabilitySpec, MappingError, RenderContext, SpecError, TargetMapping,
-    TargetSpec, Unmapped,
+    builtin_target, resolve, Binding, CapabilitySpec, MappingError, RenderContext, SpecError,
+    TargetMapping, TargetSpec, Unmapped,
 };
 pub use discovery::{
     Discovery, DiscoveryError, HealthReport, McpClient, ServerHealth, ServerState,
@@ -22,6 +23,7 @@ pub use discovery::{
 pub use http::{
     parse_sse, HttpClient, HttpEndpoint, HttpError, NoSecrets, SecretResolver, SESSION_HEADER,
 };
+pub use overrides::{parse_arg, Override, OverrideError, Overrides};
 pub use protocol::{
     Content, InitializeResult, Notification, Request, Response, RpcError, ServerInfo, Tool,
     ToolResult, PROTOCOL_VERSION,

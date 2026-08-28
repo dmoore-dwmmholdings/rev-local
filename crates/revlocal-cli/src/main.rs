@@ -76,6 +76,40 @@ enum TargetsCommand {
         #[arg(long)]
         json: bool,
     },
+
+    /// Bind one capability to a tool by hand, when resolution could not.
+    ///
+    /// The override is checked against the tool's schema before it is saved.
+    Map {
+        /// Which target.
+        target: String,
+        /// Which capability.
+        capability: String,
+        /// The tool to bind it to.
+        #[arg(long, value_name = "TOOL")]
+        tool: String,
+        /// An argument template, `key=value`. Repeatable.
+        #[arg(long = "arg", value_name = "KEY=VALUE")]
+        args: Vec<String>,
+        /// The global config file to read.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// Where overrides are kept. Defaults to beside the config.
+        #[arg(long, value_name = "PATH")]
+        overrides: Option<PathBuf>,
+    },
+
+    /// Dry-run render every mapped capability. Calls nothing.
+    Test {
+        /// Which target.
+        target: String,
+        /// The global config file to read.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// Where overrides are kept. Defaults to beside the config.
+        #[arg(long, value_name = "PATH")]
+        overrides: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -136,10 +170,33 @@ async fn run(command: Command) -> Result<(), CliError> {
             review::run(&repo, &rev, json).await?;
             Ok(())
         }
-        Command::Targets {
-            command: TargetsCommand::List { config, json },
-        } => {
-            targets::run(&config, json).await?;
+        Command::Targets { command } => {
+            match command {
+                TargetsCommand::List { config, json } => targets::run(&config, json).await?,
+                TargetsCommand::Map {
+                    target,
+                    capability,
+                    tool,
+                    args,
+                    config,
+                    overrides,
+                } => {
+                    targets::map(
+                        &config,
+                        overrides.as_deref(),
+                        &target,
+                        &capability,
+                        &tool,
+                        &args,
+                    )
+                    .await?;
+                }
+                TargetsCommand::Test {
+                    target,
+                    config,
+                    overrides,
+                } => targets::test(&config, overrides.as_deref(), &target).await?,
+            }
             Ok(())
         }
     }
