@@ -6,12 +6,17 @@
 //! and a target that is slow, rate limited or broken degrades itself and nothing
 //! else.
 
+pub mod check;
 pub mod github;
 pub mod queue;
 pub mod report;
 pub mod retry;
 pub mod target;
 
+pub use check::{
+    conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckConclusion,
+    CheckPayload, CheckStatus, CHECK_NAME,
+};
 pub use github::{
     compose, event_for, idempotency_key, DiffAnchors, ExistingReview, GitHubTarget, GitHubWriter,
     InlineComment, ReviewDraft, ReviewEvent, ReviewOptions, ReviewPayload,
