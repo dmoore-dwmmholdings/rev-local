@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO publish_action\n               (run_id, finding_id, target, capability, risk, idempotency_key,\n                payload_json, status, attempts, response_json, external_ref, error,\n                created_at, sent_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "publish_action",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "526c294c9e462f2401b19750003bf087a72243d73d859552156e7be3cf0dfafd"
+}

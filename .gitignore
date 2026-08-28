@@ -1,0 +1,9 @@
+/target
+/artifacts
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+fixtures/out/
+/.claude/

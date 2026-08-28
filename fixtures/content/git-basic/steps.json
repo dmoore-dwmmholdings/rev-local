@@ -1,0 +1,27 @@
+{
+  "comment": "The git-basic fixture as data, so fixtures/build.sh and fixtures/build.ps1 apply identical bytes rather than each carrying its own copy of every file. Two hand-maintained generators that must agree byte-for-byte will not stay in agreement; this leaves only the git invocations to keep in step, and a parity test to catch even that.",
+  "base_epoch": 1735689600,
+  "seconds_per_step": 60,
+  "default_branch": "main",
+  "author": { "name": "Fixture Author", "email": "fixtures@rev-local.invalid" },
+  "bot": {
+    "name": "dependabot[bot]",
+    "email": "49699333+dependabot[bot]@users.noreply.github.com"
+  },
+  "steps": [
+    { "index": 1, "kind": "commit", "dir": "01-initial", "role": "initial", "subject": "Initial commit" },
+    { "index": 2, "kind": "commit", "dir": "02-clean", "role": "clean", "subject": "Add a clamp helper" },
+    { "index": 3, "kind": "commit", "dir": "03-off-by-one", "role": "planted_bug_off_by_one", "subject": "Add pagination helper" },
+    { "index": 4, "kind": "commit", "dir": "04-filler", "role": "filler", "subject": "Add in_range helper" },
+    { "index": 5, "kind": "commit", "dir": "05-sql-injection", "role": "planted_bug_sql_injection", "subject": "Add user lookup" },
+    { "index": 6, "kind": "commit", "dir": "06-lockfile", "role": "lockfile_only", "subject": "Update Cargo.lock" },
+    { "index": 7, "kind": "commit", "dir": "07-bot", "role": "bot", "subject": "Bump serde from 1.0.0 to 1.0.1", "author": "bot" },
+    { "index": 8, "kind": "commit", "dir": "08-modules", "role": "filler_modules", "subject": "Declare modules" },
+    { "index": 9, "kind": "generate", "role": "large_200_files", "subject": "Add 200 generated modules", "count": 200, "into": "generated" },
+    { "kind": "branch", "name": "release/pager-tweak", "why": "named to match SPEC 13.2 default branches glob release/* so the fixture is discoverable under the DEFAULT config and exercises glob resolution" },
+    { "index": 10, "kind": "commit", "dir": "10-branch-work", "role": "branch_work", "subject": "Add page_count" },
+    { "kind": "checkout", "name": "main" },
+    { "index": 11, "kind": "merge", "branch": "release/pager-tweak", "role": "merge", "subject": "Merge branch 'release/pager-tweak'" },
+    { "index": 12, "kind": "commit", "dir": "12-final", "role": "clean_final", "subject": "Note the generator in the README" }
+  ]
+}

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# POSIX shim onto mock-engine.mjs. See run.cmd for the Windows equivalent.
+#
+# `exec` matters: it replaces this shell rather than forking, so the process the
+# runner spawned IS node. Otherwise SIGTERM would reach bash and the `hang` mode's
+# ignore-SIGTERM behaviour would be untestable.
+set -euo pipefail
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mock-engine.mjs" "$@"

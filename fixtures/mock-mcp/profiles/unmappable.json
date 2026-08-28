@@ -1,0 +1,12 @@
+{
+  "name": "unmappable",
+  "instructions": "A server exposing nothing rev-local can bind a capability to. SPEC §11.2 says an unresolvable capability is reported as UNMAPPED, not attempted — this profile is how that is tested.",
+  "tools": [
+    {
+      "name": "ping",
+      "description": "Does nothing useful.",
+      "behavior": "ok",
+      "inputSchema": { "type": "object", "properties": {} }
+    }
+  ]
+}

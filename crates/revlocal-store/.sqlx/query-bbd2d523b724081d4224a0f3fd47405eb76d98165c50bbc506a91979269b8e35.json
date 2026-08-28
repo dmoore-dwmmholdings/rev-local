@@ -1,0 +1,266 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,\n                    error, degraded, tokens_in, tokens_out, cost_usd, started_at,\n                    finished_at, transcript_path, created_at, truncated,\n                    omitted_files_json, verdict, summary\n             FROM run WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "change_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "change_id"
+          }
+        }
+      },
+      {
+        "name": "attempt",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "attempt"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "engine",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "engine"
+          }
+        }
+      },
+      {
+        "name": "depth",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "depth"
+          }
+        }
+      },
+      {
+        "name": "trigger",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "trigger"
+          }
+        }
+      },
+      {
+        "name": "skip_reason",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "skip_reason"
+          }
+        }
+      },
+      {
+        "name": "error",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "name": "degraded",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "degraded"
+          }
+        }
+      },
+      {
+        "name": "tokens_in",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "tokens_in"
+          }
+        }
+      },
+      {
+        "name": "tokens_out",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "tokens_out"
+          }
+        }
+      },
+      {
+        "name": "cost_usd",
+        "ordinal": 12,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "cost_usd"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "name": "finished_at",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "name": "transcript_path",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "transcript_path"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 16,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "truncated",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "truncated"
+          }
+        }
+      },
+      {
+        "name": "omitted_files_json",
+        "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "omitted_files_json"
+          }
+        }
+      },
+      {
+        "name": "verdict",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "name": "summary",
+        "ordinal": 20,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "summary"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "bbd2d523b724081d4224a0f3fd47405eb76d98165c50bbc506a91979269b8e35"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repo_id, scope, value, updated_at FROM cursor\n             WHERE repo_id = ? ORDER BY scope",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cursor",
+            "name": "repo_id"
+          }
+        }
+      },
+      {
+        "name": "scope",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cursor",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "name": "value",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cursor",
+            "name": "value"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cursor",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "965b3aaa8259c174a0bc54267bb6aa97078895b61ff36465e303748ef1f11a93"
+}

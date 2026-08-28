@@ -1,0 +1,194 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, run_id, fingerprint, severity, category, confidence, file,\n                    line_start, line_end, title, body, failure_scenario, suggested_fix,\n                    state, created_at\n             FROM finding WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "run_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "name": "fingerprint",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "fingerprint"
+          }
+        }
+      },
+      {
+        "name": "severity",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "name": "category",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "category"
+          }
+        }
+      },
+      {
+        "name": "confidence",
+        "ordinal": 5,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "confidence"
+          }
+        }
+      },
+      {
+        "name": "file",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "file"
+          }
+        }
+      },
+      {
+        "name": "line_start",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "line_start"
+          }
+        }
+      },
+      {
+        "name": "line_end",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "line_end"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "name": "failure_scenario",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "failure_scenario"
+          }
+        }
+      },
+      {
+        "name": "suggested_fix",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "suggested_fix"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "finding",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "bea38e04f21f8753110e91d9370f489d0fabbdfb6c518d02401785a67f36c587"
+}

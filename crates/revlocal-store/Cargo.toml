@@ -1,0 +1,24 @@
+[package]
+name = "revlocal-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SQLite persistence: migrations, entity repositories, audit log and budget ledger."
+
+[dependencies]
+chrono = { workspace = true }
+revlocal-core = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete\n             FROM budget_ledger WHERE repo_id = ? AND day = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "repo_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "repo_id"
+          }
+        }
+      },
+      {
+        "name": "day",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "day"
+          }
+        }
+      },
+      {
+        "name": "runs",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "runs"
+          }
+        }
+      },
+      {
+        "name": "tokens_in",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "tokens_in"
+          }
+        }
+      },
+      {
+        "name": "tokens_out",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "tokens_out"
+          }
+        }
+      },
+      {
+        "name": "cost_usd",
+        "ordinal": 5,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "cost_usd"
+          }
+        }
+      },
+      {
+        "name": "cost_complete",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "cost_complete"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fd42962d1d84d40e6aa0d70c5ca91243c7c312a9dda5b49e871fb3ffd0ddb8a1"
+}

@@ -1,0 +1,37 @@
+[package]
+name = "revlocal-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "`Engine` trait plus the Claude Code, Codex and mock review runners."
+
+[dependencies]
+async-trait = { workspace = true }
+jsonschema = { workspace = true }
+revlocal-core = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "time", "macros", "rt"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+jsonschema = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

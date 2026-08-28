@@ -1,0 +1,40 @@
+[package]
+name = "revlocal-vcs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "`VcsAdapter` trait plus git, GitHub and Subversion implementations."
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+globset = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tar = { workspace = true }
+revlocal-core = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+# revlocal-store is a DEV dependency only. Production code in this crate must not
+# depend on the store — the VCS layer notices, the caller records (see ADR 0013).
+# The force-push test uses it to prove the DiscoveryEvent -> audit row path end to
+# end, which is REVL-33's second acceptance criterion.
+chrono = { workspace = true }
+revlocal-store = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

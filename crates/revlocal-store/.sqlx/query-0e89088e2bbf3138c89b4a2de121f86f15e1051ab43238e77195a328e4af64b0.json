@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO repo\n               (name, kind, local_path, remote_url, default_branch, engine, autonomy,\n                enabled, config_json, created_at, updated_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "repo",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0e89088e2bbf3138c89b4a2de121f86f15e1051ab43238e77195a328e4af64b0"
+}

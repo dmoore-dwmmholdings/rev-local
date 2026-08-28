@@ -1,0 +1,36 @@
+[package]
+name = "revlocal-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The `revlocal` binary — the full headless surface of rev-local."
+
+[[bin]]
+name = "revlocal"
+path = "src/main.rs"
+
+[dependencies]
+revlocal-core = { workspace = true }
+revlocal-store = { workspace = true }
+revlocal-vcs = { workspace = true }
+revlocal-engine = { workspace = true }
+revlocal-mcp = { workspace = true }
+revlocal-publish = { workspace = true }
+revlocal-daemon = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_norway = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

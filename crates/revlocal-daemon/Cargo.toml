@@ -1,0 +1,34 @@
+[package]
+name = "revlocal-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Scheduler, trigger sources, run orchestrator and budget guard."
+
+[dependencies]
+chrono = { workspace = true }
+globset = { workspace = true }
+handlebars = { workspace = true }
+revlocal-core = { workspace = true }
+revlocal-engine = { workspace = true }
+revlocal-store = { workspace = true }
+revlocal-vcs = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing-appender = "0.2"
+
+[lints]
+workspace = true

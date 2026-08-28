@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE repo SET github_transport = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b46b4a2924fd3d18e19afedb23fd60693790575ae34b1b088c96e077bfe4e924"
+}

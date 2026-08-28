@@ -1,0 +1,76 @@
+{
+  "name": "mock-default",
+  "instructions": "A stand-in MCP server. Tool names here match the capability names rev-local looks for first.",
+  "tools": [
+    {
+      "name": "create_issue",
+      "description": "File a work item.",
+      "behavior": "ok",
+      "result": "issue {key} created",
+      "inputSchema": {
+        "type": "object",
+        "required": ["title", "body"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 80 },
+          "body": { "type": "string" },
+          "project": { "type": "string" },
+          "labels": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "name": "set_issue_status",
+      "description": "Move a work item to a new status.",
+      "behavior": "ok",
+      "inputSchema": {
+        "type": "object",
+        "required": ["key", "status"],
+        "properties": {
+          "key": { "type": "string" },
+          "status": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "get_page",
+      "description": "Read a documentation page.",
+      "behavior": "records_read",
+      "inputSchema": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string" },
+          "space": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "update_page",
+      "description": "Replace a page body. Requires a preceding get_page for the same page.",
+      "behavior": "read_before_write",
+      "inputSchema": {
+        "type": "object",
+        "required": ["title", "markdown"],
+        "properties": {
+          "title": { "type": "string" },
+          "space": { "type": "string" },
+          "markdown": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "create_page",
+      "description": "Create a documentation page.",
+      "behavior": "ok",
+      "inputSchema": {
+        "type": "object",
+        "required": ["title", "markdown"],
+        "properties": {
+          "title": { "type": "string" },
+          "space": { "type": "string" },
+          "markdown": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

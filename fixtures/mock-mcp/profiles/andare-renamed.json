@@ -1,0 +1,33 @@
+{
+  "name": "andare-renamed",
+  "instructions": "Andare exposing tool names rev-local does NOT look for first. This is the profile that proves capability mapping resolves candidates against DISCOVERED names rather than assuming its own (SPEC §11.2).",
+  "tools": [
+    {
+      "name": "create_work_item",
+      "description": "File a work item. Note the name: not `create_issue`.",
+      "behavior": "ok",
+      "inputSchema": {
+        "type": "object",
+        "required": ["summary", "description"],
+        "properties": {
+          "summary": { "type": "string", "maxLength": 80 },
+          "description": { "type": "string" },
+          "projectKey": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "transition_issue",
+      "description": "Move a work item to a new status.",
+      "behavior": "ok",
+      "inputSchema": {
+        "type": "object",
+        "required": ["issueKey", "targetStatus"],
+        "properties": {
+          "issueKey": { "type": "string" },
+          "targetStatus": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

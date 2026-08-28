@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO budget_ledger\n               (repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete)\n             VALUES (?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT (repo_id, day) DO UPDATE SET\n               runs = budget_ledger.runs + excluded.runs,\n               tokens_in = budget_ledger.tokens_in + excluded.tokens_in,\n               tokens_out = budget_ledger.tokens_out + excluded.tokens_out,\n               cost_usd = budget_ledger.cost_usd + excluded.cost_usd,\n               cost_complete = MIN(budget_ledger.cost_complete, excluded.cost_complete)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "833a138fe8032fae637c768d73844e472b607ce5665cc21bed05d4626f74eb54"
+}

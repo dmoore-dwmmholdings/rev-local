@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT next_attempt_at FROM publish_action WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "next_attempt_at",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "publish_action",
+            "name": "next_attempt_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "6189f4349027ec4776d3c91d1a8da263706c02663100b9da96b9cfcf5589b5ac"
+}

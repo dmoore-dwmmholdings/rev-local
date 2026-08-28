@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE repo\n             SET local_path = ?, remote_url = ?, default_branch = ?, engine = ?,\n                 autonomy = ?, enabled = ?, config_json = ?, updated_at = ?\n             WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "4b662f03e3b9f3f2349cec78711088314afe59d728681dc25ffbc7a90c0b8430"
+}

@@ -1,0 +1,6 @@
+# RL-101 / SPEC §18: unwrap(), expect() and explicit panic!() are denied in
+# non-test code via [workspace.lints.clippy] in Cargo.toml. These keys carve out
+# the only exemption the spec allows: test code. See ADR 0003.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

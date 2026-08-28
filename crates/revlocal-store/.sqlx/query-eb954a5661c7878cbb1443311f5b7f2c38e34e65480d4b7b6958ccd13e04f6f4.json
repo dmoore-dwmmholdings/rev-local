@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, repo_id, kind, external_id, title, author_name, author_email,\n                    authored_at, branch, base_ref, head_ref, url, diff_stat_json, detected_at\n             FROM change WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "repo_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "repo_id"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "external_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "author_name",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "author_name"
+          }
+        }
+      },
+      {
+        "name": "author_email",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "author_email"
+          }
+        }
+      },
+      {
+        "name": "authored_at",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "authored_at"
+          }
+        }
+      },
+      {
+        "name": "branch",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "branch"
+          }
+        }
+      },
+      {
+        "name": "base_ref",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "base_ref"
+          }
+        }
+      },
+      {
+        "name": "head_ref",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "head_ref"
+          }
+        }
+      },
+      {
+        "name": "url",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "name": "diff_stat_json",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "diff_stat_json"
+          }
+        }
+      },
+      {
+        "name": "detected_at",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "detected_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "eb954a5661c7878cbb1443311f5b7f2c38e34e65480d4b7b6958ccd13e04f6f4"
+}

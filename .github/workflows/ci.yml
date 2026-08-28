@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# One bash for all three OSes (Windows runners ship Git Bash), so every leg runs
+# byte-identical shell and `set -o pipefail` is available everywhere. SPEC §16.3.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # M11 (Subversion support) needs a real `svn` on every runner. Installing it
+      # here rather than in the SVN milestone means the SVN legs cannot be green on
+      # a runner that never had the binary.
+      - name: Install Subversion (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y subversion
+
+      - name: Install Subversion (macOS)
+        if: runner.os == 'macOS'
+        run: brew install subversion
+
+      - name: Install Subversion (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install svn --no-progress -y
+          echo "C:\Program Files\SlikSvn\bin" >> "$GITHUB_PATH"
+
+      - name: Verify svn is on PATH
+        run: svn --version --quiet
+
+      - name: Cache cargo registry and target directory
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+          cache-all-crates: true
+
+      - name: Create log directory
+        run: mkdir -p artifacts/logs artifacts/gui
+
+      # SQLX_OFFLINE is set in .cargo/config.toml, so the macros read the
+      # committed .sqlx metadata and CI needs no database. This asserts the
+      # metadata is actually present — a missing .sqlx would otherwise fail with
+      # a confusing "set DATABASE_URL" error rather than naming the real problem.
+      - name: Check sqlx offline metadata is committed
+        run: |
+          test -d crates/revlocal-store/.sqlx \
+            || { echo "crates/revlocal-store/.sqlx is missing; run: cargo sqlx prepare"; exit 1; }
+
+      - name: cargo fmt
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee artifacts/logs/fmt-${{ matrix.os }}.log
+
+      - name: cargo clippy
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 \
+            | tee artifacts/logs/clippy-${{ matrix.os }}.log
+
+      - name: cargo build
+        run: |
+          set -o pipefail
+          cargo build --workspace 2>&1 | tee artifacts/logs/build-${{ matrix.os }}.log
+
+      - name: cargo test
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee artifacts/logs/test-${{ matrix.os }}.log
+
+      # Failure is when the logs and any Framewatch captures are worth having.
+      # `if: failure()` and not `always()`: a green run has nothing to explain.
+      - name: Upload logs and GUI captures on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-artifacts-${{ matrix.os }}
+          path: |
+            artifacts/logs/**
+            artifacts/gui/*.png
+          if-no-files-found: warn
+          retention-days: 14

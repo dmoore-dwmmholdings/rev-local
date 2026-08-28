@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE finding SET state = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f60f0ba6f4f16ceee402e1262d2275bd9c1069b9588c5695e53db8cd0c0528c3"
+}

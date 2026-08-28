@@ -1,0 +1,6 @@
+[env]
+# sqlx's query!/query_as! macros verify SQL against a real schema at compile time.
+# Pointing them at a live database would make the workspace build depend on one, so
+# the checked metadata is committed under crates/revlocal-store/.sqlx and this makes
+# the macros read it instead. See ADR 0009.
+SQLX_OFFLINE = "true"

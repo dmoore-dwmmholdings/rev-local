@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, at, actor, kind, repo_id, run_id, detail_json\n             FROM audit ORDER BY at DESC, id DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "at",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "at"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "repo_id",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "repo_id"
+          }
+        }
+      },
+      {
+        "name": "run_id",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "name": "detail_json",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit",
+            "name": "detail_json"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "41fbd1217e513928f46a5ef5f26eed57a070b17bcc4422388fe31757d377bf37"
+}

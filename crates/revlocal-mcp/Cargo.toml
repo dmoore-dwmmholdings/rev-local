@@ -1,0 +1,27 @@
+[package]
+name = "revlocal-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP client over stdio and streamable HTTP, with tool discovery."
+
+[dependencies]
+revlocal-core = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "rt", "macros", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+nix = { workspace = true, features = ["signal", "process"] }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+
+[lints]
+workspace = true
