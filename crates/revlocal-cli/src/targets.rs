@@ -34,13 +34,17 @@ pub enum TargetsCommandError {
     },
 
     /// The config file is not valid TOML, or not a valid document.
+    ///
+    /// The source is boxed: `toml::de::Error` is 96 bytes, and an error type that
+    /// large travels in every `Result` this command returns. clippy's
+    /// `result_large_err` is right about it.
     #[error("could not parse {path}: {source}")]
     Malformed {
         /// Which file.
         path: String,
         /// Why.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     /// A `[targets.*]` table could not be read.
@@ -68,8 +72,10 @@ pub enum TargetsCommandError {
     },
 
     /// The HTTP client could not be built for that endpoint.
+    ///
+    /// Boxed for the same reason as `Malformed`: `HttpError` is 120 bytes.
     #[error(transparent)]
-    Http(#[from] revlocal_mcp::HttpError),
+    Http(Box<revlocal_mcp::HttpError>),
 
     /// The report could not be serialized.
     #[error(transparent)]
@@ -107,6 +113,12 @@ pub enum TargetsCommandError {
         /// How many were tried.
         total: usize,
     },
+}
+
+impl From<revlocal_mcp::HttpError> for TargetsCommandError {
+    fn from(error: revlocal_mcp::HttpError) -> Self {
+        Self::Http(Box::new(error))
+    }
 }
 
 /// Build one client from a `[mcpServers.<id>]` entry.
@@ -164,7 +176,7 @@ pub async fn run(config_path: &Path, json: bool) -> Result<(), TargetsCommandErr
     let (config, warnings) =
         GlobalConfig::parse(&text).map_err(|source| TargetsCommandError::Malformed {
             path: config_path.display().to_string(),
-            source,
+            source: Box::new(source),
         })?;
 
     // §18: unknown keys are surfaced rather than dropped. Under --json they go to
@@ -356,7 +368,7 @@ fn read_config(config_path: &Path) -> Result<GlobalConfig, TargetsCommandError> 
     let (config, warnings) =
         GlobalConfig::parse(&text).map_err(|source| TargetsCommandError::Malformed {
             path: config_path.display().to_string(),
-            source,
+            source: Box::new(source),
         })?;
     for warning in &warnings {
         eprintln!("revlocal: {}", warning.message());
@@ -486,5 +498,24 @@ pub async fn test(
             failed,
             total: mapping.bound.len(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TargetsCommandError;
+
+    /// clippy's `result_large_err` fires at 128 bytes, and it fired on CI (Rust
+    /// 1.98) while this machine's older toolchain said nothing. The size is
+    /// asserted here so the next large variant is caught by `cargo test` rather
+    /// than by a CI leg three commits later.
+    #[test]
+    fn the_error_type_stays_small_enough_to_return_by_value() {
+        let size = std::mem::size_of::<TargetsCommandError>();
+        assert!(
+            size < 128,
+            "TargetsCommandError is {size} bytes; clippy::result_large_err fires at \
+             128. Box the largest variant's payload rather than raising this bound."
+        );
     }
 }
