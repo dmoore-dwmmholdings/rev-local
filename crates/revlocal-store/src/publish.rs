@@ -273,7 +273,39 @@ impl<'a> PublishActionStore<'a> {
         Ok(actions)
     }
 
-    /// Whether a `(target, capability)` pair has ever been delivered successfully.
+    /// Put one target's failed actions for one run back in the queue.
+    ///
+    /// `attempts` is reset to zero, and this is deliberate. A replay is a person
+    /// saying "try again", and leaving the count at five would mean the retry
+    /// policy refuses on the first pass — the request would be honoured in form
+    /// and denied in substance. `attempts` therefore means attempts in the
+    /// current delivery cycle, not attempts ever; the audit log is where the
+    /// history lives.
+    ///
+    /// Only `failed` rows are touched. A pending action is already going to be
+    /// tried, and resetting it would discard a backoff that is doing its job.
+    pub async fn reset_for_retry(&self, run_id: RunId, target: &str) -> Result<u64> {
+        let raw = run_id.get();
+        let pending = PublishActionStatus::Pending.as_str();
+        let failed = PublishActionStatus::Failed.as_str();
+
+        let affected = sqlx::query!(
+            "UPDATE publish_action
+             SET status = ?, attempts = 0, next_attempt_at = NULL, error = NULL
+             WHERE run_id = ? AND target = ? AND status = ?",
+            pending,
+            raw,
+            target,
+            failed
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        Ok(affected)
+    }
+
+    /// Whether a `(target, capability)` pair has ever been delivered successfully.    /// Whether a `(target, capability)` pair has ever been delivered successfully.
     ///
     /// Feeds the decision of record that first use of a pair is always high risk
     /// (SPEC §12.3). Only `sent` counts: an action that failed, was rejected, or

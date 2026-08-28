@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod publish;
 mod review;
 mod targets;
 
@@ -27,6 +28,12 @@ enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
+    /// Inspect and retry publish actions.
+    Publish {
+        #[command(subcommand)]
+        command: PublishSubcommand,
+    },
+
     /// Inspect publish targets and their capability mapping.
     Targets {
         #[command(subcommand)]
@@ -56,6 +63,36 @@ enum DbCommand {
     /// Create or upgrade the schema. Safe to run on an up-to-date database.
     Migrate {
         /// Database file. Created if it does not exist.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+    },
+}
+
+/// `revlocal publish …`.
+#[derive(Debug, Subcommand)]
+enum PublishSubcommand {
+    /// Show each target's status for one run.
+    Status {
+        /// The run to report on.
+        #[arg(long, value_name = "ID")]
+        run: i64,
+        /// Database file.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Print the machine-readable report instead of the human one.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Put one target's failed actions for one run back in the queue.
+    Replay {
+        /// The run to replay.
+        #[arg(long, value_name = "ID")]
+        run: i64,
+        /// The target to retry. Other targets are untouched.
+        #[arg(long, value_name = "TARGET")]
+        target: String,
+        /// Database file.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
     },
@@ -153,6 +190,10 @@ enum CliError {
     /// Targets could not be listed.
     #[error(transparent)]
     Targets(#[from] targets::TargetsCommandError),
+
+    /// A publish command failed.
+    #[error(transparent)]
+    Publish(#[from] Box<publish::PublishCommandError>),
 }
 
 /// Dispatch one command.
@@ -168,6 +209,25 @@ async fn run(command: Command) -> Result<(), CliError> {
         }
         Command::Review { repo, rev, json } => {
             review::run(&repo, &rev, json).await?;
+            Ok(())
+        }
+        Command::Publish { command } => {
+            match command {
+                PublishSubcommand::Status {
+                    run,
+                    database,
+                    json,
+                } => publish::status(&database, run, json)
+                    .await
+                    .map_err(Box::new)?,
+                PublishSubcommand::Replay {
+                    run,
+                    target,
+                    database,
+                } => publish::replay(&database, run, &target)
+                    .await
+                    .map_err(Box::new)?,
+            }
             Ok(())
         }
         Command::Targets { command } => {

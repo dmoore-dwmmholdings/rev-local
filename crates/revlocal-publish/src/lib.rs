@@ -6,11 +6,21 @@
 //! and a target that is slow, rate limited or broken degrades itself and nothing
 //! else.
 
+pub mod github;
 pub mod queue;
+pub mod report;
 pub mod retry;
 pub mod target;
 
+pub use github::{
+    compose, event_for, idempotency_key, DiffAnchors, ExistingReview, GitHubTarget, GitHubWriter,
+    InlineComment, ReviewDraft, ReviewEvent, ReviewOptions, ReviewPayload,
+};
+pub use github::{
+    find_own_review, gh_create_review, gh_list_reviews, gh_update_review, GhRequest, REVIEW_MARKER,
+};
 pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_CONCURRENCY};
+pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};
 

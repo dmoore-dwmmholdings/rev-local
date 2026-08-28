@@ -1775,6 +1775,7 @@ dependencies = [
 name = "revlocal-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "revlocal-core",
  "revlocal-daemon",
@@ -1872,6 +1873,7 @@ dependencies = [
  "chrono",
  "revlocal-core",
  "revlocal-store",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",

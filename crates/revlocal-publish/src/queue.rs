@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use revlocal_core::{PublishAction, PublishActionId, PublishActionStatus, Timestamp};
+use revlocal_core::{PublishAction, PublishActionId, PublishActionStatus, RunId, Timestamp};
 use revlocal_store::{Pool, PublishActionStore, StoreError};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
@@ -233,7 +233,37 @@ impl PublishQueue {
         }
     }
 
-    /// Deliver everything pending, up to `concurrency` at a time.
+    /// Try one target's failed actions for one run again (RL-710).
+    ///
+    /// Scoped to one target on purpose. A run whose GitHub review posted and
+    /// whose Andare issue failed should be retryable without re-posting the
+    /// review, and `UNIQUE(target, idempotency_key)` would make the re-post a
+    /// no-op anyway — but "it was a no-op" is a worse answer than "it was never
+    /// attempted" when somebody is watching a tracker for duplicates.
+    ///
+    /// Returns the number of actions put back in the queue and what dispatching
+    /// them did.
+    pub async fn replay(
+        &self,
+        run_id: RunId,
+        target: &str,
+        now: Timestamp,
+    ) -> Result<(u64, DispatchReport), QueueError> {
+        let store = PublishActionStore::new(&self.pool);
+        let requeued = store.reset_for_retry(run_id, target).await?;
+
+        let due = store
+            .list_pending(now)
+            .await?
+            .into_iter()
+            .filter(|action| action.run_id == run_id && action.target == target)
+            .collect();
+
+        let report = self.dispatch(due, now).await?;
+        Ok((requeued, report))
+    }
+
+    /// Deliver everything pending, up to `concurrency` at a time.    /// Deliver everything pending, up to `concurrency` at a time.
     ///
     /// This is what the daemon calls on startup, which is all "retried on
     /// startup" means: rows that were persisted and never sent are simply still

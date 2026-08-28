@@ -106,6 +106,29 @@ Renders every mapped capability against a sample finding and reports what would 
 sent. Nothing is called. Exits non-zero if any capability would not render, so it
 works as a check.
 
+## Publish status and retries
+
+A run can finish with one target posted and another failed — that is normal, not
+an error state, and a failed target does not hold the run open.
+
+```
+revlocal publish status --run <ID> --database <PATH> [--json]
+```
+
+```
+$ revlocal publish status --run 12 --database ~/.local/share/rev-local/rev-local.db
+github: delivered — 3 of 3 delivered
+andare: failed — 0 of 1 delivered (`andare` refused the request with 422: the project does not exist)
+revlocal: retry one with `revlocal publish replay --run 12 --target <TARGET>`
+```
+
+```
+revlocal publish replay --run <ID> --target <TARGET> --database <PATH>
+```
+
+Puts that target's failed actions back in the queue with a fresh attempt budget.
+Other targets are untouched — replaying Andare does not re-post the GitHub review.
+
 ## The local database
 
 ```
