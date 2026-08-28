@@ -53,7 +53,7 @@ mod fixtures {
         let root = workspace_root();
         let script = root.join("fixtures/build.sh");
 
-        let output = Command::new("bash")
+        let output = Command::new(revlocal_vcs::bash_program())
             .arg(&script)
             .arg("--out")
             .arg(out)

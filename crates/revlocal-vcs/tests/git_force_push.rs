@@ -56,7 +56,7 @@ mod git_force_push {
     fn fixture() -> Result<(TempDir, PathBuf), String> {
         let dir = TempDir::new().map_err(|e| format!("temp dir: {e}"))?;
         let root = workspace_root();
-        let output = Command::new("bash")
+        let output = Command::new(revlocal_vcs::bash_program())
             .arg(root.join("fixtures/build.sh"))
             .arg("--out")
             .arg(dir.path())

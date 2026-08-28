@@ -24,7 +24,7 @@ fn workspace_root() -> PathBuf {
 /// Build the git fixture. Helpers return `Result` (ADR 0003).
 fn build_fixture(out: &Path) -> Result<(), String> {
     let root = workspace_root();
-    let output = Command::new("bash")
+    let output = Command::new(revlocal_vcs::bash_program())
         .arg(root.join("fixtures/build.sh"))
         .arg("--out")
         .arg(out)

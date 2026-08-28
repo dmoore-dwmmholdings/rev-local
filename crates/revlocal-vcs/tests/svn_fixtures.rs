@@ -80,7 +80,7 @@ mod svn_fixtures {
     /// Run the fixture generator into `out` and parse the svn manifest.
     fn build_into(out: &Path) -> Result<SvnManifest, String> {
         let root = workspace_root();
-        let output = Command::new("bash")
+        let output = Command::new(revlocal_vcs::bash_program())
             .arg(root.join("fixtures/build.sh"))
             .arg("--out")
             .arg(out)

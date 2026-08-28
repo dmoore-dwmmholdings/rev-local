@@ -6,6 +6,7 @@
 //! and a target that is slow, rate limited or broken degrades itself and nothing
 //! else.
 
+pub mod andare;
 pub mod check;
 pub mod github;
 pub mod queue;
@@ -13,9 +14,14 @@ pub mod report;
 pub mod retry;
 pub mod target;
 
+pub use andare::{
+    compose_issue, filing_candidates, is_filable, plan, recurrence_comment, search_query,
+    AndareOptions, AndarePayload, AndareTarget, AndareWriter, FilingPlan, IssueContext, IssueDraft,
+    SearchOutcome, FINGERPRINT_TRAILER,
+};
 pub use check::{
-    conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckConclusion,
-    CheckPayload, CheckStatus, CHECK_NAME,
+    conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckPayload, CheckStatus,
+    CHECK_NAME,
 };
 pub use github::{
     compose, event_for, idempotency_key, DiffAnchors, ExistingReview, GitHubTarget, GitHubWriter,
