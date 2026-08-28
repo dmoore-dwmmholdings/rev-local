@@ -69,7 +69,7 @@ asserts the variant directly. Re-probing now fails both.
 **This is the fourth time in M6 that guessing a tool's output text has produced a
 silently dead code path** (RL-505's validator violations, RL-506a's
 `GIT_ALLOW_PROTOCOL` wording, RL-506a's fixture file paths, and this). The rule is now
-in `docs/STATE.md`: never write a string match against another tool's output without
+as a standing rule: never write a string match against another tool's output without
 running the tool and reading what it says.
 
 ## Consequences

@@ -16,7 +16,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
-repository = "https://github.com/dwmmholdings/rev-local"
+repository = "https://github.com/dmoore-dwmmholdings/rev-local"
 authors = ["rev-local contributors"]
 
 # Shared dependency versions. Member crates reference these with

@@ -119,9 +119,9 @@ fn the_four_gates_run_in_order() {
         "cargo build --workspace",
         "cargo test --workspace",
     ] {
-        let at = scripts[cursor..]
-            .find(gate)
-            .unwrap_or_else(|| panic!("CI must run `{gate}`, in BUILD_LOOP §2 order"));
+        let at = scripts[cursor..].find(gate).unwrap_or_else(|| {
+            panic!("CI must run `{gate}`, in fmt -> clippy -> build -> test order")
+        });
         cursor += at + gate.len();
     }
 }

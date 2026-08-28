@@ -1,8 +1,8 @@
 # rev-local — Specification v1.0
 
-**Status:** authoritative build spec. An autonomous coding agent should be able to
-implement this repository end-to-end by working the milestone list in §17 in order,
-running the acceptance tests after each one, and not advancing until they pass.
+**Status:** authoritative build spec. This repository is implemented end-to-end by
+working the milestone list in §17 in order, running the acceptance tests after each
+one, and not advancing until they pass.
 
 **Date:** 2026-08-27
 
@@ -37,7 +37,7 @@ GitHub, as an issue in Andare, as a written review page in Trama.
    outcome, never a hang and never a silent drop.
 5. **Headless-equivalent.** Everything the GUI can do, the `revlocal` CLI can do.
    This is a hard architectural requirement — it is what makes the product
-   testable and what lets an autonomous agent build it.
+   testable end to end without a display.
 
 ### 1.2 Non-goals (v1)
 
@@ -53,7 +53,7 @@ GitHub, as an issue in Andare, as a written review page in Trama.
 ## 2. Decisions of record
 
 These were settled with the product owner and are **not open for reinterpretation**
-by the implementing agent.
+during implementation.
 
 | # | Decision | Value |
 |---|---|---|
@@ -112,7 +112,6 @@ rev-local/
 ├── ui/                         # React + TS + Vite
 ├── fixtures/                   # offline git & svn fixture generators (§16.2)
 ├── docs/
-│   ├── BUILD_LOOP.md           # the autonomous agent's operating protocol
 │   └── adr/                    # one ADR per non-obvious decision made during build
 └── SPEC.md                     # this file
 ```
@@ -1172,23 +1171,23 @@ driver that writes a label per step, so every settled frame is captioned with th
 step that produced it and captions cannot drift from actions. Flows to cover:
 `onboarding`, `add-repo-to-review`, `approve-queued-action`.
 
-**How the loop uses it.** Capture is only half the gate. The agent then *reads* the
-PNG and checks it against the screen's stated checklist (§15). Perceptual pixel
-diffing against golden images is explicitly **not** the primary gate — it is too
-brittle across platforms, fonts and DPI. Goldens may be added later as a regression
-signal with a tolerance, but the load-bearing check is "an agent looked at the
-screenshot and confirmed the required elements are present".
+**How the capture is used.** Capture is only half the gate. The PNG is then *read*
+and checked against the screen's stated checklist (§15). Perceptual pixel diffing
+against golden images is explicitly **not** the primary gate — it is too brittle
+across platforms, fonts and DPI. Goldens may be added later as a regression signal
+with a tolerance, but the load-bearing check is that someone looked at the
+screenshot and confirmed the required elements are present.
 
 Headless CI viability (Xvfb/Wayland on Linux, screen-recording consent on macOS) is
-unresolved — see the spike in the backlog (`RL-1104`). Until it is decided, GUI gates
-are local/loop-only and CI runs the `vitest` layer.
+unresolved. Until it is decided, GUI gates are local-only and CI runs the `vitest`
+layer.
 
 ---
 
 ## 17. Milestones
 
-Work these **in order**. Each has an exit gate that is a command the agent runs.
-Do not begin milestone N+1 until N's gate passes. Record any deviation as an ADR.
+Work these **in order**. Each has an exit gate that is a command to run. Do not
+begin milestone N+1 until N's gate passes. Record any deviation as an ADR.
 
 | M | Title | Deliverable | Exit gate (must pass) |
 |---|---|---|---|
@@ -1205,7 +1204,7 @@ Do not begin milestone N+1 until N's gate passes. Record any deviation as an ADR
 | **M10** | Autonomy | modes, risk classification wiring, approvals inbox, kill switch, budgets | tests: `dry_run` performs zero MCP writes; `auto_low_ask_high` sends a comment but queues an issue; **first-use of a capability is always queued**; kill switch cancels a running mock engine within 3s and leaves the publish queue intact; budget exhaustion pauses and later resumes without losing changes |
 | **M11** | SVN adapter | per-revision discovery/materialize, pseudo-PR synthesis (§6.4) | integration test on `svn-basic`: N revisions discovered in order; the reintegration revision produces **both** a `svn_rev` and a `svn_pseudo_pr` change; the pseudo-PR diff equals the branch-vs-trunk diff, not the merge revision's; per-revision branch findings are demoted in the pseudo-PR's publish plan |
 | **M12** | Triggers | poll loop w/ backoff+jitter, loopback hook receiver + hook installer, webhook listener + signature verification + tunnel adapters, coalescing | tests: hook script exits 0 in < 2s with the receiver **down**; an existing user hook survives install/uninstall byte-identically; four simultaneous triggers for one repo produce exactly one discovery pass; a bad webhook signature is rejected |
-| **M13** | Desktop UI | six screens (§15), Tauri commands, live events, tray + kill switch, **Framewatch verification harness** (§16.4) | `vitest` green; `scripts/gui-verify.sh all` writes a non-empty settled PNG per screen and exits 0; the agent reads each PNG and confirms the screen's §15 checklist; `scripts/gui-flow.sh add-repo-to-review` produces one captioned frame per step; kill switch visible in all six captures |
+| **M13** | Desktop UI | six screens (§15), Tauri commands, live events, tray + kill switch, **Framewatch verification harness** (§16.4) | `vitest` green; `scripts/gui-verify.sh all` writes a non-empty settled PNG per screen and exits 0; each PNG is read and confirmed against the screen's §15 checklist; `scripts/gui-flow.sh add-repo-to-review` produces one captioned frame per step; kill switch visible in all six captures |
 | **M14** | Live engines | `--features engine-live` suite, `revlocal doctor` polish, packaging for 3 OSes | `cargo test --features engine-live -- --ignored` finds the planted SQL-injection with **both** `claude` and `codex`; `revlocal doctor --json` reports every prerequisite with actionable remediation text; installers build on all three platforms |
 
 ---

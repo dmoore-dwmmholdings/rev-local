@@ -13,8 +13,8 @@
 //!
 //! First-ever use of a `(target, capability)` pair is **always** high risk, even
 //! when the action is otherwise trivially safe. This is deliberate — the first
-//! time rev-local ever writes to a system, a human sees it. It is listed in
-//! BUILD_PROMPT as not the implementing agent's decision to reinterpret.
+//! time rev-local ever writes to a system, a human sees it. It is a fixed
+//! constraint, not a threshold to be tuned.
 
 use crate::{Capability, RiskClass, Verdict, LOW_CONFIDENCE_THRESHOLD};
 use serde::{Deserialize, Serialize};

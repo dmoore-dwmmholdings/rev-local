@@ -7,7 +7,7 @@
 
 `rev-local` is built by an autonomous loop against `SPEC.md`. The spec fixes the
 decisions of record (§2) but deliberately leaves implementation judgement to the
-implementer (BUILD_LOOP §6). Without a record, those judgements become invisible
+implementer. Without a record, those judgements become invisible
 and the spec silently drifts from the code.
 
 ## Decision

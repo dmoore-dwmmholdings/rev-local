@@ -60,7 +60,7 @@ named test.
 ## Not reinterpreted
 
 *First use of a `(target, capability)` pair is always high risk* is a decision of
-record (SPEC §12.3, BUILD_PROMPT). It is implemented literally: checked
+record (SPEC §12.3). It is implemented literally: checked
 independently of the baseline, applying to every intent, with no exemption for
 actions that look harmless. `RiskInputs` deliberately has no `Default` — defaulting
 `pair_previously_succeeded` to `true` would silently skip the one rule that must

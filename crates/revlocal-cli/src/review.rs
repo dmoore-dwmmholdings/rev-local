@@ -109,7 +109,9 @@ pub async fn run(repo_path: &Path, rev: &str, json: bool) -> Result<(), ReviewCo
     // is safe to run anywhere — and says so, on stderr, where `--json` cannot see it.
     let engine = MockEngine::new();
     if !json {
-        eprintln!("revlocal: reviewing with the mock engine (engine selection is RL-1201)");
+        eprintln!(
+            "revlocal: reviewing with the mock engine (live engine selection is not wired yet)"
+        );
     }
 
     let report = pipeline::review(

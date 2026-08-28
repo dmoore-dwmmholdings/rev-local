@@ -6,8 +6,8 @@ Item: RL-101
 
 ## Context
 
-BUILD_PROMPT's hard constraints forbid `unwrap()` and `expect()` outside tests, and
-`docs/BUILD_LOOP.md` §3 requires a doc comment on every new public item. Both need to
+A hard constraint of this project forbids `unwrap()` and `expect()` outside tests,
+and every new public item requires a doc comment. Both need to
 be enforced by the gate (`cargo clippy --workspace --all-targets -- -D warnings`)
 rather than by review, and enforced once for all eight crates rather than repeated in
 eight `lib.rs` headers.

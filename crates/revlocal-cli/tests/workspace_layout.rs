@@ -70,7 +70,7 @@ fn unwrap_and_expect_are_denied_outside_tests() {
     for lint in ["unwrap_used", "expect_used"] {
         assert!(
             manifest.contains(&format!("{lint} = \"deny\"")),
-            "[workspace.lints.clippy] must deny {lint} (BUILD_PROMPT hard constraints)"
+            "[workspace.lints.clippy] must deny {lint}"
         );
     }
     for key in [

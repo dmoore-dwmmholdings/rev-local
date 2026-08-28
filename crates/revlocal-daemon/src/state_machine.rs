@@ -28,8 +28,7 @@ use revlocal_store::{Pool, RunStore, StoreError};
 /// How many attempts one change gets before rev-local stops re-enqueueing it.
 ///
 /// Not in SPEC §13.1, which has `stale_run_minutes` but no attempt ceiling. Chosen
-/// here and surfaced as a parameter so it can become config without a rewrite; see
-/// the note in `docs/STATE.md`.
+/// here and surfaced as a parameter so it can become config without a rewrite.
 ///
 /// Three, because the failures worth retrying are transient — a machine that slept,
 /// an engine that was mid-update — and a third identical failure is evidence rather

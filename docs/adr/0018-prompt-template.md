@@ -9,7 +9,7 @@
 
 SPEC §9.2 fixes seven prompt sections and their order, names the template path
 (`crates/revlocal-engine/prompts/review.md.hbs`), and caps repo conventions at
-`max_convention_bytes` (24 KB). BUILD_LOOP §6 makes prompt *wording* mine, provided
+`max_convention_bytes` (24 KB). The prompt's *wording* is an implementation choice, provided
 the section order and the §8.2 output contract survive.
 
 Two things had to be decided.
