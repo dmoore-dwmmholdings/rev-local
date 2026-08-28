@@ -22,7 +22,7 @@
 //! a lie in the direction that costs somebody an afternoon. The check says neutral
 //! and the title says the review did not finish.
 
-use revlocal_core::{PublishAction, PublishActionStatus, Run, RunStatus, Verdict};
+use revlocal_core::{CheckConclusion, PublishAction, PublishActionStatus, Run, RunStatus, Verdict};
 use serde::{Deserialize, Serialize};
 
 use crate::github::{GhRequest, ReviewOptions};
@@ -50,30 +50,13 @@ impl CheckStatus {
     }
 }
 
-/// How a completed check resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckConclusion {
-    /// Nothing blocking.
-    Success,
-    /// Findings, but not blocking — or a review that did not finish.
-    Neutral,
-    /// Blocking findings, and the repository asked to be blocked.
-    Failure,
-}
-
-impl CheckConclusion {
-    /// GitHub's own name for it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::Neutral => "neutral",
-            Self::Failure => "failure",
-        }
-    }
-}
-
 /// §11.3's mapping from a run's verdict to a check conclusion.
+///
+/// Returns `revlocal_core`'s `CheckConclusion` rather than a type of this crate's
+/// own. The risk model (§12.3) classifies a check by its conclusion, so a second
+/// enum meaning the same thing would need a conversion between them that nobody
+/// would remember to keep in step — and the one place it mattered would be the
+/// one deciding whether an action needs a human.
 ///
 /// `failure` requires the repository to have opted in with `block_on_findings`,
 /// which defaults to false. Same reasoning as `allow_approve`: a failing required
@@ -97,6 +80,10 @@ pub struct CheckPayload {
     /// Running, or over.
     pub status: CheckStatus,
     /// How it resolved. `None` while in progress.
+    ///
+    /// `CheckConclusion::InProgress` exists in the core enum because §12.3
+    /// classifies the in-progress check too; here the status field carries that,
+    /// so this stays `None` rather than duplicating it.
     pub conclusion: Option<CheckConclusion>,
     /// The one-line title.
     pub title: String,

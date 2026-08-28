@@ -4,13 +4,13 @@
 
 use chrono::TimeZone;
 use revlocal_core::{
-    AutonomyMode, Capability, Change, ChangeId, ChangeKind, Depth, DiffStat, EngineKind,
-    PublishAction, PublishActionId, PublishActionStatus, Repo, RepoId, RepoKind, RiskClass, Run,
-    RunId, RunStatus, Timestamp, TriggerSource, Usage, Verdict,
+    AutonomyMode, Capability, Change, ChangeId, ChangeKind, CheckConclusion, Depth, DiffStat,
+    EngineKind, PublishAction, PublishActionId, PublishActionStatus, Repo, RepoId, RepoKind,
+    RiskClass, Run, RunId, RunStatus, Timestamp, TriggerSource, Usage, Verdict,
 };
 use revlocal_publish::{
-    conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckConclusion,
-    CheckPayload, CheckStatus, ReviewOptions, CHECK_NAME,
+    conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckPayload, CheckStatus,
+    ReviewOptions, CHECK_NAME,
 };
 use revlocal_store::{open, ChangeStore, Pool, PublishActionStore, RepoStore, RunStore};
 use tempfile::TempDir;

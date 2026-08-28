@@ -46,7 +46,7 @@ mod fixture_parity {
         let bash_dir = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
         let pwsh_dir = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
 
-        let bash_status = Command::new("bash")
+        let bash_status = Command::new(revlocal_vcs::bash_program())
             .arg(root.join("fixtures/build.sh"))
             .arg("--out")
             .arg(bash_dir.path())
