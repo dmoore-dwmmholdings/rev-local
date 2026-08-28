@@ -10,9 +10,11 @@ description = "`PublishTarget` trait plus the GitHub, Andare, Trama and generic 
 
 [dependencies]
 revlocal-core = { workspace = true }
+revlocal-mcp = { workspace = true }
 revlocal-store = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -21,6 +23,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
+regex = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

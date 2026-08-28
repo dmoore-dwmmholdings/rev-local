@@ -11,6 +11,20 @@
 
 set -euo pipefail
 
+# The repository's current HEAD revision, as a bare number.
+#
+# NOT `svn info --show-item revision`: that arrived in Subversion 1.9, and the
+# Windows runner installs win32svn 1.8.15, where it is `invalid option`. `--xml`
+# has been there since 1.3 and is stable output, which is the other reason to
+# prefer it — ADR 0023's rule about parsing another tool's human output.
+head_revision() {
+  local url="$1"
+  svn "${svn_opts[@]}" info --xml "$url" \
+    | tr '>' '>\n' \
+    | grep -m 1 'revision="' \
+    | sed -e 's/.*revision="//' -e 's/".*//'
+}
+
 # Build the svn fixture into $1. Assumes `svn` and `svnadmin` exist; build.sh
 # checks that and writes the skip manifest when they do not.
 build_svn_fixture() {
@@ -126,7 +140,7 @@ EOF
   # revision the branch was copied FROM, not the working copy's own revision
   # (which lags behind after committing a child path).
   local fork_rev
-  fork_rev="$(svn "${svn_opts[@]}" info --show-item revision "${repo_url}")"
+  fork_rev="$(head_revision "${repo_url}")"
 
   # r7 — branch created by copy. This revision is the fork point.
   _svn copy -m "Create branches/feature-x from trunk" \
@@ -188,7 +202,7 @@ EOF
   popd >/dev/null
 
   local head_rev
-  head_rev="$(svn "${svn_opts[@]}" info --show-item revision "${repo_url}")"
+  head_rev="$(head_revision "${repo_url}")"
 
   # The manifest below names revisions by number. If the repository did not end
   # up the shape this script thinks it did, those numbers are wrong and every
