@@ -122,12 +122,19 @@ jobs:
           cargo test --workspace 2>&1 | tee artifacts/logs/test-${{ matrix.os }}.log
 
       # Failure is when the logs and any Framewatch captures are worth having.
-      # `if: failure()` and not `always()`: a green run has nothing to explain.
+      # Not `always()`: a green run has nothing to explain.
+      #
+      # `cancelled()` as well as `failure()`, because a job killed by
+      # `timeout-minutes` reports **cancelled**, not failed — so `if: failure()`
+      # alone skips this step on exactly the run that most needs it. Observed on
+      # run 33160541055: the Windows leg hit the 45-minute bound, this step was
+      # skipped, and the hang produced no artifacts at all. The bound without the
+      # upload only makes a hang cheaper, not diagnosable.
       - name: Upload logs and GUI captures on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: failure-artifacts-${{ matrix.os }}
+          name: failure-artifacts-${{ matrix.os }}-${{ github.run_attempt }}
           path: |
             artifacts/logs/**
             artifacts/gui/*.png
