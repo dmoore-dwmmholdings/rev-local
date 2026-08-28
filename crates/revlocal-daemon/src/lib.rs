@@ -4,6 +4,7 @@
 
 pub mod approvals;
 pub mod autonomy;
+pub mod backfill;
 pub mod budgets;
 pub mod depth;
 pub mod gating;
