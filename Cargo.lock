@@ -1867,6 +1867,17 @@ dependencies = [
 [[package]]
 name = "revlocal-publish"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "revlocal-core",
+ "revlocal-store",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "revlocal-store"
