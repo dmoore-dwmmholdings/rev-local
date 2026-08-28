@@ -89,6 +89,7 @@ async fn trama_upsert_every_update_is_immediately_preceded_by_a_get_for_the_same
             parent: Some(parent_page_title("rev-local")),
             section: "## Findings\n\nNone.".to_owned(),
             publish: false,
+            issue_key: None,
         })
         .await
         .unwrap_or_else(|e| panic!("{e}"));
@@ -271,6 +272,19 @@ impl TramaWriter for FakeTrama {
             .push(format!("publish:{title}"));
         Ok(())
     }
+
+    async fn link_to_issue(
+        &self,
+        _space: &str,
+        title: &str,
+        issue_key: &str,
+    ) -> Result<(), PublishError> {
+        self.calls
+            .lock()
+            .map_err(|e| transport(&e.to_string()))?
+            .push(format!("link:{title}:{issue_key}"));
+        Ok(())
+    }
 }
 
 fn transport(detail: &str) -> PublishError {
@@ -287,6 +301,7 @@ fn a_page(publish: bool) -> PagePayload {
         parent: Some(parent_page_title("rev-local")),
         section: "## Findings\n\nOne.".to_owned(),
         publish,
+        issue_key: None,
     }
 }
 

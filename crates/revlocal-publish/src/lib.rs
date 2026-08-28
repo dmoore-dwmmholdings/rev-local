@@ -37,9 +37,9 @@ pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};
 pub use trama::{
-    human_content, index_page_title, marked_section, merge_body, parent_page_title,
-    review_page_title, McpTramaWriter, PagePayload, TramaTarget, TramaToolNames, TramaWriter,
-    MARKER_BEGIN, MARKER_END,
+    human_content, index_backlink, index_page_title, marked_section, merge_body, parent_page_title,
+    render_index, review_page_section, review_page_title, IndexEntry, McpTramaWriter, PagePayload,
+    TramaTarget, TramaToolNames, TramaWriter, DEFAULT_INDEX_LIMIT, MARKER_BEGIN, MARKER_END,
 };
 pub use work_item::{
     outcome_comment, plan_outcomes, transition_for, KeyPattern, KeyPatternError, OutcomeReport,
