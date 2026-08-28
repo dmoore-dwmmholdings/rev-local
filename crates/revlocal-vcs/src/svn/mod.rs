@@ -25,6 +25,7 @@ pub use materialize::{
     EXPORT_SUBDIR,
 };
 pub use pseudo_pr::{
-    detect, fork_point, gained_branches, mergeinfo_at, pseudo_pr_diff, pseudo_pr_external_id,
-    Detection, GainedRange, Heuristics, MergeInfo, DEFAULT_PSEUDO_PR_MIN_FILES,
+    classify_gain, detect, fork_point, gained_branches, mergeinfo_at, pseudo_pr_diff,
+    pseudo_pr_external_id, Detection, GainedRange, Heuristics, MergeEvidence, MergeInfo,
+    MergeStyle, DEFAULT_PSEUDO_PR_MIN_FILES,
 };

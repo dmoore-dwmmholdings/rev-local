@@ -421,7 +421,13 @@ Superset of git. Adds pull-request discovery and PR-aware publishing.
   `external_id = "{branch}@r{rev}"`, whose diff is the **whole branch-vs-trunk
   diff** (`svn diff {trunk_url}@{fork_rev} {branch_url}@{rev}`), not just the merge
   revision. Detection heuristics, in order:
-  1. `svn:mergeinfo` on the target path gained ranges from a branch path;
+  1. `svn:mergeinfo` on the target path gained ranges from a branch path **and**
+     the gain is a reintegration rather than one of the three other merge styles
+     that also move mergeinfo (ADR 0031): the source path is not the watched
+     trunk (else it is a sync merge), the revision changes file content and not
+     only `svn:mergeinfo` (else it is `--record-only`, which marks revisions as
+     deliberately *not* merged), and the gained range reaches the branch's
+     last-changed revision (else it is a cherry-pick);
   2. log message matches `merge_detect_regex` (default
      `(?i)\b(merge|reintegrat\w+)\b.*\b(branches?/[\w./-]+)`);
   3. the revision touches ≥ `pseudo_pr_min_files` (default 5) files and its

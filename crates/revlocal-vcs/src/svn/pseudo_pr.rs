@@ -30,6 +30,28 @@
 //! the *real* reviews in its favour. So the heuristics are ordered by how much
 //! they prove, and the weakest one requires corroboration: a file count *and* a
 //! branch path that actually exists.
+//!
+//! # What RL-906 found: gaining mergeinfo is not the same as reintegrating
+//!
+//! §6.4 states heuristic 1 as "`svn:mergeinfo` on the target path gained ranges
+//! from a branch path". Measured against Subversion 1.14.5, that condition is true
+//! of **four** different merge styles, and only one of them is a reintegration:
+//!
+//! | style | mergeinfo gained | content changed | source | range reaches branch head |
+//! |---|---|---|---|---|
+//! | reintegrate | `/branches/x:3-8` | yes | a branch | yes |
+//! | sync merge (trunk → branch) | `/trunk:4-9` | yes | **trunk** | n/a |
+//! | cherry-pick (`-c N`) | `/branches/x:7` | yes | a branch | **no** |
+//! | `--record-only` | `/branches/x:8` | **no** | a branch | yes |
+//!
+//! Taken literally, heuristic 1 fires on all four. The last is the worst: the
+//! `--record-only` idiom exists to mark a revision as *deliberately never to be
+//! merged*, and treating it as a reintegration would synthesise a review of code
+//! a human explicitly rejected. The cherry-pick case is nearly as bad — one
+//! revision was taken, and the pseudo-PR diff would be the whole branch.
+//!
+//! So each style gets a discriminator, and [`MergeEvidence`] carries the three
+//! facts they need. See ADR 0031.
 
 use std::collections::BTreeMap;
 
@@ -129,6 +151,127 @@ pub fn gained_branches(before: &MergeInfo, after: &MergeInfo) -> Vec<GainedRange
             })
         })
         .collect()
+}
+
+/// What a `svn:mergeinfo` gain actually represents (RL-906).
+///
+/// Only [`Reintegration`](MergeStyle::Reintegration) warrants a pseudo-PR. The
+/// other three are named rather than lumped into a boolean because "we saw
+/// mergeinfo move and did not synthesise a change" is worth being able to say out
+/// loud — §18 — and because an operator debugging a missing pseudo-PR needs to
+/// know which of the three it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeStyle {
+    /// A branch merged into the watched path. The one that gets a pseudo-PR.
+    Reintegration,
+    /// The watched path merged *into* a branch — the opposite direction.
+    SyncMerge,
+    /// Individual revisions taken from a branch, not the branch itself.
+    CherryPick,
+    /// `--record-only`: mergeinfo written with no content, to mark a revision as
+    /// never to be merged. Reviewing this would review rejected code.
+    RecordOnly,
+}
+
+impl MergeStyle {
+    /// Whether this style should produce a pseudo-PR.
+    pub const fn is_reintegration(self) -> bool {
+        matches!(self, Self::Reintegration)
+    }
+
+    /// Why no pseudo-PR was synthesised, for the run record.
+    pub const fn explain_rejection(self) -> Option<&'static str> {
+        match self {
+            Self::Reintegration => None,
+            Self::SyncMerge => Some(
+                "the merge ran into a branch rather than out of one, so there is \
+                 nothing new on the watched path to review",
+            ),
+            Self::CherryPick => Some(
+                "only part of the branch was merged, so the branch-vs-trunk diff \
+                 would contain work that was not taken",
+            ),
+            Self::RecordOnly => Some(
+                "svn:mergeinfo was recorded with no content change (--record-only), \
+                 which marks the revisions as deliberately not merged",
+            ),
+        }
+    }
+}
+
+/// The facts heuristic 1 needs beyond the mergeinfo property itself (RL-906).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MergeEvidence {
+    /// The watched trunk path. A gain *from* this is a sync merge.
+    pub trunk: String,
+    /// Whether the revision changed file content, not only `svn:mergeinfo`.
+    ///
+    /// From `svn diff --summarize`: see [`ChangedPath::is_property_only`].
+    ///
+    /// [`ChangedPath::is_property_only`]: super::materialize::ChangedPath::is_property_only
+    pub changes_content: bool,
+    /// Each branch's last-changed revision as of just before this one.
+    ///
+    /// A reintegration records a range reaching the branch's head; a cherry-pick
+    /// records less. Absent means unknown, which is treated as "do not reject" —
+    /// the completeness test is the one most likely to be wrong on an unusual
+    /// history, and a missed rejection costs less than a missed reintegration.
+    pub branch_last_changed: BTreeMap<String, u64>,
+}
+
+impl MergeEvidence {
+    /// Evidence for a repository whose trunk is `trunk`, with content changed.
+    pub fn new(trunk: &str) -> Self {
+        Self {
+            trunk: normalize_branch(trunk),
+            changes_content: true,
+            branch_last_changed: BTreeMap::new(),
+        }
+    }
+
+    /// Record a branch's last-changed revision.
+    #[must_use]
+    pub fn with_branch_head(mut self, branch: &str, revision: u64) -> Self {
+        self.branch_last_changed
+            .insert(normalize_branch(branch), revision);
+        self
+    }
+
+    /// Mark the revision as changing no file content (`--record-only`).
+    #[must_use]
+    pub const fn without_content(mut self) -> Self {
+        self.changes_content = false;
+        self
+    }
+}
+
+/// Classify one mergeinfo gain (RL-906).
+///
+/// Order matters only for which reason is reported; the styles are disjoint in
+/// practice. Direction is checked first because it is the one that does not depend
+/// on any fact beyond the two paths.
+pub fn classify_gain(gain: &GainedRange, evidence: &MergeEvidence) -> MergeStyle {
+    // Trunk merged into a branch. Nothing new arrived on the watched path.
+    if !evidence.trunk.is_empty() && normalize_branch(&gain.branch) == evidence.trunk {
+        return MergeStyle::SyncMerge;
+    }
+
+    // Mergeinfo moved and nothing else did.
+    if !evidence.changes_content {
+        return MergeStyle::RecordOnly;
+    }
+
+    // Part of the branch, not the branch. Unknown head means do not reject.
+    if let Some(head) = evidence
+        .branch_last_changed
+        .get(&normalize_branch(&gain.branch))
+    {
+        if gain.through < *head {
+            return MergeStyle::CherryPick;
+        }
+    }
+
+    MergeStyle::Reintegration
 }
 
 /// Which heuristics are enabled. All three, normally; one at a time in tests.
@@ -254,11 +397,14 @@ pub fn detect(
     merge_detect: &Regex,
     existing_branches: &[String],
     heuristics: Heuristics,
+    evidence: &MergeEvidence,
 ) -> Option<Detection> {
     if heuristics.mergeinfo {
+        // RL-906: a gain is necessary but not sufficient. Three of the four merge
+        // styles that move mergeinfo are not reintegrations.
         if let Some(gained) = gained_branches(mergeinfo_before, mergeinfo_after)
             .into_iter()
-            .next()
+            .find(|gain| classify_gain(gain, evidence).is_reintegration())
         {
             return Some(Detection::MergeInfo {
                 branch: gained.branch,

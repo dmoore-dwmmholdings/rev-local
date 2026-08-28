@@ -22,7 +22,7 @@ use std::process::Stdio;
 use regex::Regex;
 use revlocal_vcs::svn::{
     detect, fork_point, gained_branches, mergeinfo_at, parse_log_xml, pseudo_pr_diff,
-    pseudo_pr_external_id, Detection, Heuristics, MergeInfo, SvnRevision, SvnRunner,
+    pseudo_pr_external_id, Detection, Heuristics, MergeEvidence, MergeInfo, SvnRevision, SvnRunner,
 };
 
 /// SPEC §13.2's default, which is what a repository gets unless it overrides it.
@@ -145,6 +145,7 @@ fn heuristic_one_fires_with_the_others_disabled() -> Result<(), String> {
         &merge_detect()?,
         &[],
         Heuristics::only_mergeinfo(),
+        &MergeEvidence::new("/trunk"),
     );
 
     assert_eq!(
@@ -169,6 +170,7 @@ fn heuristic_two_fires_with_the_others_disabled() -> Result<(), String> {
         &merge_detect()?,
         &[],
         Heuristics::only_log_message(),
+        &MergeEvidence::new("/trunk"),
     );
 
     assert_eq!(
@@ -198,6 +200,7 @@ fn heuristic_three_fires_with_the_others_disabled() -> Result<(), String> {
         &merge_detect()?,
         &existing,
         Heuristics::only_file_count(5),
+        &MergeEvidence::new("/trunk"),
     );
 
     assert_eq!(
@@ -224,6 +227,7 @@ fn heuristic_three_needs_a_branch_that_exists() -> Result<(), String> {
         &merge_detect()?,
         &[],
         Heuristics::only_file_count(5),
+        &MergeEvidence::new("/trunk"),
     );
 
     assert_eq!(found, None);
@@ -249,6 +253,7 @@ fn a_commit_that_merely_says_merge_does_not_invent_a_change() -> Result<(), Stri
             &merge_detect()?,
             &[],
             Heuristics::default(),
+            &MergeEvidence::new("/trunk"),
         );
         assert_eq!(found, None, "{message:?} should not produce a pseudo-PR");
     }
@@ -393,6 +398,7 @@ fn the_reintegration_revision_produces_both_kinds_of_change() -> Result<(), Stri
                 &merge_detect()?,
                 &[],
                 Heuristics::default(),
+                &MergeEvidence::new("/trunk"),
             )
             .ok_or("r10 is the fixture's reintegration and must be detected")?;
 
@@ -435,6 +441,7 @@ fn the_mergeinfo_only_revision_is_detected_without_the_log_message() -> Result<(
                 &merge_detect()?,
                 &[],
                 Heuristics::only_mergeinfo(),
+                &MergeEvidence::new("/trunk"),
             )
             .ok_or("r13 must be detected by mergeinfo alone")?;
 
@@ -467,7 +474,8 @@ fn an_ordinary_revision_is_not_a_reintegration() -> Result<(), String> {
                     &after,
                     &merge_detect()?,
                     &[],
-                    Heuristics::default()
+                    Heuristics::default(),
+                    &MergeEvidence::new("/trunk"),
                 ),
                 None
             );
