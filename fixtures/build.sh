@@ -17,13 +17,23 @@
 
 set -euo pipefail
 
-FIXTURE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Paths arrive from Rust tests as native paths, and on Windows that means
+# backslashes. Git Bash understands `D:/a/repo/file` but not `D:\a\repo\file`:
+# `dirname` on a backslash path finds no separator and answers ".", so the script
+# would compute its own root as the caller's working directory and then fail with
+# nothing on stderr — which is exactly how this presented on the Windows CI leg.
+# One substitution here fixes every caller rather than each test doing it.
+posix_path() {
+  printf '%s' "${1//\\//}"
+}
+
+FIXTURE_ROOT="$(cd "$(dirname "$(posix_path "${BASH_SOURCE[0]}")")" && pwd)"
 OUT_DIR="${FIXTURE_ROOT}/out"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --out) OUT_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --out) OUT_DIR="$(posix_path "$2")"; shift 2 ;;
+    -h|--help) sed -n '2,18p' "$(posix_path "${BASH_SOURCE[0]}")"; exit 0 ;;
     *) echo "build.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
