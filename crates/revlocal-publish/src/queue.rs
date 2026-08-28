@@ -38,6 +38,7 @@ use revlocal_store::{Pool, PublishActionStore, StoreError};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
 
+use crate::retry::RetryPolicy;
 use crate::target::{PublishError, PublishTarget};
 
 /// SPEC §11.1: four actions in flight at once.
@@ -52,6 +53,8 @@ pub struct QueueConfig {
     pub rate_limits: BTreeMap<String, Duration>,
     /// Minimum gap applied to targets with no specific limit.
     pub default_rate_limit: Duration,
+    /// How many attempts an action gets, and how long between them (§11.6).
+    pub retry: RetryPolicy,
 }
 
 impl Default for QueueConfig {
@@ -60,6 +63,7 @@ impl Default for QueueConfig {
             concurrency: DEFAULT_CONCURRENCY,
             rate_limits: BTreeMap::new(),
             default_rate_limit: Duration::ZERO,
+            retry: RetryPolicy::default(),
         }
     }
 }
@@ -100,7 +104,7 @@ pub enum QueueError {
 pub struct DispatchReport {
     /// Actions delivered.
     pub sent: usize,
-    /// Actions that failed and may be retried.
+    /// Actions that failed and are scheduled to be tried again.
     pub retryable: usize,
     /// Actions that failed terminally.
     pub failed: usize,
@@ -186,13 +190,21 @@ impl PublishQueue {
         self.targets.keys().map(String::as_str)
     }
 
+    /// The retry policy in force.
+    pub const fn retry_policy(&self) -> &RetryPolicy {
+        &self.config.retry
+    }
+
     /// Persist an action. **Does not send it.**
     ///
     /// Returns as soon as the row is written, which is what keeps a slow target
     /// out of the review path. A duplicate `(target, idempotency_key)` is a
     /// success and returns the existing action: §11.6 wants at-least-once
     /// delivery with exactly-once effect, so an action already recorded means the
-    /// effect is already accounted for.
+    /// effect is already accounted for. When that action was already sent, the row
+    /// it returns carries the original `external_ref` and response — replaying is
+    /// a no-op that hands back the first receipt rather than producing a second
+    /// one (RL-702).
     pub async fn enqueue(&self, action: &PublishAction) -> Result<PublishAction, QueueError> {
         let store = PublishActionStore::new(&self.pool);
         match store.insert(action).await {
@@ -259,7 +271,7 @@ impl PublishQueue {
 
                 match target.execute(&action).await {
                     Ok(receipt) => Outcome::Sent(action.id, Box::new(receipt)),
-                    Err(error) => Outcome::Failed(action.id, Box::new(error)),
+                    Err(error) => Outcome::Failed(action.id, action.attempts, Box::new(error)),
                 }
             });
         }
@@ -289,21 +301,42 @@ impl PublishQueue {
                         .await?;
                     report.sent += 1;
                 }
-                Outcome::Failed(id, error) => {
-                    let retryable = error.is_retryable();
-                    // A retryable failure leaves the row pending. Deciding *when*
-                    // to try again is RL-702's; leaving it deliverable is this
-                    // pass's job, and marking it failed here would take that
-                    // decision away.
-                    let status = if retryable {
+                Outcome::Failed(id, attempts_before, error) => {
+                    let attempts = attempts_before.saturating_add(1);
+                    let retry_after = error.retry_after_secs().map(Duration::from_secs);
+
+                    // Three outcomes, not two: retryable and within budget,
+                    // retryable and out of attempts, or terminal. Collapsing the
+                    // middle one into "pending" is how an action retries forever.
+                    let delay = error
+                        .is_retryable()
+                        .then(|| self.config.retry.next_delay(id, attempts, retry_after))
+                        .flatten();
+
+                    let detail = if error.is_retryable() && delay.is_none() {
+                        format!("gave up after {attempts} attempts: {error}")
+                    } else {
+                        error.to_string()
+                    };
+
+                    let status = if delay.is_some() {
                         PublishActionStatus::Pending
                     } else {
                         PublishActionStatus::Failed
                     };
+
                     store
-                        .record_outcome(id, status, None, None, Some(&error.to_string()), now)
+                        .record_outcome(id, status, None, None, Some(&detail), now)
                         .await?;
-                    if retryable {
+
+                    if let Some(delay) = delay {
+                        // Stored rather than held in memory: a restart often
+                        // follows the burst of failures that caused it, and an
+                        // in-memory schedule would make every pending action
+                        // immediately due at exactly the wrong moment.
+                        let step = chrono::Duration::from_std(delay)
+                            .unwrap_or_else(|_| chrono::Duration::seconds(60));
+                        store.schedule_retry(id, now + step).await?;
                         report.retryable += 1;
                     } else {
                         report.failed += 1;
@@ -332,6 +365,8 @@ impl PublishQueue {
 /// What one attempt produced. Boxed payloads keep the enum small.
 enum Outcome {
     Sent(PublishActionId, Box<revlocal_core::PublishReceipt>),
-    Failed(PublishActionId, Box<PublishError>),
+    /// The id, how many attempts had been made *before* this one, and why it
+    /// failed.
+    Failed(PublishActionId, u32, Box<PublishError>),
     Unroutable(PublishActionId),
 }

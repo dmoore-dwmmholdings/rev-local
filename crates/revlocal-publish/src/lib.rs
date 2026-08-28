@@ -7,9 +7,11 @@
 //! else.
 
 pub mod queue;
+pub mod retry;
 pub mod target;
 
 pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_CONCURRENCY};
+pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};
 
 /// The name of this crate, used by the workspace layout test in `revlocal-cli`.
