@@ -1,7 +1,7 @@
 //! Acceptance test for `RL-204` — the mock MCP server fixture.
 //!
 //! The fixture's own gate is `node fixtures/mock-mcp/selftest.js`. Running it from
-//! here as well means the loop's `cargo test --workspace` catches a broken fixture
+//! here as well means a plain `cargo test --workspace` catches a broken fixture
 //! in the same pass as everything else, rather than only when someone remembers to
 //! run the node script.
 

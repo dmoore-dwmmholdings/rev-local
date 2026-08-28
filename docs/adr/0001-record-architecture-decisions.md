@@ -19,6 +19,6 @@ implemented as written until a human accepts it.
 
 ## Consequences
 
-- The build loop produces a readable trail of why the code looks the way it does.
+- The repository carries a readable trail of why the code looks the way it does.
 - Spec drift is detectable: a change to behaviour without a matching ADR or spec
   edit is a review finding against ourselves.

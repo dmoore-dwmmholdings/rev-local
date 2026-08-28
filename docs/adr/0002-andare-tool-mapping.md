@@ -8,8 +8,10 @@ Accepted
 
 ## Context
 
-`docs/backlog/IMPORT.md` requires the Andare MCP tool surface be discovered, not
-assumed, before importing the 107-item backlog.
+§11.4's Andare publish target has to bind to Andare's real tool names. SPEC §11.2
+is explicit that those names are discovered from the running server rather than
+assumed at build time, so the surface was observed against a live server before
+anything was written against it.
 
 ## Decision
 
@@ -28,16 +30,19 @@ Mapping observed from the connected `andare` MCP server:
 | search / list by field | `search_issues` | `aql` | AQL, e.g. `text ~ "rev-local-item: RL-101"` |
 | transition status | `set_issue_status` | — | Available; not used by the import |
 
-Type mapping is 1:1 — every backlog type (`epic`, `feature`, `story`, `task`,
-`spike`) exists natively in Andare. No degradation was required.
+Type mapping is 1:1 — every item type rev-local files (`epic`, `feature`, `story`,
+`task`, `spike`) exists natively in Andare. No degradation was required.
 
 Milestone is carried as a label (`M0` … `M14`, `all`), since Andare has no
 milestone field. Sprints exist but are a scheduling construct, not a scope one.
 
 ## Consequences
 
-- Labels cost one extra `update_issue` per item.
-- The `rev-local-item: RL-xxx` description trailer remains the idempotency key;
-  re-import must `search_issues` on it before creating.
-- `andare_key` is now populated in `backlog.json`, and `gen_backlog.py` carries
-  `andare_key`/`status` forward across regeneration.
+- Labels cost one extra `update_issue` per item: `create_issue` has no label
+  argument, so a label set is always a second call.
+- A description trailer is the idempotency key. §11.5's dedupe rule means a
+  re-publish must `search_issues` for the trailer before creating anything, or the
+  same finding files a second issue.
+- `set_issue_status` and `comment_on_issue` are both available, which is what
+  RL-706 needs to report an outcome onto a linked work item without filing
+  anything new.
