@@ -38,7 +38,9 @@ fn build_fixture(out: &Path) -> Result<Manifest, String> {
 
     if !output.status.success() {
         return Err(format!(
-            "build.sh failed: {}",
+            "build.sh failed (exit {}):\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         ));
     }

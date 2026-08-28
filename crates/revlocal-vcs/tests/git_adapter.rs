@@ -34,7 +34,9 @@ fn build_fixture(out: &Path) -> Result<(), String> {
 
     output.status.success().then_some(()).ok_or_else(|| {
         format!(
-            "build.sh failed: {}",
+            "build.sh failed (exit {}):\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
     })

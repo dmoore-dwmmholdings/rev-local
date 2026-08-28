@@ -16,7 +16,15 @@ set -euo pipefail
 build_svn_fixture() {
   local out_dir="$1"
   local repo="${out_dir}/svn-basic"
-  local repo_url="file://${repo}"
+  # Windows needs three slashes and the drive letter inside the path:
+  # `file://D:/x` names a HOST called `D:`, which is why this presented as a
+  # silent non-zero exit rather than an error anyone could read. POSIX paths start
+  # with `/` and take the two-slash form.
+  local repo_url
+  case "$repo" in
+    [A-Za-z]:/*) repo_url="file:///${repo}" ;;
+    *)           repo_url="file://${repo}" ;;
+  esac
   local wc="${out_dir}/.svn-wc"
 
   rm -rf "$repo" "$wc"
