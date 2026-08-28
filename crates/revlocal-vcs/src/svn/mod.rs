@@ -7,6 +7,7 @@
 //! of it handling absence gracefully.
 
 pub mod cmd;
+pub mod demotion;
 pub mod discover;
 pub mod materialize;
 pub mod pseudo_pr;
@@ -14,6 +15,9 @@ pub mod pseudo_pr;
 pub use cmd::{
     doctor_line, is_available, non_interactive_env, CertFailure, SvnError, SvnOutput, SvnRunner,
     DEFAULT_TIMEOUT,
+};
+pub use demotion::{
+    constituent_revisions, plan, prior_context, DemotionPlan, Disposition, PlannedFinding,
 };
 pub use discover::{discover, parse_log_xml, Discovery, SvnPath, SvnRevision, WatchedPaths};
 pub use materialize::{

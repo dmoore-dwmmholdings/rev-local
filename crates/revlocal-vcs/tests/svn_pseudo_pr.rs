@@ -266,33 +266,71 @@ fn the_external_id_is_the_one_spec_names() {
 
 // --- against the shared fixture --------------------------------------------
 
-/// The generated `svn-basic` fixture, built if it is not already there.
+/// The generated `svn-basic` fixture.
+///
+/// Returns `None` only when the fixture genuinely could not be built — which on a
+/// machine with Subversion installed is never. **A stale manifest saying
+/// `skipped: true` is an error, not a reason to pass.**
+///
+/// This is not hypothetical caution. The manifest is written once and reused, so a
+/// fixture generated before Subversion was installed keeps reporting `skipped`
+/// forever; every fixture-backed test then returns early and passes having checked
+/// nothing. `svn_fixtures.rs` already guards this at the manifest level, and the
+/// guard belongs here too — a helper that turns "the fixture is missing" into
+/// "nothing to verify" makes every test that calls it silently optional.
 fn fixture_repo_url() -> Result<Option<String>, String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..");
     let manifest = root.join("fixtures/out/svn-basic/.manifest.json");
 
-    if !manifest.exists() {
-        let status = std::process::Command::new("bash")
+    let read = |path: &std::path::Path| -> Result<serde_json::Value, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    };
+    let build = || -> Result<(), String> {
+        let output = std::process::Command::new("bash")
             .arg(root.join("fixtures/build.sh"))
             .current_dir(&root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .output()
             .map_err(|e| format!("running build.sh: {e}"))?;
-        if !status.success() {
-            return Err("build.sh failed".to_owned());
+        if !output.status.success() {
+            return Err(format!(
+                "build.sh failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
-    }
+        Ok(())
+    };
 
-    let text = std::fs::read_to_string(&manifest).map_err(|e| e.to_string())?;
-    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if !manifest.exists() {
+        build()?;
+    }
+    let mut parsed = read(&manifest)?;
+
+    // A manifest that says it skipped may simply predate Subversion being
+    // installed. Rebuild once before believing it.
+    if parsed["skipped"].as_bool().unwrap_or(false) && svn_is_installed() {
+        build()?;
+        parsed = read(&manifest)?;
+    }
 
     if parsed["skipped"].as_bool().unwrap_or(false) {
+        if svn_is_installed() {
+            return Err(format!(
+                "svn is installed but the fixture still reports skipped ({}); \
+                 these tests would otherwise pass having verified nothing",
+                parsed["reason"].as_str().unwrap_or("no reason given")
+            ));
+        }
         return Ok(None);
     }
-    Ok(parsed["repo_url"].as_str().map(str::to_owned))
+
+    parsed["repo_url"]
+        .as_str()
+        .map(str::to_owned)
+        .map(Some)
+        .ok_or_else(|| "a non-skipped manifest must carry repo_url".to_owned())
 }
 
 /// The mergeinfo on `/trunk` immediately before and at `revision`.
