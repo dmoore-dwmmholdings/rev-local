@@ -29,7 +29,7 @@ mod mock_engine {
     }
 
     fn engine() -> PathBuf {
-        workspace_root().join("fixtures/mock-engine/run")
+        revlocal_engine::mock_engine_program()
     }
 
     /// Run the mock engine in `mode`, returning (exit code, stdout, out_dir).

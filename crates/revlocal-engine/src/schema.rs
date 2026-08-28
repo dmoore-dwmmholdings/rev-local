@@ -619,7 +619,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let out = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
 
-        let status = std::process::Command::new(root.join("fixtures/mock-engine/run"))
+        let status = std::process::Command::new(crate::mock_engine_program())
             .env("MOCK_ENGINE_MODE", "valid")
             .env("REVLOCAL_OUT", out.path())
             .output()
@@ -653,7 +653,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let out = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
 
-        let status = std::process::Command::new(root.join("fixtures/mock-engine/run"))
+        let status = std::process::Command::new(crate::mock_engine_program())
             .env("MOCK_ENGINE_MODE", "partial_findings")
             .env("REVLOCAL_OUT", out.path())
             .output()

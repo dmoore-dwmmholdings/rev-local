@@ -39,3 +39,27 @@ pub use template::{Invocation, InvocationTemplate, RenderContext, TemplateError,
 
 /// The name of this crate, used by the workspace layout test in `revlocal-cli`.
 pub const CRATE_NAME: &str = "revlocal-engine";
+
+/// The mock engine launcher for this platform.
+///
+/// `fixtures/mock-engine/run` is a bash shim and `run.cmd` is its Windows
+/// equivalent — RL-203 wrote both, and every caller then hardcoded the POSIX one.
+/// On Windows that produces `%1 is not a valid Win32 application` (os error 193),
+/// because `CreateProcess` will not exec a file with a shebang.
+///
+/// The two shims exist so the *process shape* matches on both platforms: each one
+/// hands off to `mock-engine.mjs` so the process the runner spawned is node, which
+/// is what makes the `hang` mode's ignore-SIGTERM behaviour testable.
+pub fn mock_engine_program() -> std::path::PathBuf {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("mock-engine");
+
+    if cfg!(windows) {
+        fixtures.join("run.cmd")
+    } else {
+        fixtures.join("run")
+    }
+}

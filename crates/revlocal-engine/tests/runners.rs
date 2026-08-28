@@ -36,10 +36,7 @@ mod runners {
     /// template passes the prompt and nothing else.
     fn fixture_engine(mode: &str) -> CliEngine {
         let template = InvocationTemplate {
-            bin: workspace_root()
-                .join("fixtures/mock-engine/run")
-                .display()
-                .to_string(),
+            bin: revlocal_engine::mock_engine_program().display().to_string(),
             args: vec!["--prompt".to_owned(), "{prompt_file_content}".to_owned()],
             version_args: vec!["--version".to_owned()],
             stdin_prompt: false,
