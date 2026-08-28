@@ -31,11 +31,12 @@ fn mock_server(env: &[(&str, &str)]) -> ServerCommand {
 /// file asks. A reaped child is what criterion 3 is about, and "the pid no longer
 /// answers" would pass for a zombie — which is precisely the leak.
 ///
-/// Read via `ps` rather than `/proc/<pid>/stat`: macOS has no procfs, so the procfs
-/// version returned `None` unconditionally there and the two tests that establish
-/// "the server was running *before* we killed it" failed on their precondition. The
-/// engine was fine; the probe was Linux-only. `ps -o state=` reports `Z` for a
-/// zombie and exits non-zero for a pid that does not exist, on both platforms.
+/// Read through the platform's own process table rather than `/proc`: macOS has no
+/// procfs, so the procfs version returned `None` unconditionally there and the two
+/// tests that establish "the server was running *before* we killed it" failed on
+/// their precondition. `ps -o state=` reports `Z` for a zombie and exits non-zero
+/// for a pid that does not exist.
+#[cfg(unix)]
 fn process_state(pid: u32) -> Option<char> {
     let output = std::process::Command::new("ps")
         .args(["-o", "state=", "-p", &pid.to_string()])
@@ -50,6 +51,48 @@ fn process_state(pid: u32) -> Option<char> {
         .trim()
         .chars()
         .next()
+}
+
+/// The Windows equivalent.
+///
+/// Windows has no zombies — a process object outlives its exit only while a handle
+/// is open, and it does not appear in the task list — so the `Z` case this returns
+/// on Unix simply cannot arise, and "listed at all" is the whole question.
+#[cfg(windows)]
+fn process_state(pid: u32) -> Option<char> {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .ok()?;
+    let listed = String::from_utf8_lossy(&output.stdout);
+    // `tasklist` exits 0 with an informational line when nothing matches, so the
+    // exit status cannot be used; the pid appearing in the output is the signal.
+    listed.contains(&format!("\"{pid}\"")).then_some('R')
+}
+
+/// Kill a process the way a crash does: no signal it can handle, no cleanup.
+#[cfg(unix)]
+fn kill_hard(pid: u32) -> Result<(), String> {
+    let raw = i32::try_from(pid).map_err(|e| e.to_string())?;
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(raw),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The Windows equivalent. `/F` is the part that makes it a crash rather than a
+/// request.
+#[cfg(windows)]
+fn kill_hard(pid: u32) -> Result<(), String> {
+    let status = std::process::Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .status()
+        .map_err(|e| e.to_string())?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("taskkill exited with {status}"))
 }
 
 fn node_is_installed() -> bool {
@@ -258,12 +301,7 @@ async fn stdio_a_server_crash_is_a_typed_error_and_the_next_call_reconnects() {
 
     // Kill the server out from under the client, the way a real one crashes.
     let pid = client.pid().expect("connected");
-    let raw = i32::try_from(pid).unwrap_or_else(|e| panic!("{e}"));
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(raw),
-        nix::sys::signal::Signal::SIGKILL,
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    kill_hard(pid).unwrap_or_else(|e| panic!("{e}"));
 
     let error = client
         .list_tools()
@@ -303,12 +341,7 @@ async fn stdio_a_dead_connection_is_not_reconnected_until_something_asks() {
     client.list_tools().await.unwrap_or_else(|e| panic!("{e}"));
 
     let pid = client.pid().expect("connected");
-    let raw = i32::try_from(pid).unwrap_or_else(|e| panic!("{e}"));
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(raw),
-        nix::sys::signal::Signal::SIGKILL,
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    kill_hard(pid).unwrap_or_else(|e| panic!("{e}"));
 
     let _ = client.list_tools().await;
 

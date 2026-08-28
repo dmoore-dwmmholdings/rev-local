@@ -20,10 +20,14 @@ tokio = { workspace = true, features = ["process", "io-util", "rt", "macros", "s
 tracing = { workspace = true }
 
 [dev-dependencies]
-nix = { workspace = true, features = ["signal", "process"] }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+
+# `nix` is a Unix API crate; on Windows it compiles to almost nothing and every
+# path through it fails to resolve. Same shape as revlocal-engine's manifest.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true, features = ["signal", "process"] }
 
 [lints]
 workspace = true
