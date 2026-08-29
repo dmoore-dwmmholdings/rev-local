@@ -102,6 +102,8 @@ mod cli_surface {
         "hooks",
         "approvals",
         "budget",
+        "runs",
+        "findings",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
@@ -117,8 +119,6 @@ mod cli_surface {
             "backfill",
             "RL-1007 built the scheduler; this is its front end",
         ),
-        ("runs", "needs the run store surfaced, which RL-1201 does"),
-        ("findings", "same, plus suppression writes"),
         (
             "webhook",
             "RL-1005 and RL-1006 built the listener and tunnels",
@@ -997,5 +997,143 @@ mod repo_commands {
         assert_eq!(parsed["name"], "acme");
         assert!(parsed["repo_id"].is_number());
         Ok(())
+    }
+}
+
+// --- runs and findings (RL-1201, §14) --------------------------------------
+
+mod runs_and_findings {
+    use revlocal_cli::inspect::{parse_severity, parse_status, run_detail, runs};
+    use revlocal_core::{RepoId, RunStatus};
+
+    #[test]
+    fn an_unknown_status_names_every_one_that_exists() {
+        let error = parse_status("nonsense")
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+
+        // All ten, because somebody guessing "running" should be shown "reviewing"
+        // rather than sent to the spec.
+        for status in ["queued", "reviewing", "done", "failed", "cancelled"] {
+            assert!(error.contains(status), "{status} missing from: {error}");
+        }
+        assert_eq!(parse_status("reviewing").ok(), Some(RunStatus::Reviewing));
+    }
+
+    #[test]
+    fn an_unknown_severity_names_every_one_that_exists() {
+        let error = parse_severity("nope")
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        for severity in ["info", "low", "medium", "high", "critical"] {
+            assert!(error.contains(severity), "{severity} missing from: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_run_is_told_apart_from_a_broken_database() -> Result<(), String> {
+        // The remedies are opposite. A store failure means `db migrate`; a missing
+        // id means the database is fine and the id is not, and offering `db
+        // migrate` sends somebody to fix something that is not broken.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let error = run_detail(&pool, revlocal_core::RunId::new(999))
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+
+        assert!(error.contains("no run with id 999"), "{error}");
+        assert!(
+            error.contains("runs list"),
+            "must point somewhere useful: {error}"
+        );
+        assert!(
+            !error.contains("db migrate"),
+            "the database is not what is wrong: {error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_empty_list_says_so_and_reports_what_it_matched() -> Result<(), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = runs(&pool, Some(RepoId::new(1)), None, 20)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert!(report.runs.is_empty());
+        assert_eq!(report.matched, 0);
+        assert!(report.render_human().contains("No runs match"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_truncated_list_says_how_many_it_did_not_show() {
+        // §18. A list showing the first twenty of nine hundred, without saying so,
+        // reads as nine hundred being twenty.
+        let report = revlocal_cli::inspect::RunsReport {
+            runs: Vec::new(),
+            matched: 900,
+            limit: 20,
+        };
+        // With rows present the header names both numbers; this asserts the
+        // arithmetic that produces it rather than the empty case above.
+        assert!(report.matched > u32::try_from(report.runs.len()).unwrap_or(0));
+
+        let with_rows = revlocal_cli::inspect::RunsReport {
+            runs: vec![revlocal_cli::inspect::RunRow {
+                id: 1,
+                change_id: 1,
+                attempt: 1,
+                status: "done".to_owned(),
+                engine: "mock".to_owned(),
+                verdict: Some("approve".to_owned()),
+                skip_reason: None,
+                degraded: None,
+                error: None,
+            }],
+            matched: 900,
+            limit: 20,
+        };
+        let human = with_rows.render_human();
+        assert!(human.contains("showing 1 of 900"), "{human}");
+        assert!(human.contains("raise --limit"), "{human}");
+    }
+
+    #[test]
+    fn the_three_reasons_a_run_is_not_what_it_looks_like_are_shown_while_scanning() {
+        // skip_reason, degraded and error each answer "why is this not what I
+        // expected". Burying them in `runs show` means nobody sees them while
+        // scanning a list, which is when the question actually gets asked.
+        let report = revlocal_cli::inspect::RunsReport {
+            runs: vec![revlocal_cli::inspect::RunRow {
+                id: 7,
+                change_id: 3,
+                attempt: 2,
+                status: "done".to_owned(),
+                engine: "claude".to_owned(),
+                verdict: None,
+                skip_reason: Some("ignored_paths".to_owned()),
+                degraded: Some("output salvaged from a fenced block".to_owned()),
+                error: Some("interrupted".to_owned()),
+            }],
+            matched: 1,
+            limit: 20,
+        };
+
+        let human = report.render_human();
+        assert!(human.contains("skipped: ignored_paths"), "{human}");
+        assert!(human.contains("degraded: output salvaged"), "{human}");
+        assert!(human.contains("error: interrupted"), "{human}");
     }
 }

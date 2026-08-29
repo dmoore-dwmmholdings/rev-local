@@ -319,15 +319,27 @@ fn fixture_repo_url() -> Result<Option<String>, String> {
         serde_json::from_str(&text).map_err(|e| e.to_string())
     };
     let build = || -> Result<(), String> {
-        let output = std::process::Command::new("bash")
+        // `bash_program()`, not `"bash"`. On Windows `bash` on PATH is the WSL
+        // launcher, which on a machine with no distribution prints its refusal to
+        // *stdout*, in UTF-16, and exits 1. RL-102 hit this and wrote the helper;
+        // these files were written afterwards and did not use it.
+        //
+        // CI reported `build.sh failed: ` with an empty message, because the
+        // message was on the stream this did not read — the exact failure
+        // `bash_program`'s own doc comment describes.
+        let output = std::process::Command::new(revlocal_vcs::bash_program())
             .arg(root.join("fixtures/build.sh"))
             .current_dir(&root)
             .output()
             .map_err(|e| format!("running build.sh: {e}"))?;
         if !output.status.success() {
+            // Both streams. A harness that reports only stderr is how the WSL
+            // message stayed invisible for a whole milestone.
             return Err(format!(
-                "build.sh failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "build.sh failed ({}):\n  stdout: {}\n  stderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
         Ok(())

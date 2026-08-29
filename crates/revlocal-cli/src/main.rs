@@ -47,6 +47,18 @@ enum Command {
         command: TargetsCommand,
     },
 
+    /// Inspect runs (SPEC §14).
+    Runs {
+        #[command(subcommand)]
+        command: RunsCommand,
+    },
+
+    /// Inspect findings across runs (SPEC §14).
+    Findings {
+        #[command(subcommand)]
+        command: FindingsCommand,
+    },
+
     /// Show what is waiting for a human (SPEC §12.4).
     Approvals {
         #[command(subcommand)]
@@ -322,6 +334,65 @@ enum RepoCommand {
     },
 }
 
+/// `revlocal runs …`.
+#[derive(Debug, Subcommand)]
+enum RunsCommand {
+    /// List recent runs, newest first.
+    List {
+        /// Narrow to one repository.
+        #[arg(long, value_name = "ID")]
+        repo: Option<i64>,
+        /// Narrow to one status.
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        /// How many to show.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show one run in full, with its findings.
+    Show {
+        /// Which run.
+        #[arg(value_name = "RUN_ID")]
+        run_id: i64,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `revlocal findings …`.
+#[derive(Debug, Subcommand)]
+enum FindingsCommand {
+    /// List findings from recent runs.
+    List {
+        /// Narrow to one repository.
+        #[arg(long, value_name = "ID")]
+        repo: Option<i64>,
+        /// Show only this severity and worse.
+        #[arg(long, value_name = "SEVERITY")]
+        severity: Option<String>,
+        /// How many runs to read.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// `revlocal approvals …`.
 #[derive(Debug, Subcommand)]
 enum ApprovalsCommand {
@@ -535,6 +606,65 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Runs { command } => match command {
+            RunsCommand::List {
+                repo,
+                status,
+                limit,
+                database,
+                json,
+            } => {
+                let status = match status.as_deref() {
+                    None => None,
+                    Some(raw) => Some(inspect::parse_status(raw)?),
+                };
+                let pool = revlocal_store::open(&database).await?;
+                let report =
+                    inspect::runs(&pool, repo.map(revlocal_core::RepoId::new), status, limit)
+                        .await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+
+            RunsCommand::Show {
+                run_id,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = inspect::run_detail(&pool, revlocal_core::RunId::new(run_id)).await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+        },
+
+        Command::Findings { command } => match command {
+            FindingsCommand::List {
+                repo,
+                severity,
+                limit,
+                database,
+                json,
+            } => {
+                let severity = match severity.as_deref() {
+                    None => None,
+                    Some(raw) => Some(inspect::parse_severity(raw)?),
+                };
+                let pool = revlocal_store::open(&database).await?;
+                let report =
+                    inspect::findings(&pool, repo.map(revlocal_core::RepoId::new), severity, limit)
+                        .await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+        },
+
         Command::Approvals { command } => match command {
             ApprovalsCommand::List { database, json } => {
                 let pool = revlocal_store::open(&database).await?;

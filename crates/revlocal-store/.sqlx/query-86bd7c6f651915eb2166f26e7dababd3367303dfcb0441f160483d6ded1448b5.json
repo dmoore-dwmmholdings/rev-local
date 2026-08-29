@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT run.id AS id\n               FROM run\n               JOIN change ON change.id = run.change_id\n              WHERE (?1 IS NULL OR change.repo_id = ?1)\n                AND (?2 IS NULL OR run.status = ?2)\n              ORDER BY run.id DESC\n              LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "86bd7c6f651915eb2166f26e7dababd3367303dfcb0441f160483d6ded1448b5"
+}

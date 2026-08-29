@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS total\n               FROM run\n               JOIN change ON change.id = run.change_id\n              WHERE (?1 IS NULL OR change.repo_id = ?1)\n                AND (?2 IS NULL OR run.status = ?2)",
+  "describe": {
+    "columns": [
+      {
+        "name": "total",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "75fcf147bf51b6001d3030f588f6a1108c46632d4fa56c32ff9b5f6afe219af6"
+}
