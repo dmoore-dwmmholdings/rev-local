@@ -88,6 +88,154 @@ mod cli_surface {
         Ok(groups)
     }
 
+    /// Remove every `open ... close` run, so what is left is commands and flags.
+    fn strip_pairs(text: &str, open: char, close: char) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut depth = 0usize;
+        for ch in text.chars() {
+            if ch == open {
+                depth += 1;
+            } else if ch == close {
+                depth = depth.saturating_sub(1);
+            } else if depth == 0 {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    /// Every `group subcommand` pair §14 names, read from the spec.
+    ///
+    /// [`spec_commands`] deliberately stops at the group, because that is the
+    /// question "does this command exist" asks. It is also a weaker question than
+    /// it looks: `db` existing says nothing about `db vacuum`, and the group-level
+    /// check reported a complete §14 surface while eight specified subcommands did
+    /// not exist. This asks the narrower question.
+    pub fn spec_subcommands() -> Result<Vec<(String, String)>, String> {
+        let spec = std::fs::read_to_string(workspace_root().join("SPEC.md"))
+            .map_err(|e| format!("reading SPEC.md: {e}"))?;
+        let block = spec
+            .split("## 14. CLI surface")
+            .nth(1)
+            .ok_or("SPEC.md has no §14")?
+            .split("```")
+            .nth(1)
+            .ok_or("§14 has no command block")?;
+
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut push = |group: &str, sub: &str| {
+            let pair = (group.to_owned(), sub.to_owned());
+            if !sub.is_empty() && !pairs.contains(&pair) {
+                pairs.push(pair);
+            }
+        };
+
+        for line in block.lines() {
+            let line = line.split('#').next().unwrap_or(line).trim();
+            let Some(rest) = line.strip_prefix("revlocal ") else {
+                continue;
+            };
+
+            // §14 writes `|` three ways, and only one of them separates commands.
+            //
+            //   revlocal hooks install|uninstall --repo N     subcommands (tight)
+            //   revlocal db migrate | vacuum | export         subcommands (spaced)
+            //   revlocal repo add ... --kind git|github|svn   a flag's VALUES
+            //   revlocal repo add <path|url>                  a placeholder's
+            //
+            // The first parser read all four the same way and reported `github`,
+            // `svn` and `ngrok` as missing subcommands of `repo` and `webhook`.
+            //
+            // Placeholders go first, since `<id|--run R|--all>` contains both a
+            // `|` and something that looks like a flag.
+            let rest = strip_pairs(&strip_pairs(rest, '<', '>'), '[', ']');
+
+            // A spaced `|` separates alternatives; whether they are subcommands or
+            // sibling commands depends on how many words precede the first one.
+            let mut segments = rest.split(" | ");
+            let Some(first) = segments.next() else {
+                continue;
+            };
+            let head: Vec<&str> = first.split_whitespace().collect();
+            let Some(group) = head.first() else {
+                continue;
+            };
+            // `revlocal pause | resume | kill` — siblings of the group, not
+            // subcommands of it. Handled by `spec_commands`.
+            if head.len() == 1 {
+                continue;
+            }
+
+            // Only the word directly after the group can carry a tight
+            // alternation; anywhere later it belongs to a flag.
+            let Some(second) = head.get(1) else { continue };
+            if second.starts_with("--") {
+                continue;
+            }
+            for name in second.split('|') {
+                push(group, name);
+            }
+
+            for segment in segments {
+                if let Some(word) = segment.split_whitespace().next() {
+                    if !word.starts_with("--") && !word.contains('=') {
+                        push(group, word);
+                    }
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// Subcommands §14 names that do not exist yet, and what each waits on.
+    ///
+    /// Every one of these is a front end over machinery that already exists and is
+    /// tested — the same shape the rest of §14's surface turned out to be. They are
+    /// listed rather than silently absent because a specified command that nobody
+    /// is tracking is how a surface stays two-thirds built.
+    pub const SUBCOMMANDS_NOT_YET: &[(&str, &str, &str)] = &[
+        (
+            "runs",
+            "retry",
+            "REVL-98 follow-up: needs the run registry that `watch` also wants",
+        ),
+        (
+            "findings",
+            "suppress",
+            "REVL-98 follow-up: `SuppressionStore` exists; no front end",
+        ),
+        (
+            "approvals",
+            "approve",
+            "REVL-98 follow-up: `PublishStore::approve` exists; no front end",
+        ),
+        (
+            "approvals",
+            "reject",
+            "REVL-98 follow-up: `PublishStore::reject` exists; no front end",
+        ),
+        (
+            "publish",
+            "retry",
+            "REVL-98 follow-up: distinct from `replay` — one action, not a target",
+        ),
+        (
+            "budget",
+            "reset",
+            "REVL-98 follow-up: `BudgetLedgerStore` exists; no front end",
+        ),
+        (
+            "db",
+            "vacuum",
+            "REVL-98 follow-up: §5.1 retention pruning is unbuilt",
+        ),
+        (
+            "db",
+            "export",
+            "REVL-98 follow-up: no export format is settled",
+        ),
+    ];
+
     /// Command groups that exist today.
     const IMPLEMENTED: &[&str] = &[
         "db",
@@ -115,7 +263,7 @@ mod cli_surface {
     /// this from becoming a list nobody revisits.
     const NOT_YET: &[(&str, &str)] = &[];
 
-    fn binary() -> PathBuf {
+    pub fn binary() -> PathBuf {
         // The test binary lives beside the CLI binary cargo just built.
         let mut path = std::env::current_exe().unwrap_or_default();
         path.pop();
@@ -1789,6 +1937,83 @@ mod webhook_command {
             "{:?}",
             report.next_steps
         );
+        Ok(())
+    }
+}
+
+// --- §14 at subcommand granularity (RL-1206) --------------------------------
+
+mod spec_subcommand_surface {
+    use super::cli_surface::{binary, spec_subcommands, SUBCOMMANDS_NOT_YET};
+
+    /// Whether the built binary accepts `revlocal <group> <sub>`.
+    ///
+    /// Asked of the binary, not of a help string. A `--help` that mentions a word
+    /// is not a command that runs, and this file exists because the group-level
+    /// check believed a weaker thing than it reported.
+    fn accepted(group: &str, sub: &str) -> bool {
+        std::process::Command::new(binary())
+            .args([group, sub, "--help"])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn every_subcommand_in_spec_14_exists_or_is_listed() -> Result<(), String> {
+        let spec = spec_subcommands()?;
+        assert!(
+            spec.len() > 15,
+            "only {} subcommands parsed from §14; the parser has stopped matching",
+            spec.len()
+        );
+
+        let missing: Vec<String> = spec
+            .iter()
+            .filter(|(group, sub)| !accepted(group, sub))
+            .filter(|(group, sub)| {
+                !SUBCOMMANDS_NOT_YET
+                    .iter()
+                    .any(|(g, s, _)| g == group && s == sub)
+            })
+            .map(|(group, sub)| format!("{group} {sub}"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "§14 names these and the binary does not accept them: {missing:?}\n\
+             Implement them, or add them to SUBCOMMANDS_NOT_YET with what they wait on."
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nothing_waits_on_a_blocker_it_no_longer_has() -> Result<(), String> {
+        // The failure mode of any "not yet" list is that it outlives the work.
+        // A subcommand that now exists must come off the list, or the list stops
+        // being a description of what is missing.
+        let landed: Vec<String> = SUBCOMMANDS_NOT_YET
+            .iter()
+            .filter(|(group, sub, _)| accepted(group, sub))
+            .map(|(group, sub, _)| format!("{group} {sub}"))
+            .collect();
+        assert!(
+            landed.is_empty(),
+            "these are listed as missing and the binary accepts them: {landed:?}\n\
+             Take them out of SUBCOMMANDS_NOT_YET."
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_reason_says_what_it_waits_on() -> Result<(), String> {
+        // A ticket number is not an explanation. This caught the same laziness at
+        // group level, where `resume` was listed as blocked on "RL-804".
+        for (group, sub, reason) in SUBCOMMANDS_NOT_YET {
+            assert!(
+                reason.split_whitespace().count() >= 5,
+                "`{group} {sub}` waits on {reason:?}, which does not say what it waits on"
+            );
+        }
         Ok(())
     }
 }
