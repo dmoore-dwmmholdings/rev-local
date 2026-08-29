@@ -29,7 +29,16 @@ tauri = { workspace = true, optional = true }
 [features]
 default = []
 # The actual desktop application. Enabled by the bundler, not by CI.
-desktop = ["dep:tauri"]
+desktop = ["dep:tauri", "dep:tauri-build"]
+
+# The window binary only exists with a webview to put in it.
+[[bin]]
+name = "revlocal-desktop"
+path = "src/bin/revlocal-desktop.rs"
+required-features = ["desktop"]
+
+[build-dependencies]
+tauri-build = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
