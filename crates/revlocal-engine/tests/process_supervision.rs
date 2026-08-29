@@ -8,6 +8,28 @@
 //! process group without a process group.
 
 mod process_supervision {
+    //! Why every test that *kills* an engine is `#[cfg(unix)]`.
+    //!
+    //! Not because the behaviour is Unix-only. §8.5 requires process-group
+    //! termination on every platform and §12.1 gives cancellation three seconds
+    //! everywhere. On Windows both are currently **unmet**, and the tests do not
+    //! fail — they **hang**.
+    //!
+    //! Windows has no process-group kill, so `terminate` reaches only the direct
+    //! child. The fixture engine is `run.cmd`, so killing it terminates `cmd.exe`
+    //! and leaves the `node` grandchild running, holding the pipes. §8.5 calls for
+    //! a Job Object here; it is not implemented, and REVL-106 tracks it.
+    //!
+    //! A hung test binary stops the whole run, so **no test after it executes**.
+    //! Five CI rounds ended inside this file, each costing 45 minutes and telling
+    //! us nothing new — while roughly fifty test binaries after it had never run on
+    //! Windows even once.
+    //!
+    //! These gates exist to find out what *else* is broken there. They are
+    //! documented skips under REVL-106's third criterion, paired with a recorded
+    //! gap rather than standing in for one, and every one comes back the moment
+    //! the Job Object lands.
+
     use revlocal_core::Depth;
     use revlocal_engine::supervise::{supervise, timeout_for, KillReason, GRACE};
     use revlocal_engine::template::Invocation;
@@ -118,6 +140,9 @@ mod process_supervision {
         );
     }
 
+    // Unix only. See this module's own docs: on Windows this hangs rather than
+    // fails, which stops the whole run (REVL-106).
+    #[cfg(unix)]
     #[tokio::test]
     async fn supervision_an_engine_that_ignores_sigterm_still_dies_after_the_grace_period() {
         // The pathological case, and where acceptance criterion 1's "+2s" and §8.5's
@@ -154,6 +179,9 @@ mod process_supervision {
         );
     }
 
+    // Unix only. See this module's own docs: on Windows this hangs rather than
+    // fails, which stops the whole run (REVL-106).
+    #[cfg(unix)]
     #[tokio::test]
     async fn supervision_the_grace_period_is_actually_used_before_sigkill() {
         // §8.5 wants SIGTERM, five seconds of grace, then SIGKILL. A supervisor that
@@ -186,6 +214,9 @@ mod process_supervision {
         );
     }
 
+    // Unix only. See this module's own docs: on Windows this hangs rather than
+    // fails, which stops the whole run (REVL-106).
+    #[cfg(unix)]
     #[tokio::test]
     async fn supervision_no_orphan_survives_and_nor_does_a_grandchild() {
         // Acceptance criteria 2 and 3. The grandchild is the one that matters: a
@@ -251,6 +282,9 @@ mod process_supervision {
 
     // --- cancellation ------------------------------------------------------------
 
+    // Unix only. See this module's own docs: on Windows this hangs rather than
+    // fails, which stops the whole run (REVL-106).
+    #[cfg(unix)]
     #[tokio::test]
     async fn supervision_the_kill_switch_stops_an_engine_mid_review() {
         // §12.1: the kill switch cancels every token. This asserts it reaches a
@@ -345,6 +379,9 @@ mod process_supervision {
         assert!(out.path().join("result.json").is_file());
     }
 
+    // Unix only. See this module's own docs: on Windows this hangs rather than
+    // fails, which stops the whole run (REVL-106).
+    #[cfg(unix)]
     #[tokio::test]
     async fn supervision_output_is_kept_even_from_a_killed_process() {
         // §8.2's ladder reads stdout, and a timed-out engine may still have emitted
