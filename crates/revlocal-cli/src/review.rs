@@ -37,7 +37,10 @@ pub enum ReviewCommandError {
     Pipeline(#[from] pipeline::PipelineError),
 
     /// A scratch directory could not be made.
-    #[error("could not create a scratch directory: {0}")]
+    #[error(
+        "could not create a scratch directory: {0}\n  try: check that TMPDIR (or \
+         TEMP on Windows) points somewhere writable with space free"
+    )]
     Scratch(#[source] std::io::Error),
 
     /// The report could not be serialized.

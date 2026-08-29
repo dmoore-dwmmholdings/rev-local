@@ -30,6 +30,7 @@ toml = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
+revlocal-tauri = { workspace = true }
 serde = { workspace = true }
 serde_norway = { workspace = true }
 tempfile = { workspace = true }

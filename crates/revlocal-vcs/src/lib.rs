@@ -13,6 +13,7 @@
 //!   simply never showing up (SPEC §18).
 
 mod adapter;
+pub mod generated;
 pub mod git;
 pub mod github;
 mod scratch;
