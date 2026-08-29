@@ -193,23 +193,11 @@ mod cli_surface {
     /// tested — the same shape the rest of §14's surface turned out to be. They are
     /// listed rather than silently absent because a specified command that nobody
     /// is tracking is how a surface stays two-thirds built.
-    pub const SUBCOMMANDS_NOT_YET: &[(&str, &str, &str)] = &[
-        (
-            "runs",
-            "retry",
-            "needs the run registry that `watch` and the kill switch also want",
-        ),
-        (
-            "db",
-            "vacuum",
-            "SPEC §5.1 retention pruning is not built, so there is nothing to prune by",
-        ),
-        (
-            "db",
-            "export",
-            "no export format is settled; a format shipped now is one to support forever",
-        ),
-    ];
+    pub const SUBCOMMANDS_NOT_YET: &[(&str, &str, &str)] = &[(
+        "db",
+        "export",
+        "no export format is settled, and one shipped now is one to support forever",
+    )];
 
     /// Command groups that exist today.
     const IMPLEMENTED: &[&str] = &[
@@ -2016,6 +2004,41 @@ mod decisions {
 
     /// A repository, a change and a run, so publish actions have something to hang on.
     async fn a_run(pool: &Pool, name: &str) -> Result<RunId, String> {
+        a_run_with(
+            pool,
+            name,
+            revlocal_core::RunStatus::AwaitingApproval,
+            1,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// The same, with the fields a retry test needs to vary.
+    ///
+    /// Through the store rather than by raw SQL: a fixture that writes rows the
+    /// store would refuse to write is a fixture testing a database that cannot
+    /// exist.
+    async fn a_run_with(
+        pool: &Pool,
+        name: &str,
+        status: revlocal_core::RunStatus,
+        attempt: u32,
+        usage: Option<revlocal_core::Usage>,
+        error: Option<&str>,
+    ) -> Result<RunId, String> {
+        build_run(pool, name, status, attempt, usage, error).await
+    }
+
+    async fn build_run(
+        pool: &Pool,
+        name: &str,
+        status: revlocal_core::RunStatus,
+        attempt: u32,
+        usage: Option<revlocal_core::Usage>,
+        error: Option<&str>,
+    ) -> Result<RunId, String> {
         let at = now();
         let repo = revlocal_store::RepoStore::new(pool)
             .insert(&revlocal_core::Repo {
@@ -2059,14 +2082,14 @@ mod decisions {
             .insert(&revlocal_core::Run {
                 id: RunId::new(0),
                 change_id: change.id,
-                attempt: 1,
-                status: revlocal_core::RunStatus::AwaitingApproval,
+                attempt,
+                status,
                 engine: revlocal_core::EngineKind::Mock,
                 depth: revlocal_core::Depth::Standard,
                 trigger: revlocal_core::TriggerSource::Manual,
                 skip_reason: None,
-                error: None,
-                usage: revlocal_core::Usage::default(),
+                error: error.map(str::to_owned),
+                usage: usage.unwrap_or_default(),
                 started_at: None,
                 finished_at: None,
                 transcript_path: None,
@@ -2413,5 +2436,316 @@ mod decisions {
 
         assert!(error.contains("not in a failed state"), "{error}");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_retried_run_carries_none_of_the_previous_attempts_spend() -> Result<(), String> {
+        // The reason the successor is built in one shared place. A retry that
+        // carried usage forward would charge the budget twice for work that was
+        // thrown away — and it would do it quietly.
+        let (pool, _dir) = store().await?;
+        let run = a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Failed,
+            1,
+            Some(revlocal_core::Usage {
+                tokens_in: 900,
+                tokens_out: 100,
+                tokens_known: true,
+                cost_usd: Some(0.42),
+            }),
+            Some("boom"),
+        )
+        .await?;
+
+        let report = revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let successor = revlocal_store::RunStore::new(&pool)
+            .get(RunId::new(report.run_id))
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(successor.usage.tokens_in, 0);
+        assert_eq!(successor.usage.tokens_out, 0);
+        assert!(successor.error.is_none(), "and no inherited error");
+        assert_eq!(successor.attempt, 2);
+        assert_eq!(successor.status, revlocal_core::RunStatus::Queued);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_retry_reviews_the_same_change_the_same_way() -> Result<(), String> {
+        // Not a reset of everything. If a retry ran at a different depth it would
+        // not be a retry, and comparing the two would compare different questions.
+        let (pool, _dir) = store().await?;
+        let run = a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Failed,
+            1,
+            None,
+            Some("the engine exited 1"),
+        )
+        .await?;
+        let before = revlocal_store::RunStore::new(&pool)
+            .get(run)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+        let after = revlocal_store::RunStore::new(&pool)
+            .get(RunId::new(report.run_id))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(after.change_id, before.change_id);
+        assert_eq!(after.engine, before.engine);
+        assert_eq!(after.depth, before.depth);
+        assert_eq!(after.trigger, before.trigger);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_run_that_was_retried_is_left_exactly_as_it_was() -> Result<(), String> {
+        // A run is the record of one attempt. Rewriting it would lose the evidence
+        // of what went wrong, which is the thing somebody retrying most wants next.
+        let (pool, _dir) = store().await?;
+        let run = a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Failed,
+            1,
+            None,
+            Some("the engine exited 137"),
+        )
+        .await?;
+
+        revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let original = revlocal_store::RunStore::new(&pool)
+            .get(run)
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(original.status, revlocal_core::RunStatus::Failed);
+        assert_eq!(original.error.as_deref(), Some("the engine exited 137"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_run_still_in_flight_cannot_be_retried() -> Result<(), String> {
+        // Two runs for one change, both working, both publishing.
+        let (pool, _dir) = store().await?;
+        let run = a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Reviewing,
+            1,
+            None,
+            None,
+        )
+        .await?;
+
+        let error = revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .err()
+            .ok_or("must refuse")?
+            .to_string();
+
+        assert!(error.contains("still reviewing"), "{error}");
+        assert!(
+            error.contains("kill --hard"),
+            "and say how to stop it: {error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retrying_twice_reports_the_successor_rather_than_a_constraint() -> Result<(), String> {
+        // `(change_id, attempt)` is unique, so a second retry hits the database's
+        // constraint. Somebody who retried twice wants to be told where the first
+        // one went, not shown a UNIQUE violation.
+        let (pool, _dir) = store().await?;
+        let run = a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Failed,
+            1,
+            None,
+            Some("the engine exited 1"),
+        )
+        .await?;
+
+        revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+        let error = revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .err()
+            .ok_or("must refuse")?
+            .to_string();
+
+        assert!(
+            error.contains("already been retried as attempt 2"),
+            "{error}"
+        );
+        assert!(
+            !error.to_lowercase().contains("unique"),
+            "not the raw constraint: {error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_human_retry_is_not_bounded_by_the_recovery_ceiling() -> Result<(), String> {
+        // §13.1 defines `max_attempts` as where *recovery* gives up, and recovery
+        // is the automatic pass — its job is to stop a change that crashes the
+        // daemon from retrying forever with nobody watching. Somebody typing the
+        // command is that condition not applying.
+        let (pool, _dir) = store().await?;
+        let run = a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Failed,
+            9,
+            None,
+            Some("the engine exited 1"),
+        )
+        .await?;
+
+        let report = revlocal_cli::decide::retry_run(&pool, run.get(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.attempt, 10, "well past the default ceiling of 3");
+        // Visible rather than silent: the attempt number is in the report.
+        assert!(report.detail.contains("attempt 10"), "{}", report.detail);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retrying_a_run_that_does_not_exist_does_not_blame_the_database() -> Result<(), String>
+    {
+        let (pool, _dir) = store().await?;
+
+        let error = revlocal_cli::decide::retry_run(&pool, 999, now())
+            .await
+            .err()
+            .ok_or("must refuse")?
+            .to_string();
+
+        assert!(error.contains("no run with id 999"), "{error}");
+        assert!(
+            !error.contains("db migrate"),
+            "a typo is not a broken database: {error}"
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn a_vacuum_takes_the_transcript_file_with_the_row() -> Result<(), String> {
+        // The row is the only thing that knows where the file is. Deleting one
+        // without the other leaks disk space permanently and silently — the exact
+        // opposite of what somebody reclaiming space asked for.
+        let (pool, dir) = store().await?;
+        let transcript = dir.path().join("old.log");
+        std::fs::write(&transcript, "engine output").map_err(|e| e.to_string())?;
+
+        a_finished_run(
+            &pool,
+            "acme",
+            "2020-01-01T00:00:00Z",
+            Some(&transcript.display().to_string()),
+        )
+        .await?;
+
+        let report = revlocal_cli::decide::vacuum(&pool, "2021-01-01")
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.runs_deleted, 1);
+        assert_eq!(report.transcripts_removed, 1);
+        assert!(!transcript.exists(), "the file must go with the row");
+        assert!(report.transcripts_left.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_vacuum_leaves_a_run_that_has_not_finished() -> Result<(), String> {
+        // A run with no `finished_at` is in flight or was interrupted. Deleting it
+        // mid-flight would leave the daemon writing to a row that is gone.
+        let (pool, _dir) = store().await?;
+        a_run_with(
+            &pool,
+            "acme",
+            revlocal_core::RunStatus::Reviewing,
+            1,
+            None,
+            None,
+        )
+        .await?;
+
+        let report = revlocal_cli::decide::vacuum(&pool, "2099-01-01")
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.runs_deleted, 0, "an unfinished run is not old");
+        assert!(
+            report.detail.contains("nothing to remove"),
+            "{}",
+            report.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_vacuum_cutoff_that_is_not_a_date_is_refused() -> Result<(), String> {
+        // Silently parsing "yesterday" as something is how a vacuum deletes the
+        // wrong decade.
+        let (pool, _dir) = store().await?;
+
+        let error = revlocal_cli::decide::vacuum(&pool, "yesterday")
+            .await
+            .err()
+            .ok_or("must refuse")?
+            .to_string();
+
+        assert!(error.contains("is not a date"), "{error}");
+        assert!(error.contains("YYYY-MM-DD"), "and show the shape: {error}");
+        Ok(())
+    }
+
+    /// A run that finished at `finished_at`, so a vacuum can see it.
+    ///
+    /// `finished_at` is set at insert rather than patched afterwards, because the
+    /// store validates the whole row and a fixture that dodges that validation
+    /// tests a database state that cannot occur.
+    async fn a_finished_run(
+        pool: &Pool,
+        name: &str,
+        finished_at: &str,
+        transcript: Option<&str>,
+    ) -> Result<RunId, String> {
+        let at = chrono::DateTime::parse_from_rfc3339(finished_at)
+            .map_err(|e| e.to_string())?
+            .with_timezone(&chrono::Utc);
+        let run = a_run_with(pool, name, revlocal_core::RunStatus::Done, 1, None, None).await?;
+        let mut row = revlocal_store::RunStore::new(pool)
+            .get(run)
+            .await
+            .map_err(|e| e.to_string())?;
+        row.finished_at = Some(at);
+        row.transcript_path = transcript.map(str::to_owned);
+        row.attempt = 2;
+        row.id = RunId::new(0);
+        let inserted = revlocal_store::RunStore::new(pool)
+            .insert(&row)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(inserted.id)
     }
 }

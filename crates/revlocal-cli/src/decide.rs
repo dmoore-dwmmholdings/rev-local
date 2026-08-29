@@ -67,6 +67,24 @@ pub enum DecideError {
         id: i64,
     },
 
+    /// A run could not be retried.
+    #[error(transparent)]
+    Retry(#[from] revlocal_daemon::state_machine::RetryError),
+
+    /// No such run.
+    #[error("no run with id {id}\n  try: revlocal runs list")]
+    NoSuchRun {
+        /// What was asked for.
+        id: i64,
+    },
+
+    /// `--before` was not a date.
+    #[error("{given:?} is not a date\n  try: --before 2026-01-01 (YYYY-MM-DD)")]
+    NotADate {
+        /// What was given.
+        given: String,
+    },
+
     /// The report could not be serialised.
     #[error("could not render the report: {source}")]
     Unrenderable {
@@ -418,4 +436,154 @@ pub fn render<T: Serialize>(report: &T, human: String, json: bool) -> Result<Str
     } else {
         Ok(human)
     }
+}
+
+/// What a run retry created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunRetryReport {
+    /// The run that was retried.
+    pub previous_run_id: i64,
+    /// Its successor.
+    pub run_id: i64,
+    /// Which attempt the successor is.
+    pub attempt: u32,
+    /// A sentence for a person.
+    pub detail: String,
+}
+
+impl RunRetryReport {
+    /// The line the human path prints.
+    pub fn render_human(&self) -> String {
+        format!("{}\n", self.detail)
+    }
+}
+
+/// `revlocal runs retry <run_id>` (SPEC §9.1, §14).
+///
+/// Queues another attempt at the same change, under the same engine and depth. It
+/// does not re-run the old row: a run is a record of one attempt, and rewriting it
+/// would lose the evidence of what went wrong the first time.
+pub async fn retry_run(
+    pool: &Pool,
+    run_id: i64,
+    at: Timestamp,
+) -> Result<RunRetryReport, DecideError> {
+    let id = revlocal_core::RunId::new(run_id);
+
+    // Distinguish "no such run" from a store that cannot be reached: one is a
+    // typo and the other is a database problem, and `revlocal db migrate` is the
+    // wrong advice for the first.
+    if revlocal_store::RunStore::new(pool).get(id).await.is_err() {
+        return Err(DecideError::NoSuchRun { id: run_id });
+    }
+
+    let created = revlocal_daemon::state_machine::retry_run(pool, id, at).await?;
+    Ok(RunRetryReport {
+        previous_run_id: run_id,
+        run_id: created.id.get(),
+        attempt: created.attempt,
+        detail: format!(
+            "Queued run {} as attempt {} of the same change.",
+            created.id.get(),
+            created.attempt
+        ),
+    })
+}
+
+/// What a vacuum removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VacuumReport {
+    /// The cutoff, as given.
+    pub before: String,
+    /// Runs deleted, with their findings and publish actions.
+    pub runs_deleted: u64,
+    /// Transcript files removed from disk.
+    pub transcripts_removed: usize,
+    /// Transcript files that were recorded but could not be removed.
+    ///
+    /// Reported rather than swallowed: a file the database has forgotten and the
+    /// disk still holds is exactly the leak this command exists to prevent, and it
+    /// is invisible the moment nobody says it happened.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transcripts_left: Vec<String>,
+    /// A sentence for a person.
+    pub detail: String,
+}
+
+impl VacuumReport {
+    /// The block the human path prints.
+    pub fn render_human(&self) -> String {
+        let mut out = format!("{}\n", self.detail);
+        for path in &self.transcripts_left {
+            out.push_str(&format!("  could not remove {path}\n"));
+        }
+        out
+    }
+}
+
+/// `revlocal db vacuum --before <date>` (SPEC §5.1, §14).
+///
+/// §5.1 keeps run and finding rows forever in v1; this is the manual escape hatch.
+/// Findings and publish actions go with their runs.
+pub async fn vacuum(pool: &Pool, before: &str) -> Result<VacuumReport, DecideError> {
+    let cutoff = parse_day(before)?;
+
+    let (runs_deleted, transcripts) = revlocal_store::RunStore::new(pool)
+        .delete_finished_before(cutoff)
+        .await
+        .map_err(boxed)?;
+
+    // The row was the only thing that knew where the file was, so the file goes
+    // now or never. A missing file is not a failure — it is the state this was
+    // trying to reach.
+    let mut removed = 0usize;
+    let mut left = Vec::new();
+    for path in transcripts {
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => removed += 1,
+            Err(_) => left.push(path),
+        }
+    }
+
+    let detail = if runs_deleted == 0 {
+        format!("No runs finished before {before}; nothing to remove.")
+    } else {
+        format!(
+            "Removed {runs_deleted} run(s) finished before {before}, with their \
+             findings and publish actions, and {removed} transcript file(s)."
+        )
+    };
+    Ok(VacuumReport {
+        before: before.to_owned(),
+        runs_deleted,
+        transcripts_removed: removed,
+        transcripts_left: left,
+        detail,
+    })
+}
+
+/// Read `--before`, which §14 writes as `<date>`.
+///
+/// A date means the start of that day in the local zone, because that is what
+/// somebody typing `--before 2026-01-01` means — not midnight UTC, which on this
+/// side of the Atlantic would take several hours of the previous year with it.
+fn parse_day(given: &str) -> Result<Timestamp, DecideError> {
+    use chrono::TimeZone;
+
+    let date = chrono::NaiveDate::parse_from_str(given, "%Y-%m-%d").map_err(|_| {
+        DecideError::NotADate {
+            given: given.to_owned(),
+        }
+    })?;
+    let naive = date.and_hms_opt(0, 0, 0).ok_or(DecideError::NotADate {
+        given: given.to_owned(),
+    })?;
+    chrono::Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .ok_or(DecideError::NotADate {
+            given: given.to_owned(),
+        })
 }

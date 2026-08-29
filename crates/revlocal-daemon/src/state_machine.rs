@@ -152,6 +152,107 @@ impl RecoveryReport {
     }
 }
 
+/// The next attempt at a run: same change, same settings, nothing carried over.
+///
+/// Shared by automatic recovery (§9.1) and by `revlocal runs retry`, because two
+/// places building "a clean retry" separately is how one of them starts carrying
+/// the previous attempt's usage forward and double-charging the budget for work
+/// that was thrown away.
+///
+/// What is deliberately *not* reset: `change_id`, `engine`, `depth` and `trigger`.
+/// A retry is another attempt at the same change under the same settings — if it
+/// were reviewed at a different depth it would not be a retry, and comparing the
+/// two would be comparing different questions.
+pub fn successor_of(run: &Run, now: Timestamp) -> Run {
+    Run {
+        id: RunId::new(0),
+        attempt: run.attempt + 1,
+        status: RunStatus::Queued,
+        // A retry starts clean: it has spent nothing, seen nothing and salvaged
+        // nothing.
+        usage: revlocal_core::Usage::default(),
+        skip_reason: None,
+        error: None,
+        degraded: None,
+        started_at: None,
+        finished_at: None,
+        transcript_path: None,
+        truncated: false,
+        omitted_files: Vec::new(),
+        verdict: None,
+        summary: None,
+        created_at: now,
+        ..run.clone()
+    }
+}
+
+/// Why a chosen run could not be retried.
+#[derive(Debug, thiserror::Error)]
+pub enum RetryError {
+    /// The store said no.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+
+    /// The run is still in flight.
+    ///
+    /// Retrying it would create a second run for the same change while the first
+    /// is still working, and both would publish.
+    #[error(
+        "run {run} is still {status} — wait for it to finish, or stop it with \
+         `revlocal kill --hard`"
+    )]
+    StillRunning {
+        /// Which run.
+        run: i64,
+        /// What it is doing.
+        status: &'static str,
+    },
+
+    /// A successor already exists.
+    #[error(
+        "run {run} has already been retried as attempt {attempt}\n  \
+         try: revlocal runs list — the successor is there"
+    )]
+    AlreadyRetried {
+        /// Which run.
+        run: i64,
+        /// The attempt that exists.
+        attempt: u32,
+    },
+}
+
+/// Retry one run a human chose (SPEC §14's `runs retry <run_id>`).
+///
+/// Deliberately **not** bounded by `max_attempts`. §13.1 defines that as the point
+/// "recovery gives up", and recovery is the automatic pass — its job is to stop a
+/// change that crashes the daemon from being retried forever with nobody watching.
+/// Somebody typing this command is the nobody-watching case not applying. The
+/// report carries the attempt number so an unusual one is visible rather than
+/// silent.
+pub async fn retry_run(pool: &Pool, run_id: RunId, now: Timestamp) -> Result<Run, RetryError> {
+    let store = RunStore::new(pool);
+    let run = store.get(run_id).await?;
+
+    if !run.status.is_terminal() {
+        return Err(RetryError::StillRunning {
+            run: run_id.get(),
+            status: run.status.as_str(),
+        });
+    }
+
+    match store.insert(&successor_of(&run, now)).await {
+        Ok(created) => Ok(created),
+        // `(change_id, attempt)` is unique, so this means recovery or an earlier
+        // retry already made the successor. Reporting that is more useful than a
+        // constraint violation, and it is not a failure of anything.
+        Err(e) if e.is_already_exists() => Err(RetryError::AlreadyRetried {
+            run: run_id.get(),
+            attempt: run.attempt + 1,
+        }),
+        Err(other) => Err(other.into()),
+    }
+}
+
 /// Fail and re-enqueue runs abandoned by a previous process (SPEC §9.1).
 ///
 /// A run is considered abandoned when it is in a non-terminal stage and has not been
@@ -195,27 +296,7 @@ pub async fn recover_interrupted(
             continue;
         }
 
-        let successor = Run {
-            id: RunId::new(0),
-            attempt: run.attempt + 1,
-            status: RunStatus::Queued,
-            // A retry starts clean: it has spent nothing, seen nothing and salvaged
-            // nothing. Carrying the previous attempt's usage forward would
-            // double-charge the budget for work that was thrown away.
-            usage: revlocal_core::Usage::default(),
-            skip_reason: None,
-            error: None,
-            degraded: None,
-            started_at: None,
-            finished_at: None,
-            transcript_path: None,
-            truncated: false,
-            omitted_files: Vec::new(),
-            verdict: None,
-            summary: None,
-            created_at: now,
-            ..run.clone()
-        };
+        let successor = successor_of(&run, now);
 
         match store.insert(&successor).await {
             Ok(created) => {

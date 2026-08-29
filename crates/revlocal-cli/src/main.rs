@@ -210,6 +210,26 @@ enum DbCommand {
         /// Database file. Created if it does not exist.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete runs that finished before a date, with their findings.
+    ///
+    /// §5.1 keeps run and finding rows forever in v1; this is the manual escape
+    /// hatch. Transcript files go with their runs, because the row is the only
+    /// thing that knows where the file is.
+    Vacuum {
+        /// Delete runs that finished before this day, `YYYY-MM-DD`.
+        #[arg(long, value_name = "DATE")]
+        before: String,
+        /// Database file.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -404,6 +424,22 @@ enum RepoCommand {
 /// `revlocal runs …`.
 #[derive(Debug, Subcommand)]
 enum RunsCommand {
+    /// Queue another attempt at the same change.
+    ///
+    /// The old run is left as it is. A run is the record of one attempt, and
+    /// rewriting it would lose the evidence of what went wrong the first time.
+    Retry {
+        /// The run to retry.
+        #[arg(value_name = "RUN_ID")]
+        run_id: i64,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// List recent runs, newest first.
     List {
         /// Narrow to one repository.
@@ -782,14 +818,35 @@ enum CliError {
 /// Dispatch one command.
 async fn run(command: Command) -> Result<(), CliError> {
     match command {
-        Command::Db {
-            command: DbCommand::Migrate { database },
-        } => {
-            let pool = revlocal_store::open(&database).await?;
-            pool.close().await;
-            println!("revlocal: schema is up to date at {}", database.display());
-            Ok(())
-        }
+        Command::Db { command } => match command {
+            DbCommand::Migrate { database, json } => {
+                let pool = revlocal_store::open(&database).await?;
+                pool.close().await;
+                let path = database.display().to_string();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"database": path, "migrated": true})
+                    );
+                } else {
+                    println!("revlocal: schema is up to date at {path}");
+                }
+                Ok(())
+            }
+
+            DbCommand::Vacuum {
+                before,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::vacuum(&pool, &before).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+        },
         Command::Review { repo, rev, json } => {
             review::run(&repo, &rev, json).await?;
             Ok(())
@@ -881,6 +938,19 @@ async fn run(command: Command) -> Result<(), CliError> {
         }
 
         Command::Runs { command } => match command {
+            RunsCommand::Retry {
+                run_id,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::retry_run(&pool, run_id, chrono::Utc::now()).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+
             RunsCommand::List {
                 repo,
                 status,
