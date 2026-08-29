@@ -14,6 +14,19 @@ use std::process::Stdio;
 
 use revlocal_core::{Category, Finding, FindingId, FindingState, RunId, Severity, Timestamp};
 use revlocal_vcs::svn::{constituent_revisions, plan, prior_context, Disposition, SvnRunner};
+/// Say out loud that a test verified nothing on this machine.
+///
+/// A green "N passed" on a box without Subversion reads as coverage it does not
+/// have. `svn_fixtures.rs` has said this since RL-202 and these files were written
+/// without it; REVL-106's third criterion — no test skipped without an explicit
+/// documented reason — is what caught the omission.
+///
+/// Visible with `--nocapture`. CI installs Subversion on all three runners, so
+/// this path is not taken there; it is the developer machine, and the case where
+/// the install step silently fails, that this exists for.
+fn note_skipped(test: &str) {
+    println!("SKIPPED (svn not installed, nothing verified): {test}");
+}
 
 fn svn_is_installed() -> bool {
     std::process::Command::new("svn")
@@ -210,6 +223,7 @@ fn prior_context_is_ordered_the_same_way_every_time() {
 #[test]
 fn the_constituents_are_the_branchs_own_revisions() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("the_constituents_are_the_branchs_own_revisions");
         return Ok(());
     }
 

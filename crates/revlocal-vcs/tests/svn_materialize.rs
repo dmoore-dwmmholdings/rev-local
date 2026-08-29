@@ -10,6 +10,19 @@ use std::path::Path;
 use std::process::Stdio;
 
 use revlocal_vcs::svn::{materialize, parse_summary, render_property_only, SvnRunner};
+/// Say out loud that a test verified nothing on this machine.
+///
+/// A green "N passed" on a box without Subversion reads as coverage it does not
+/// have. `svn_fixtures.rs` has said this since RL-202 and these files were written
+/// without it; REVL-106's third criterion — no test skipped without an explicit
+/// documented reason — is what caught the omission.
+///
+/// Visible with `--nocapture`. CI installs Subversion on all three runners, so
+/// this path is not taken there; it is the developer machine, and the case where
+/// the install step silently fails, that this exists for.
+fn note_skipped(test: &str) {
+    println!("SKIPPED (svn not installed, nothing verified): {test}");
+}
 
 fn svn_is_installed() -> bool {
     std::process::Command::new("svn")
@@ -157,6 +170,7 @@ fn svn_materialize_the_property_only_note_says_why_the_patch_is_empty() {
 #[tokio::test]
 async fn svn_materialize_exports_the_tree_at_the_right_revision() {
     if !svn_is_installed() {
+        note_skipped("svn_materialize_the_property_only_note_says_why_the_patch_is_empty");
         println!("SKIPPED (svn not installed, nothing verified): svn_materialize_exports...");
         return;
     }
@@ -188,6 +202,7 @@ async fn svn_materialize_exports_the_tree_at_the_right_revision() {
 #[tokio::test]
 async fn svn_materialize_never_touches_a_working_copy() {
     if !svn_is_installed() {
+        note_skipped("svn_materialize_the_property_only_note_says_why_the_patch_is_empty");
         println!("SKIPPED (svn not installed, nothing verified): svn_materialize_never_touches...");
         return;
     }
@@ -221,6 +236,7 @@ async fn svn_materialize_never_touches_a_working_copy() {
 #[tokio::test]
 async fn svn_materialize_a_property_only_revision_is_summarised_not_empty() {
     if !svn_is_installed() {
+        note_skipped("svn_materialize_the_property_only_note_says_why_the_patch_is_empty");
         println!(
             "SKIPPED (svn not installed, nothing verified): svn_materialize_a_property_only..."
         );
@@ -255,6 +271,7 @@ async fn svn_materialize_a_property_only_revision_is_summarised_not_empty() {
 #[tokio::test]
 async fn svn_materialize_a_binary_change_is_summarised_with_size_and_type() {
     if !svn_is_installed() {
+        note_skipped("svn_materialize_the_property_only_note_says_why_the_patch_is_empty");
         println!("SKIPPED (svn not installed, nothing verified): svn_materialize_a_binary...");
         return;
     }
@@ -294,6 +311,7 @@ async fn svn_materialize_a_binary_change_is_summarised_with_size_and_type() {
 #[tokio::test]
 async fn svn_materialize_a_text_change_still_produces_a_real_diff() {
     if !svn_is_installed() {
+        note_skipped("svn_materialize_the_property_only_note_says_why_the_patch_is_empty");
         println!("SKIPPED (svn not installed, nothing verified): svn_materialize_a_text_change...");
         return;
     }

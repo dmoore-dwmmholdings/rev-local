@@ -22,6 +22,19 @@ use std::path::Path;
 use std::process::Stdio;
 
 use revlocal_vcs::svn::{classify_gain, gained_branches, MergeEvidence, MergeInfo, MergeStyle};
+/// Say out loud that a test verified nothing on this machine.
+///
+/// A green "N passed" on a box without Subversion reads as coverage it does not
+/// have. `svn_fixtures.rs` has said this since RL-202 and these files were written
+/// without it; REVL-106's third criterion — no test skipped without an explicit
+/// documented reason — is what caught the omission.
+///
+/// Visible with `--nocapture`. CI installs Subversion on all three runners, so
+/// this path is not taken there; it is the developer machine, and the case where
+/// the install step silently fails, that this exists for.
+fn note_skipped(test: &str) {
+    println!("SKIPPED (svn not installed, nothing verified): {test}");
+}
 
 fn svn_is_installed() -> bool {
     ["svn", "svnadmin"].iter().all(|tool| {
@@ -221,6 +234,7 @@ fn four_merge_styles(dir: &Path) -> Result<String, String> {
 #[test]
 fn only_a_reintegration_out_of_four_merge_styles_synthesises_a_pseudo_pr() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("only_a_reintegration_out_of_four_merge_styles_synthesises_a_pseudo_pr");
         return Ok(());
     }
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
