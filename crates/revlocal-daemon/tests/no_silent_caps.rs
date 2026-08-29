@@ -87,6 +87,14 @@ const ACCOUNTED_FOR: &[(&str, &str)] = &[
          teardown, not a payload; no review data passes through it.",
     ),
     (
+        "crates/revlocal-vcs/src/generated.rs",
+        "HEADER_LINES and HEADER_BYTES bound how much of a file is read looking for \
+         a generated-file marker. Nothing reviewable is cut: a file whose marker \
+         sits below the header is treated as NOT generated, so it is reviewed \
+         rather than skipped. The cap can only cost tokens, never coverage — which \
+         is the direction a detection heuristic should fail in.",
+    ),
+    (
         "crates/revlocal-publish/src/retry.rs",
         "MAX_ATTEMPTS and MAX_DELAY bound retrying a publish. Exhaustion is \
          recorded on the publish_action row with its error, and §11.6's report \

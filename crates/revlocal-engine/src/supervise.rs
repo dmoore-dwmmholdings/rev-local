@@ -207,6 +207,24 @@ pub async fn supervise(
         .env_clear()
         .envs(env);
 
+    // ...with the exception of the handful Windows needs to start a process at
+    // all. `SystemRoot` is where the loader finds the C runtime and Winsock;
+    // `COMSPEC` is how a `.cmd` gets a shell; `PATHEXT` is how a bare program name
+    // resolves. Clearing them does not sandbox the engine, it stops it running —
+    // and the failure is a bare non-zero exit with no output to explain it.
+    //
+    // §8.5's denylist exists to keep secrets out of an engine's environment. The
+    // path to `C:\WINDOWS` is not a secret, and an engine that cannot start has
+    // not been secured, it has been broken.
+    #[cfg(windows)]
+    for name in WINDOWS_ESSENTIAL_ENV {
+        if !env.contains_key(*name) {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+    }
+
     // A new process group, so a kill can reach anything the engine spawned.
     #[cfg(unix)]
     command.process_group(0);
@@ -322,6 +340,35 @@ async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>, grace: D
         );
     }
 }
+
+/// Variables Windows needs present for a process to start.
+///
+/// Deliberately short, and deliberately not "everything". Each entry is here
+/// because its absence stops a program running rather than merely inconveniencing
+/// it:
+///
+/// - `SystemRoot` / `windir` — the loader resolves system DLLs relative to these.
+///   Without them a process fails during CRT initialisation, before `main`.
+/// - `COMSPEC` — the shell used to run a `.cmd` or `.bat`.
+/// - `PATHEXT` — how a bare program name resolves to `foo.exe` rather than `foo`.
+/// - `TEMP` / `TMP` — many toolchains write scratch files unconditionally and
+///   abort if they cannot.
+/// - `USERPROFILE` — Node and Git both look here for configuration.
+///
+/// None of them is a secret, which is the test for belonging on this list.
+#[cfg(windows)]
+pub const WINDOWS_ESSENTIAL_ENV: &[&str] = &[
+    "SystemRoot",
+    "windir",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "SystemDrive",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+];
 
 /// Signal a whole process group.
 #[cfg(unix)]

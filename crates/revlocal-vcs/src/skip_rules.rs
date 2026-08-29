@@ -11,6 +11,8 @@
 //! reads git or the database, which is what lets every rule be tested against a
 //! constructed change rather than a repository shaped to produce it.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use globset::{Glob, GlobSetBuilder};
 use revlocal_core::RepoConfig;
 
@@ -41,6 +43,14 @@ pub enum SkipReason {
     /// Not decided here: it needs the GitHub adapter's view of open PRs. `RL-306`
     /// sets it.
     CoveredByPr,
+    /// Every reviewable path carries a generated-file marker (RL-305b, ADR 0014).
+    ///
+    /// Distinct from [`IgnoredPaths`](Self::IgnoredPaths) on purpose. Somebody
+    /// told their change was "ignored" goes looking through `ignore_globs` and
+    /// finds nothing that matches — because §9.4's "generated-file markers" is not
+    /// a glob and cannot be one. Naming the real reason, and the marker that
+    /// triggered it, is the difference between a dead end and an answer.
+    GeneratedOnly,
     /// A `done` run already exists for the same content (SPEC §9.4).
     ///
     /// Not decided here: it needs the store. The pipeline sets it, using the content
@@ -57,6 +67,7 @@ impl SkipReason {
         Self::MergeCommit,
         Self::DraftPr,
         Self::CoveredByPr,
+        Self::GeneratedOnly,
         Self::AlreadyReviewed,
     ];
 
@@ -69,6 +80,7 @@ impl SkipReason {
             Self::MergeCommit => "merge_commit",
             Self::DraftPr => "draft_pr",
             Self::CoveredByPr => "covered_by_pr",
+            Self::GeneratedOnly => "generated_only",
             Self::AlreadyReviewed => "already_reviewed",
         }
     }
@@ -82,7 +94,11 @@ impl SkipReason {
     pub const fn is_decided_by_vcs(self) -> bool {
         matches!(
             self,
-            Self::IgnoredPaths | Self::EmptyDiff | Self::IgnoredAuthor | Self::MergeCommit
+            Self::IgnoredPaths
+                | Self::EmptyDiff
+                | Self::IgnoredAuthor
+                | Self::GeneratedOnly
+                | Self::MergeCommit
         )
     }
 }
@@ -160,6 +176,54 @@ pub fn evaluate(change: &DetectedChange, config: &RepoConfig) -> Option<Skip> {
     }
 
     None
+}
+
+/// [`evaluate`], plus §9.4's generated-file rule (RL-305b).
+///
+/// Separate from [`evaluate`] because deciding it needs file *content*, and
+/// `evaluate` is a pure function of a change and a config — which is what makes
+/// every other rule testable without a filesystem. The caller materialises, scans
+/// with [`crate::generated::scan`], and passes the result here.
+///
+/// `generated` maps a repository-relative path to the marker found in it.
+pub fn evaluate_with_generated(
+    change: &DetectedChange,
+    config: &RepoConfig,
+    generated: &BTreeMap<String, &'static str>,
+) -> Option<Skip> {
+    if let Some(skip) = evaluate(change, config) {
+        return Some(skip);
+    }
+
+    // Only the paths that survived ignore filtering matter. A change touching one
+    // generated file and one ignored file has nothing left to review, and saying
+    // "generated" is more useful than saying "ignored".
+    let remaining = reviewable_paths(&change.paths, config);
+    if remaining.is_empty() {
+        return None;
+    }
+
+    // One hand-written file is enough to review the change, exactly as
+    // `skip_rules_one_reviewable_path_is_enough_to_review_the_change` requires for
+    // ignore_globs. A change that touches a generated file *and* real code is a
+    // change somebody wrote.
+    let markers: BTreeSet<&'static str> = remaining
+        .iter()
+        .map(|path| generated.get(path.as_str()).copied())
+        .collect::<Option<BTreeSet<_>>>()?;
+
+    Some(Skip {
+        reason: SkipReason::GeneratedOnly,
+        detail: format!(
+            "all {} reviewable path(s) carry a generated-file marker ({})",
+            remaining.len(),
+            markers
+                .iter()
+                .map(|marker| format!("`{marker}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
 }
 
 /// The paths that survive `ignore_globs` filtering.
