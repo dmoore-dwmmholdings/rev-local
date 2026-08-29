@@ -773,3 +773,229 @@ mod inspect_commands {
         Ok(())
     }
 }
+
+// --- repo add | list | remove | set (RL-1201, §14) -------------------------
+
+mod repo_commands {
+    use revlocal_cli::repo::{add, remove, render_write, set};
+    use revlocal_store::Pool;
+
+    async fn store() -> Result<(Pool, tempfile::TempDir), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((pool, dir))
+    }
+
+    fn now() -> revlocal_core::Timestamp {
+        chrono::Utc::now()
+    }
+
+    #[tokio::test]
+    async fn a_new_repository_defaults_to_doing_nothing_unattended() -> Result<(), String> {
+        // The default that matters most. A repository added a moment ago has never
+        // been reviewed and nobody has seen its findings — the first thing it does
+        // should not be to publish them.
+        let (pool, _dir) = store().await?;
+        let report = add(
+            &pool,
+            "/work/acme-api",
+            "git",
+            None,
+            "claude",
+            "dry_run",
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.name, "acme-api", "the name is derived from the path");
+        assert!(
+            report.detail.contains("nothing is published"),
+            "{}",
+            report.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_name_is_refused_rather_than_merged() -> Result<(), String> {
+        // §5 makes `repo.name` unique, and the name is what hooks send and what
+        // findings are fingerprinted against — so a second one would silently merge
+        // two repositories' history.
+        let (pool, _dir) = store().await?;
+        add(
+            &pool,
+            "/work/acme-api",
+            "git",
+            None,
+            "claude",
+            "dry_run",
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let second = add(
+            &pool,
+            "/elsewhere/acme-api",
+            "git",
+            None,
+            "claude",
+            "dry_run",
+            now(),
+        )
+        .await;
+        let error = second.err().map(|e| e.to_string()).unwrap_or_default();
+
+        assert!(error.contains("already configured"), "{error}");
+        assert!(
+            error.contains("repo remove acme-api"),
+            "must offer a way out: {error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_unknown_value_names_the_ones_that_exist() -> Result<(), String> {
+        // A message saying only "invalid engine" makes somebody go and find the
+        // list. The list is three words long.
+        let (pool, _dir) = store().await?;
+        let error = add(&pool, "/w/x", "git", None, "nonsense", "dry_run", now())
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+
+        assert!(error.contains("claude"), "{error}");
+        assert!(error.contains("codex"), "{error}");
+        assert!(error.contains("mock"), "{error}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_url_is_stored_as_a_remote_and_a_path_as_a_path() -> Result<(), String> {
+        // They mean different things to every adapter downstream, and guessing
+        // wrong makes a local review try to fetch.
+        let (pool, _dir) = store().await?;
+        add(
+            &pool,
+            "https://github.com/acme/api.git",
+            "github",
+            None,
+            "claude",
+            "dry_run",
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let repos = revlocal_store::RepoStore::new(&pool)
+            .list()
+            .await
+            .map_err(|e| e.to_string())?;
+        let stored = repos.first().ok_or("the repository must exist")?;
+
+        assert_eq!(stored.name, "api", "`.git` is trimmed from a derived name");
+        assert!(stored.remote_url.is_some());
+        assert!(stored.local_path.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_changes_what_it_names_and_says_what_it_changed() -> Result<(), String> {
+        let (pool, _dir) = store().await?;
+        add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = set(
+            &pool,
+            "acme",
+            &["engine=codex".to_owned(), "autonomy=auto".to_owned()],
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        assert!(report.detail.contains("engine=codex"), "{}", report.detail);
+        assert!(report.detail.contains("autonomy=auto"), "{}", report.detail);
+
+        let repos = revlocal_store::RepoStore::new(&pool)
+            .list()
+            .await
+            .map_err(|e| e.to_string())?;
+        let stored = repos.first().ok_or("must exist")?;
+        assert_eq!(stored.engine, revlocal_core::EngineKind::Codex);
+        assert_eq!(stored.autonomy, revlocal_core::AutonomyMode::Auto);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_rejects_the_whole_change_when_one_pair_is_wrong() -> Result<(), String> {
+        // Applying the good half of a bad command leaves the repository in a state
+        // nobody asked for, and the user cannot tell which half took.
+        let (pool, _dir) = store().await?;
+        add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let failed = set(
+            &pool,
+            "acme",
+            &["engine=codex".to_owned(), "autonomy=nonsense".to_owned()],
+            now(),
+        )
+        .await;
+        assert!(failed.is_err());
+
+        let repos = revlocal_store::RepoStore::new(&pool)
+            .list()
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(
+            repos.first().ok_or("must exist")?.engine,
+            revlocal_core::EngineKind::Claude,
+            "the valid half must not have been applied"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removing_says_what_it_did_not_remove() -> Result<(), String> {
+        // Hooks live in the working copy, not the database. Somebody who removes a
+        // repository and finds their commits still firing a hook deserves to have
+        // been told.
+        let (pool, _dir) = store().await?;
+        add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = remove(&pool, "acme").await.map_err(|e| e.to_string())?;
+        assert!(report.detail.contains("hooks"), "{}", report.detail);
+        assert!(
+            report.detail.contains("hooks uninstall"),
+            "must name the command: {}",
+            report.detail
+        );
+
+        assert!(remove(&pool, "acme").await.is_err(), "it is gone");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_write_report_round_trips_as_json() -> Result<(), String> {
+        let (pool, _dir) = store().await?;
+        let report = add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
+            .await
+            .map_err(|e| e.to_string())?;
+        let json = render_write(&report, true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+        assert_eq!(parsed["action"], "add");
+        assert_eq!(parsed["name"], "acme");
+        assert!(parsed["repo_id"].is_number());
+        Ok(())
+    }
+}

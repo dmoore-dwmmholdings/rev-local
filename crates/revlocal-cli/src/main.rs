@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, doctor, exit, hooks, inspect};
+use revlocal_cli::{control, doctor, exit, hooks, inspect, repo};
 
 mod publish;
-mod repo;
 mod review;
 mod targets;
 
@@ -236,6 +235,73 @@ enum TargetsCommand {
 /// `revlocal repo …`.
 #[derive(Debug, Subcommand)]
 enum RepoCommand {
+    /// Register a repository so rev-local reviews it.
+    Add {
+        /// A working copy on disk, or a remote URL.
+        #[arg(value_name = "PATH|URL")]
+        path_or_url: String,
+        /// `git`, `github` or `svn`.
+        #[arg(long)]
+        kind: String,
+        /// What to call it. Derived from the path when omitted.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Which engine reviews it (decision D3: per repo, not global).
+        #[arg(long, default_value = "claude")]
+        engine: String,
+        /// How much it may do unattended.
+        ///
+        /// Defaults to `dry_run`: a repository added a moment ago has never been
+        /// reviewed and nobody has seen its findings.
+        #[arg(long, default_value = "dry_run")]
+        autonomy: String,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List every configured repository.
+    List {
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Forget a repository. Its runs and findings go with it.
+    Remove {
+        /// Which repository.
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Change settings: `engine=`, `autonomy=`, `enabled=`, `default_branch=`.
+    Set {
+        /// Which repository.
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// One or more `key=value` pairs.
+        #[arg(value_name = "KEY=VALUE", required = true)]
+        pairs: Vec<String>,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show configured repositories and their polling health (SPEC §7.1).
     ///
     /// Reports only. A command that shows you a repository's state must not be
@@ -581,6 +647,64 @@ async fn run(command: Command) -> Result<(), CliError> {
         }
 
         Command::Repo { command } => match command {
+            RepoCommand::Add {
+                path_or_url,
+                kind,
+                name,
+                engine,
+                autonomy,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::add(
+                    &pool,
+                    &path_or_url,
+                    &kind,
+                    name.as_deref(),
+                    &engine,
+                    &autonomy,
+                    chrono::Utc::now(),
+                )
+                .await?;
+                pool.close().await;
+                println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+
+            RepoCommand::List { database, json } => {
+                let pool = revlocal_store::open(&database).await?;
+                let out = repo::run(&pool, None, json).await?;
+                pool.close().await;
+                println!("{out}");
+                Ok(())
+            }
+
+            RepoCommand::Remove {
+                name,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::remove(&pool, &name).await?;
+                pool.close().await;
+                println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+
+            RepoCommand::Set {
+                name,
+                pairs,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::set(&pool, &name, &pairs, chrono::Utc::now()).await?;
+                pool.close().await;
+                println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+
             RepoCommand::Show {
                 name,
                 database,
