@@ -1,0 +1,39 @@
+[package]
+name = "revlocal-tauri"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+chrono = { workspace = true }
+revlocal-core = { workspace = true }
+revlocal-daemon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Tauri is OPTIONAL and off by default.
+#
+# The IPC surface and the event bridge are plain Rust: that is what makes them
+# testable, and §15's "IPC is a thin delegation layer with no business logic" is
+# only checkable if the layer can be compiled and exercised without a webview.
+#
+# It also keeps CI honest. Linking Tauri on Linux pulls webkit2gtk and a dozen
+# system packages; making that a precondition for `cargo test --workspace` would
+# mean every leg of the matrix installs a browser engine to run tests that do not
+# use one.
+tauri = { workspace = true, optional = true }
+
+[features]
+default = []
+# The actual desktop application. Enabled by the bundler, not by CI.
+desktop = ["dep:tauri"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
