@@ -111,6 +111,22 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings 2>&1 \
             | tee artifacts/logs/clippy-${{ matrix.os }}.log
 
+      # The `desktop` feature is off by default, so the step above never compiles
+      # the Tauri shell — and a lint that never runs is not a lint. This caught a
+      # real ADR 0003 violation (`.expect()` in `main`) that had been sitting in
+      # `revlocal-desktop.rs` unseen.
+      #
+      # macOS only, deliberately. The webview is part of the OS here, while on
+      # Linux linking Tauri pulls webkit2gtk and a dozen system packages — making
+      # every leg install a browser engine to lint one crate is a poor trade. One
+      # runner that compiles it is enough to keep the file honest.
+      - name: cargo clippy (desktop shell)
+        if: runner.os == 'macOS'
+        run: |
+          set -o pipefail
+          cargo clippy -p revlocal-tauri --features desktop --all-targets -- -D warnings 2>&1 \
+            | tee artifacts/logs/clippy-desktop-${{ matrix.os }}.log
+
       - name: cargo build
         run: |
           set -o pipefail
