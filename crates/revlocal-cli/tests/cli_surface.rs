@@ -90,7 +90,18 @@ mod cli_surface {
 
     /// Command groups that exist today.
     const IMPLEMENTED: &[&str] = &[
-        "db", "publish", "targets", "review", "repo", "pause", "resume", "kill", "doctor", "hooks",
+        "db",
+        "publish",
+        "targets",
+        "review",
+        "repo",
+        "pause",
+        "resume",
+        "kill",
+        "doctor",
+        "hooks",
+        "approvals",
+        "budget",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
@@ -108,12 +119,10 @@ mod cli_surface {
         ),
         ("runs", "needs the run store surfaced, which RL-1201 does"),
         ("findings", "same, plus suppression writes"),
-        ("approvals", "RL-803 built the inbox; this is its front end"),
         (
             "webhook",
             "RL-1005 and RL-1006 built the listener and tunnels",
         ),
-        ("budget", "RL-805 built the ledger; this reads it"),
     ];
 
     fn binary() -> PathBuf {
@@ -289,6 +298,7 @@ mod control {
         let pool = revlocal_store::open(&dir.path().join("rl.db"))
             .await
             .map_err(|e| e.to_string())?;
+
         Ok((pool, dir))
     }
 
@@ -559,6 +569,207 @@ mod hooks_command {
             "{error}"
         );
         assert!(error.contains("try:"), "{error}");
+        Ok(())
+    }
+}
+
+// --- approvals and budget (RL-1201, §12.4, §13.1) --------------------------
+
+mod inspect_commands {
+    use revlocal_cli::inspect::{approvals, budget, render};
+    use revlocal_core::{BudgetSettings, RepoId, Usage};
+    #[allow(unused_imports)]
+    use revlocal_store::RepoStore;
+    use revlocal_store::{BudgetLedgerStore, Pool};
+
+    /// A store with one repository in it.
+    ///
+    /// `budget_ledger` has a foreign key to `repo`, which is right — a ledger row
+    /// for a repository that does not exist is a row nobody can explain — and it
+    /// means these tests need a real one rather than a bare id.
+    async fn store() -> Result<(Pool, tempfile::TempDir, RepoId), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let now = chrono::Utc::now();
+        let repo = revlocal_store::RepoStore::new(&pool)
+            .insert(&revlocal_core::Repo {
+                id: RepoId::new(0),
+                name: "acme-api".to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                local_path: None,
+                remote_url: None,
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok((pool, dir, repo.id))
+    }
+
+    #[tokio::test]
+    async fn an_empty_inbox_says_so_rather_than_printing_nothing() -> Result<(), String> {
+        // An empty list rendered as nothing is indistinguishable from a command
+        // that failed to read anything.
+        let (pool, _dir, _repo_id) = store().await?;
+        let report = approvals(&pool).await.map_err(|e| e.to_string())?;
+
+        assert!(report.waiting.is_empty());
+        let human = report.render_human();
+        assert!(human.contains("Nothing is waiting"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_day_with_no_runs_is_not_a_day_nobody_measured() -> Result<(), String> {
+        // The bug this test exists for, found by running the command rather than
+        // reading it. `Usage::default()` means "unmeasured" (RL-409, deliberately),
+        // and using it for an absent ledger row made a fresh install report
+        // "0 tokens (at least — one run reported no count)" when nothing had run.
+        let (pool, _dir, repo_id) = store().await?;
+        let report = budget(
+            &pool,
+            repo_id,
+            chrono::Utc::now(),
+            &BudgetSettings::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.runs, 0);
+        assert!(report.tokens_known, "nothing ran, so nothing is unmeasured");
+        assert!(report.cost_known);
+        assert!(report.may_run);
+
+        let human = report.render_human();
+        assert!(
+            !human.contains("at least"),
+            "a day with no runs must not hedge its zero:\n{human}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_day_containing_an_unmeasured_run_does_hedge() -> Result<(), String> {
+        // The other half. One run whose tokens nobody counted makes the day's
+        // total a lower bound, and printing it as a total would be the exact
+        // failure RL-409 fixed.
+        let (pool, _dir, repo_id) = store().await?;
+        BudgetLedgerStore::new(&pool)
+            .add_run(
+                repo_id,
+                &revlocal_daemon::budgets::day_of(chrono::Utc::now()),
+                1,
+                &Usage::default(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = budget(
+            &pool,
+            repo_id,
+            chrono::Utc::now(),
+            &BudgetSettings::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.runs, 1);
+        assert!(!report.tokens_known, "the run reported no count");
+        let human = report.render_human();
+        assert!(human.contains("at least"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_measured_run_is_reported_as_a_total() -> Result<(), String> {
+        let (pool, _dir, repo_id) = store().await?;
+        BudgetLedgerStore::new(&pool)
+            .add_run(
+                repo_id,
+                &revlocal_daemon::budgets::day_of(chrono::Utc::now()),
+                1,
+                &Usage::measured(1_000, 200).with_cost(0.25),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = budget(
+            &pool,
+            repo_id,
+            chrono::Utc::now(),
+            &BudgetSettings::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.tokens, 1_200);
+        assert!(report.tokens_known);
+        assert!(report.cost_known);
+        assert!(!report.render_human().contains("at least"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_budget_says_why_it_is_holding() -> Result<(), String> {
+        // §18: "may_run: false" without a reason is the system going quiet.
+        let (pool, _dir, repo_id) = store().await?;
+        let settings = BudgetSettings {
+            daily_runs_per_repo: 1,
+            ..BudgetSettings::default()
+        };
+        BudgetLedgerStore::new(&pool)
+            .add_run(
+                repo_id,
+                &revlocal_daemon::budgets::day_of(chrono::Utc::now()),
+                1,
+                &Usage::measured(10, 10),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = budget(&pool, repo_id, chrono::Utc::now(), &settings)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert!(!report.may_run);
+        let reason = report.reason.clone().unwrap_or_default();
+        assert!(reason.contains("run budget"), "{reason}");
+        assert!(report.render_human().contains("Holding:"));
+
+        // And the reason survives into --json, where a script reads it.
+        let json = render(&report, report.render_human(), true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        assert_eq!(parsed["may_run"], false);
+        assert!(parsed["reason"].is_string());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_healthy_budget_omits_the_reason_rather_than_nulling_it() -> Result<(), String> {
+        // Its presence means "something is stopping this", which is only true if
+        // it is absent when nothing is.
+        let (pool, _dir, repo_id) = store().await?;
+        let report = budget(
+            &pool,
+            repo_id,
+            chrono::Utc::now(),
+            &BudgetSettings::default(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let json = render(&report, report.render_human(), true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        assert!(parsed.get("reason").is_none(), "{json}");
         Ok(())
     }
 }
