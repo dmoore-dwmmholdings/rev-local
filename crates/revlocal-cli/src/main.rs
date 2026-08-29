@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, exit};
+use revlocal_cli::{control, doctor, exit, hooks};
 
 mod publish;
 mod repo;
@@ -46,6 +46,28 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Install or remove the git hooks that trigger reviews (SPEC §7.2).
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommand,
+    },
+
+    /// Check prerequisites, engines and publish targets (SPEC §8.4).
+    ///
+    /// The first thing to run on a fresh install, and the thing to run again when
+    /// reviews have quietly stopped.
+    Doctor {
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+        /// How many configured repositories use Subversion.
+        ///
+        /// Temporary: once `repo add` lands this comes from the database. Until
+        /// then, a missing `svn` cannot be judged blocking or not without it.
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        svn_repos: usize,
     },
 
     /// Stop all reviewing (SPEC §12.1). Reversible; nothing is lost.
@@ -222,6 +244,66 @@ enum RepoCommand {
     },
 }
 
+/// `revlocal hooks …`.
+#[derive(Debug, Subcommand)]
+enum HooksCommand {
+    /// Add rev-local's hooks. Existing hooks are appended to, never overwritten.
+    Install {
+        /// The repository's working copy, or the bare mirror itself.
+        #[arg(long, value_name = "PATH")]
+        repo: PathBuf,
+        /// The repository's configured name, sent with each trigger.
+        #[arg(long, value_name = "NAME")]
+        name: String,
+        /// `reference` for a developer's clone, `bare-mirror` to review pushes.
+        #[arg(long, default_value = "reference")]
+        mode: String,
+        /// The loopback port the receiver listens on.
+        #[arg(long, default_value_t = revlocal_daemon::trigger_receiver::DEFAULT_TRIGGER_PORT)]
+        port: u16,
+        /// The environment variable the hook reads its shared secret from.
+        ///
+        /// A name, never the secret: hooks live in `.git`, which is not committed
+        /// but is backed up and copied between machines.
+        #[arg(long, default_value = "REVLOCAL_HOOK_SECRET")]
+        secret_env: String,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Remove rev-local's hooks, leaving anything else byte-identical.
+    Uninstall {
+        /// The repository's working copy, or the bare mirror itself.
+        #[arg(long, value_name = "PATH")]
+        repo: PathBuf,
+        /// The repository's configured name.
+        #[arg(long, value_name = "NAME", default_value = "")]
+        name: String,
+        /// Which set of hooks to remove.
+        #[arg(long, default_value = "reference")]
+        mode: String,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Parse §7.2's two modes, naming both when the answer is neither.
+fn hook_mode(raw: &str) -> Result<revlocal_daemon::hooks::HookMode, CliError> {
+    match raw {
+        "reference" => Ok(revlocal_daemon::hooks::HookMode::Reference),
+        "bare-mirror" => Ok(revlocal_daemon::hooks::HookMode::BareMirror),
+        other => {
+            eprintln!(
+                "revlocal: `{other}` is not a hook mode\n  try: --mode reference (a \
+                 developer's clone) or --mode bare-mirror (a mirror developers push to)"
+            );
+            Err(CliError::Usage)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -245,6 +327,9 @@ fn main() -> ExitCode {
         // §14's 2: the caller's mistake. Retrying will not help, and the command
         // has already printed what to do instead.
         Err(CliError::Usage) => exit::Exit::Usage.into(),
+        // `doctor` printed the failing checks and their remediation; repeating a
+        // summary line here would say less than the report already did.
+        Err(CliError::Unhealthy) => exit::Exit::Error.into(),
         Err(e) => {
             eprintln!("revlocal: {e}");
             // Every other error is `Error` until a command has a reason to say
@@ -282,6 +367,18 @@ enum CliError {
     /// A control command failed.
     #[error(transparent)]
     Control(#[from] control::ControlError),
+
+    /// A hooks command failed.
+    #[error(transparent)]
+    Hooks(#[from] hooks::HooksCommandError),
+
+    /// A report could not be serialised.
+    #[error("could not render the report: {0}")]
+    Json(#[from] serde_json::Error),
+
+    /// `doctor` found something blocking. Exits 1, having already said what.
+    #[error("")]
+    Unhealthy,
 
     /// The invocation was wrong. Exits 2 rather than 1 (§14).
     ///
@@ -325,6 +422,43 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Hooks { command } => match command {
+            HooksCommand::Install {
+                repo,
+                name,
+                mode,
+                port,
+                secret_env,
+                json,
+            } => {
+                let mode = hook_mode(&mode)?;
+                let report = hooks::install(&repo, &name, mode, port, &secret_env)?;
+                println!("{}", hooks::render(&report, json)?);
+                Ok(())
+            }
+            HooksCommand::Uninstall {
+                repo,
+                name,
+                mode,
+                json,
+            } => {
+                let mode = hook_mode(&mode)?;
+                let report = hooks::uninstall(&repo, &name, mode)?;
+                println!("{}", hooks::render(&report, json)?);
+                Ok(())
+            }
+        },
+
+        Command::Doctor { json, svn_repos } => {
+            let report = doctor::gather(svn_repos);
+            println!("{}", doctor::render(&report, json)?);
+            // §14: a doctor that always exits 0 is a doctor no script can use.
+            if report.has_failures() {
+                return Err(CliError::Unhealthy);
+            }
+            Ok(())
+        }
+
         Command::Pause { database, json } => {
             let pool = revlocal_store::open(&database).await?;
             let report = control::pause(&pool, chrono::Utc::now()).await?;

@@ -90,7 +90,7 @@ mod cli_surface {
 
     /// Command groups that exist today.
     const IMPLEMENTED: &[&str] = &[
-        "db", "publish", "targets", "review", "repo", "pause", "resume", "kill",
+        "db", "publish", "targets", "review", "repo", "pause", "resume", "kill", "doctor", "hooks",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
@@ -98,10 +98,6 @@ mod cli_surface {
     /// An entry is a claim, not a placeholder: naming the blocker is what keeps
     /// this from becoming a list nobody revisits.
     const NOT_YET: &[(&str, &str)] = &[
-        (
-            "doctor",
-            "RL-1202 — needs the engine and MCP probes assembled",
-        ),
         (
             "watch",
             "needs the daemon main loop; the pieces exist, nothing runs them",
@@ -113,10 +109,6 @@ mod cli_surface {
         ("runs", "needs the run store surfaced, which RL-1201 does"),
         ("findings", "same, plus suppression writes"),
         ("approvals", "RL-803 built the inbox; this is its front end"),
-        (
-            "hooks",
-            "RL-1004 built the installer; this is its front end",
-        ),
         (
             "webhook",
             "RL-1005 and RL-1006 built the listener and tunnels",
@@ -426,6 +418,147 @@ mod control {
         }
         assert_eq!(parsed["action"], "pause");
         assert!(parsed["runs_cancelled"].is_array());
+        Ok(())
+    }
+}
+
+// --- hooks (RL-1201, §7.2) -------------------------------------------------
+
+mod hooks_command {
+    use std::path::Path;
+
+    use revlocal_cli::hooks::{install, render, uninstall};
+    use revlocal_daemon::hooks::HookMode;
+
+    /// A repository with one hook somebody else wrote.
+    fn repo_with_their_hook(dir: &Path) -> Result<String, String> {
+        let hooks = dir.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).map_err(|e| e.to_string())?;
+        let theirs = "#!/bin/sh\n# somebody else wrote this\nnpx lint-staged\nexit 0\n";
+        std::fs::write(hooks.join("post-commit"), theirs).map_err(|e| e.to_string())?;
+        Ok(theirs.to_owned())
+    }
+
+    #[test]
+    fn install_says_which_hooks_it_appended_to_rather_than_just_installed() -> Result<(), String> {
+        // Somebody putting this into a repository that already has hooks wants to
+        // know theirs was appended to and not overwritten — and wants to know it
+        // without opening the file.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        repo_with_their_hook(dir.path())?;
+
+        let report = install(dir.path(), "acme-api", HookMode::Reference, 41791, "S")
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.hooks.len(), 3, "§7.2's three reference-mode hooks");
+        assert!(
+            report.detail.contains("not overwritten"),
+            "{}",
+            report.detail
+        );
+
+        let appended: Vec<&str> = report
+            .hooks
+            .iter()
+            .filter(|h| h.action == "appended")
+            .map(|h| h.path.as_str())
+            .collect();
+        assert_eq!(appended.len(), 1, "only theirs existed");
+        assert!(appended[0].ends_with("post-commit"));
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_leaves_their_hook_byte_identical() -> Result<(), String> {
+        // The property that makes `install` safe to try. RL-1004 owns it; this
+        // asserts the CLI actually exposes it rather than promising it.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let theirs = repo_with_their_hook(dir.path())?;
+
+        install(dir.path(), "acme-api", HookMode::Reference, 41791, "S")
+            .map_err(|e| e.to_string())?;
+        uninstall(dir.path(), "acme-api", HookMode::Reference).map_err(|e| e.to_string())?;
+
+        let after = std::fs::read_to_string(dir.path().join(".git/hooks/post-commit"))
+            .map_err(|e| e.to_string())?;
+        assert_eq!(after, theirs, "their hook must come back exactly as it was");
+
+        // And the ones rev-local wrote entirely are gone, not left inert.
+        assert!(!dir.path().join(".git/hooks/post-merge").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn uninstalling_what_was_never_installed_answers_rather_than_complains() -> Result<(), String> {
+        // Running this to check is how somebody finds out. It should answer.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir.path().join(".git").join("hooks"))
+            .map_err(|e| e.to_string())?;
+
+        let report =
+            uninstall(dir.path(), "acme-api", HookMode::Reference).map_err(|e| e.to_string())?;
+
+        assert!(report.hooks.iter().all(|h| !h.changed));
+        assert!(
+            report.detail.contains("nothing changed"),
+            "{}",
+            report.detail
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bare_mirror_mode_installs_the_one_hook_that_sees_every_push() -> Result<(), String> {
+        // §7.2: post-receive on a bare mirror is the only way to see every pushed
+        // ref, including deletions.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir.path().join("hooks")).map_err(|e| e.to_string())?;
+
+        let report = install(dir.path(), "acme-api", HookMode::BareMirror, 41791, "S")
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.hooks.len(), 1);
+        assert!(report.hooks[0].path.ends_with("post-receive"));
+        assert_eq!(report.mode, "bare-mirror");
+        Ok(())
+    }
+
+    #[test]
+    fn the_json_names_every_file_and_what_happened_to_it() -> Result<(), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        repo_with_their_hook(dir.path())?;
+        let report = install(dir.path(), "acme-api", HookMode::Reference, 41791, "S")
+            .map_err(|e| e.to_string())?;
+
+        let json = render(&report, true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+        assert_eq!(parsed["command"], "install");
+        assert_eq!(parsed["mode"], "reference");
+        let hooks = parsed["hooks"].as_array().ok_or("hooks must be an array")?;
+        assert_eq!(hooks.len(), 3);
+        for hook in hooks {
+            // Per file, so a script can tell which were touched.
+            assert!(hook["path"].is_string());
+            assert!(hook["action"].is_string());
+            assert!(hook["changed"].is_boolean());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_path_that_is_not_a_repository_says_what_to_do() -> Result<(), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let error = install(dir.path(), "x", HookMode::Reference, 1, "S")
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+
+        assert!(
+            error.contains("does not look like a git repository"),
+            "{error}"
+        );
+        assert!(error.contains("try:"), "{error}");
         Ok(())
     }
 }
