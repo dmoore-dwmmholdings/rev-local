@@ -40,6 +40,18 @@ pub struct GlobalSettings {
     pub keep_scratch_on_failure: bool,
     /// A run stuck this long is considered stale.
     pub stale_run_minutes: u32,
+    /// How many attempts a change gets before recovery gives up (§9.1, ADR 0012).
+    ///
+    /// Without a ceiling, a change that crashes the daemon is recovered on every
+    /// startup, crashes again, and rev-local spends its life re-reviewing one
+    /// commit while never reaching the rest. RL-501 recorded that gap and put the
+    /// value in the daemon as a *parameter* rather than a call-site constant, so
+    /// it could become config without a rewrite. This is that.
+    ///
+    /// Giving up is announced with a reason (§18): a change that stops being
+    /// reviewed with no record is indistinguishable from one that was reviewed and
+    /// found clean.
+    pub max_attempts: u32,
     /// How long a queued approval waits before expiring (SPEC §12.4).
     pub approval_ttl_hours: u32,
     /// Actions per hour above which a repo's actions escalate (SPEC §12.3).
@@ -61,6 +73,7 @@ impl Default for GlobalSettings {
             transcript_retention_days: 30,
             keep_scratch_on_failure: true,
             stale_run_minutes: 10,
+            max_attempts: 3,
             approval_ttl_hours: 72,
             burst_threshold: crate::DEFAULT_BURST_THRESHOLD,
             extra: Extra::default(),

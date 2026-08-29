@@ -520,3 +520,50 @@ mod state_machine {
         );
     }
 }
+
+// --- the attempt ceiling comes from config (RL-1305) -----------------------
+
+#[test]
+fn state_machine_the_config_default_matches_the_constant() {
+    // Two sources for one number is how they drift. RL-501 put the ceiling in the
+    // daemon as a parameter so it could become config later; RL-1305 made it
+    // config. The constant stays for callers that have none — a test harness, or a
+    // recovery pass that runs before config is read — and this is what stops the
+    // two from disagreeing silently.
+    use revlocal_core::GlobalSettings;
+    use revlocal_daemon::state_machine::{max_attempts_from, DEFAULT_MAX_ATTEMPTS};
+
+    assert_eq!(
+        max_attempts_from(&GlobalSettings::default()),
+        DEFAULT_MAX_ATTEMPTS,
+        "§13.1's max_attempts and DEFAULT_MAX_ATTEMPTS must agree"
+    );
+}
+
+#[test]
+fn state_machine_a_configured_ceiling_is_what_recovery_uses() {
+    // The key is only "read" if changing it changes behaviour.
+    use revlocal_core::GlobalSettings;
+    use revlocal_daemon::state_machine::max_attempts_from;
+
+    let global = GlobalSettings {
+        max_attempts: 7,
+        ..GlobalSettings::default()
+    };
+    assert_eq!(max_attempts_from(&global), 7);
+}
+
+#[test]
+fn state_machine_a_ceiling_of_zero_is_treated_as_one() {
+    // Zero would mean "give up before trying", which is a configuration mistake
+    // rather than an instruction — and one that would silently stop every review
+    // in the repository.
+    use revlocal_core::GlobalSettings;
+    use revlocal_daemon::state_machine::max_attempts_from;
+
+    let global = GlobalSettings {
+        max_attempts: 0,
+        ..GlobalSettings::default()
+    };
+    assert_eq!(max_attempts_from(&global), 1);
+}

@@ -948,6 +948,7 @@ webhook_port = 0                 # 0 = disabled
 transcript_retention_days = 30
 keep_scratch_on_failure = true
 stale_run_minutes = 10
+max_attempts = 3                      # §9.1: recovery gives up after this many
 approval_ttl_hours = 72
 burst_threshold = 10
 
