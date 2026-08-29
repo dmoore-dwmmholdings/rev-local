@@ -206,3 +206,42 @@ fn cargo_registry_and_target_dir_are_cached() {
         "RL-102 requires the cargo registry and target dir to be cached"
     );
 }
+
+/// The desktop shell cannot be linted before its front end is built (RL-1206).
+///
+/// `tauri.conf.json` points `frontendDist` at `ui/dist`, and Tauri's build script
+/// fails at *compile* time when that directory is absent — it is a build input,
+/// not a runtime one. `ui/dist` is generated and gitignored, so it exists on a
+/// developer's machine and never on a fresh checkout.
+///
+/// That asymmetry is the whole reason this test exists: the clippy step passed
+/// locally and failed on its first CI run, because "works here" and "works on a
+/// clean tree" are different claims and only one of them was checked. Deleting the
+/// npm step would restore the failure silently.
+#[test]
+fn the_desktop_lint_builds_its_front_end_first() {
+    let wf = workflow().expect("ci.yml exists and is valid YAML");
+    let scripts = all_run_scripts(&wf);
+
+    let lint = scripts.find("--features desktop");
+    let Some(lint) = lint else {
+        // Not linting the desktop shell at all is a different problem, and one
+        // this test deliberately does not have an opinion about.
+        return;
+    };
+
+    let build = scripts
+        .find("npm --prefix crates/revlocal-tauri/ui run build")
+        .unwrap_or_else(|| {
+            panic!(
+                "CI lints the desktop shell but never builds `ui/dist`; \
+                 Tauri's build script will fail on a fresh checkout"
+            )
+        });
+
+    assert!(
+        build < lint,
+        "the front end must be built before the desktop shell is linted, \
+         not after — `frontendDist` is read at compile time"
+    );
+}

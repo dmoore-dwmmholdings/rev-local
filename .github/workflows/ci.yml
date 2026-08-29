@@ -120,6 +120,15 @@ jobs:
       # Linux linking Tauri pulls webkit2gtk and a dozen system packages — making
       # every leg install a browser engine to lint one crate is a poor trade. One
       # runner that compiles it is enough to keep the file honest.
+      # `tauri.conf.json` points `frontendDist` at `ui/dist`, and Tauri's build
+      # script fails at *compile* time if that directory is absent — it is a build
+      # input, not a runtime one. `ui/dist` is generated and gitignored, so it
+      # exists on a developer's machine and never on a fresh checkout. That is
+      # exactly how the step below passed locally and failed here on its first run.
+      - name: build the desktop front end
+        if: runner.os == 'macOS'
+        run: npm --prefix crates/revlocal-tauri/ui ci && npm --prefix crates/revlocal-tauri/ui run build
+
       - name: cargo clippy (desktop shell)
         if: runner.os == 'macOS'
         run: |
