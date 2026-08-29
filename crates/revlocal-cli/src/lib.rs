@@ -8,6 +8,7 @@
 //! is the contract: exit codes today, and the `--json` report shapes as they
 //! stabilise.
 
+pub mod control;
 pub mod exit;
 
 pub use exit::Exit;

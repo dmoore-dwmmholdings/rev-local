@@ -43,25 +43,55 @@ mod cli_surface {
             .ok_or("§14 has no command block")?;
 
         let mut groups: Vec<String> = Vec::new();
+        let mut push = |group: &str| {
+            let group = group.trim().to_owned();
+            if !group.is_empty() && !groups.contains(&group) {
+                groups.push(group);
+            }
+        };
+
         for line in block.lines() {
-            let line = line.trim();
+            let line = line.split('#').next().unwrap_or(line).trim();
             let Some(rest) = line.strip_prefix("revlocal ") else {
                 continue;
             };
-            let group = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_owned();
-            if !group.is_empty() && !groups.contains(&group) {
-                groups.push(group);
+
+            // §14 uses `|` for two different things, and telling them apart is the
+            // whole of this parser.
+            //
+            //   revlocal pause | resume | kill --hard      three top-level commands
+            //   revlocal repo list | show <name> | ...     one command, three subs
+            //
+            // The tell is how many words precede the first `|`. One word means the
+            // alternatives are siblings of it; more means they are alternatives
+            // *within* it. Getting this wrong is not hypothetical — the first
+            // version read only `pause` and then reported `resume` and `kill` as
+            // commands §14 does not list.
+            let mut segments = rest.split('|');
+            let Some(first) = segments.next() else {
+                continue;
+            };
+            let head: Vec<&str> = first.split_whitespace().collect();
+            let Some(group) = head.first() else {
+                continue;
+            };
+            push(group);
+
+            if head.len() == 1 {
+                for sibling in segments {
+                    if let Some(name) = sibling.split_whitespace().next() {
+                        push(name);
+                    }
+                }
             }
         }
         Ok(groups)
     }
 
     /// Command groups that exist today.
-    const IMPLEMENTED: &[&str] = &["db", "publish", "targets", "review", "repo"];
+    const IMPLEMENTED: &[&str] = &[
+        "db", "publish", "targets", "review", "repo", "pause", "resume", "kill",
+    ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
     ///
@@ -91,12 +121,6 @@ mod cli_surface {
             "webhook",
             "RL-1005 and RL-1006 built the listener and tunnels",
         ),
-        ("pause", "RL-804 built the kill switch; this engages it"),
-        (
-            "resume",
-            "RL-804 built the switch and its held-actions queue; this releases them",
-        ),
-        ("kill", "RL-804 — `--hard` is the one that reaps by pid"),
         ("budget", "RL-805 built the ledger; this reads it"),
     ];
 
@@ -258,6 +282,150 @@ mod cli_surface {
             Exit::Usage.code(),
             Exit::Error.code()
         );
+        Ok(())
+    }
+}
+
+// --- the operator's emergency controls (RL-1201, §12.1) --------------------
+
+mod control {
+    use revlocal_cli::control::{kill_hard, pause, render, resume, status};
+    use revlocal_store::Pool;
+
+    async fn store() -> Result<(Pool, tempfile::TempDir), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((pool, dir))
+    }
+
+    fn now() -> revlocal_core::Timestamp {
+        chrono::Utc::now()
+    }
+
+    #[tokio::test]
+    async fn a_fresh_install_is_not_paused() -> Result<(), String> {
+        // Absent means running. Defaulting the other way would make a first start
+        // look like somebody had stopped it.
+        let (pool, _dir) = store().await?;
+        let report = status(&pool).await.map_err(|e| e.to_string())?;
+
+        assert!(!report.paused);
+        assert!(!report.changed, "asking is not doing");
+        assert_eq!(report.detail, "running");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pausing_twice_reports_that_nothing_changed() -> Result<(), String> {
+        // `paused` and `changed` are separate so a script can tell "I stopped it"
+        // from "it was already stopped" — which matters when two operators reach
+        // for the switch at once and only one should be writing the incident note.
+        let (pool, _dir) = store().await?;
+
+        let first = pause(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert!(first.paused && first.changed);
+
+        let second = pause(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert!(second.paused, "still paused");
+        assert!(!second.changed, "the second pause changed nothing");
+        assert!(
+            second.detail.contains("already paused"),
+            "{}",
+            second.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn paused_state_survives_reopening_the_database() -> Result<(), String> {
+        // The case RL-804 built this for: somebody pauses because something is
+        // wrong, the daemon restarts while they investigate, and it must not
+        // quietly start reviewing again.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let path = dir.path().join("rl.db");
+
+        let pool = revlocal_store::open(&path)
+            .await
+            .map_err(|e| e.to_string())?;
+        pause(&pool, now()).await.map_err(|e| e.to_string())?;
+        pool.close().await;
+
+        let reopened = revlocal_store::open(&path)
+            .await
+            .map_err(|e| e.to_string())?;
+        let after = status(&reopened).await.map_err(|e| e.to_string())?;
+        assert!(after.paused, "a restart must not release the switch");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resuming_says_the_held_actions_will_be_sent() -> Result<(), String> {
+        // Somebody resuming needs to know what is about to happen. "Resumed" alone
+        // makes the publish actions a surprise.
+        let (pool, _dir) = store().await?;
+        pause(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        let report = resume(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert!(!report.paused);
+        assert!(report.changed);
+        assert!(report.detail.contains("will be sent"), "{}", report.detail);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resuming_when_not_paused_changes_nothing() -> Result<(), String> {
+        let (pool, _dir) = store().await?;
+        let report = resume(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert!(!report.paused);
+        assert!(!report.changed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn kill_hard_pauses_too_and_says_what_it_costs() -> Result<(), String> {
+        // A hard kill is a pause *plus* reaping. Reporting only the reaping would
+        // hide that reviewing has also stopped until somebody resumes.
+        let (pool, _dir) = store().await?;
+        let report = kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert!(report.paused, "a hard kill also pauses");
+        assert_eq!(report.action, "kill");
+        assert!(
+            report.detail.contains("is lost"),
+            "must say output is lost: {}",
+            report.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_json_shape_is_stable_and_complete() -> Result<(), String> {
+        // §14: --json is the acceptance-test API. Fields present even when zero,
+        // so the shape does not change the day they start counting.
+        let (pool, _dir) = store().await?;
+        let report = pause(&pool, now()).await.map_err(|e| e.to_string())?;
+        let json = render(&report, true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+        for field in [
+            "action",
+            "paused",
+            "changed",
+            "runs_cancelled",
+            "actions_held",
+            "processes_reaped",
+            "detail",
+        ] {
+            assert!(
+                !parsed[field].is_null(),
+                "--json is missing `{field}`: {json}"
+            );
+        }
+        assert_eq!(parsed["action"], "pause");
+        assert!(parsed["runs_cancelled"].is_array());
         Ok(())
     }
 }
