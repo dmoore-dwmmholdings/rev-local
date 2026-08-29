@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use revlocal_cli::{control, exit};
 
 mod publish;
 mod repo;
@@ -15,7 +16,13 @@ mod targets;
 
 /// Autonomous local code review for git, GitHub and Subversion.
 #[derive(Debug, Parser)]
-#[command(name = "revlocal", version, about, long_about = None)]
+#[command(
+    name = "revlocal",
+    version,
+    about,
+    long_about = None,
+    after_help = "Exit codes:\n  0  the command succeeded\n  1  the command failed; retrying may work\n  2  the command was wrong; fix it rather than retrying\n  3  a daily budget stopped this; retrying today will not help (SPEC §13.1)\n  4  this needs a human to approve it; retrying will not help (SPEC §12.4)\n\nEvery command accepts --json for machine-readable output."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -39,6 +46,42 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Stop all reviewing (SPEC §12.1). Reversible; nothing is lost.
+    Pause {
+        /// The database to record it in.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Resume reviewing, releasing any held publish actions.
+    Resume {
+        /// The database to record it in.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Stop everything and reap engine processes.
+    ///
+    /// Separate from `pause` because it is not the same act: a pause loses
+    /// nothing, while reaping takes a running engine's output with it.
+    Kill {
+        /// Required. There is no soft `kill` — that is `pause`.
+        #[arg(long)]
+        hard: bool,
+        /// The database to record it in.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Inspect configured repositories and their polling health.
@@ -193,15 +236,22 @@ fn main() -> ExitCode {
         Ok(runtime) => runtime,
         Err(e) => {
             eprintln!("revlocal: could not start the async runtime: {e}");
-            return ExitCode::FAILURE;
+            return exit::Exit::Error.into();
         }
     };
 
     match runtime.block_on(run(command)) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => exit::Exit::Ok.into(),
+        // §14's 2: the caller's mistake. Retrying will not help, and the command
+        // has already printed what to do instead.
+        Err(CliError::Usage) => exit::Exit::Usage.into(),
         Err(e) => {
             eprintln!("revlocal: {e}");
-            ExitCode::FAILURE
+            // Every other error is `Error` until a command has a reason to say
+            // otherwise. §14's 3 and 4 are claims about *why* something stopped,
+            // and a command that cannot yet be stopped that way must not pretend
+            // it can.
+            exit::Exit::Error.into()
         }
     }
 }
@@ -228,6 +278,17 @@ enum CliError {
     /// A repository could not be shown.
     #[error(transparent)]
     Repo(#[from] repo::RepoCommandError),
+
+    /// A control command failed.
+    #[error(transparent)]
+    Control(#[from] control::ControlError),
+
+    /// The invocation was wrong. Exits 2 rather than 1 (§14).
+    ///
+    /// Carries no message: the command that returns it has already said what was
+    /// wrong and what to do instead, in terms only it knows.
+    #[error("")]
+    Usage,
 }
 
 /// Dispatch one command.
@@ -264,6 +325,45 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Pause { database, json } => {
+            let pool = revlocal_store::open(&database).await?;
+            let report = control::pause(&pool, chrono::Utc::now()).await?;
+            pool.close().await;
+            println!("{}", control::render(&report, json)?);
+            Ok(())
+        }
+
+        Command::Resume { database, json } => {
+            let pool = revlocal_store::open(&database).await?;
+            let report = control::resume(&pool, chrono::Utc::now()).await?;
+            pool.close().await;
+            println!("{}", control::render(&report, json)?);
+            Ok(())
+        }
+
+        Command::Kill {
+            hard,
+            database,
+            json,
+        } => {
+            if !hard {
+                // §14 spells it `kill --hard`. A bare `kill` is somebody reaching
+                // for the reversible thing, and it should point at it rather than
+                // guessing which they meant.
+                eprintln!(
+                    "revlocal: `kill` requires --hard, because it reaps engine \
+                     processes and loses their output\n  try: revlocal pause, which \
+                     stops reviewing and loses nothing"
+                );
+                return Err(CliError::Usage);
+            }
+            let pool = revlocal_store::open(&database).await?;
+            let report = control::kill_hard(&pool, chrono::Utc::now()).await?;
+            pool.close().await;
+            println!("{}", control::render(&report, json)?);
+            Ok(())
+        }
+
         Command::Repo { command } => match command {
             RepoCommand::Show {
                 name,

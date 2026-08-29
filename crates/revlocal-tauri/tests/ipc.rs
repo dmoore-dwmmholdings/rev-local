@@ -322,3 +322,95 @@ fn tray_labels_say_what_they_do() {
     );
     assert!(TrayItem::Quit.label().contains("Quit"));
 }
+
+// --- the front end's types mirror these (RL-1101) --------------------------
+
+#[test]
+fn every_ui_event_variant_is_present_in_the_typescript_union() -> Result<(), String> {
+    // The front end declares `UiEvent` as a discriminated union in `ui/src/ipc.ts`.
+    // Nothing in either language checks the other, so a variant added here and
+    // forgotten there does not fail a build — it produces a row the UI renders as
+    // `undefined`, at exactly the moment somebody is trying to understand why a
+    // run stopped.
+    //
+    // Cheap to check, and this is the check.
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/src/ipc.ts"),
+    )
+    .map_err(|e| format!("reading ui/src/ipc.ts: {e}"))?;
+
+    // The serde tag for each variant, taken from a real serialisation rather than
+    // from a list written by hand — a hand-written list drifts the same way the
+    // TypeScript does.
+    let variants = [
+        UiEvent::StageChanged {
+            run_id: 1,
+            from: "queued".to_owned(),
+            to: "reviewing".to_owned(),
+        },
+        UiEvent::Interrupted {
+            run_id: 1,
+            stuck_in: "reviewing".to_owned(),
+        },
+        UiEvent::ReEnqueued {
+            previous_run_id: 1,
+            run_id: 2,
+            attempt: 2,
+        },
+        UiEvent::GivenUp {
+            run_id: 1,
+            reason: "ceiling".to_owned(),
+        },
+    ];
+
+    for variant in variants {
+        let json = serde_json::to_value(&variant).map_err(|e| e.to_string())?;
+        let tag = json["kind"]
+            .as_str()
+            .ok_or("every UiEvent must carry a kind")?;
+        assert!(
+            source.contains(&format!("kind: '{tag}'")),
+            "ui/src/ipc.ts has no case for `{tag}`; the UI would render it as \
+             undefined. Add it to the UiEvent union and to `describe`."
+        );
+
+        // Every field too. A renamed field is the quieter version of the same bug.
+        if let Some(fields) = json.as_object() {
+            for name in fields.keys().filter(|name| *name != "kind") {
+                assert!(
+                    source.contains(&format!("{name}:")),
+                    "ui/src/ipc.ts never mentions `{name}`, a field of `{tag}`"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn the_front_end_does_not_poll() -> Result<(), String> {
+    // §15: "live updates come from Tauri events, not polling the DB." That is a
+    // rule about the front end, so it is checked in the front end's source — the
+    // Rust side cannot enforce it, and a reviewer reading a React component will
+    // not notice a `setInterval` added to fix a refresh bug six months from now.
+    let app = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/src/App.tsx"),
+    )
+    .map_err(|e| format!("reading ui/src/App.tsx: {e}"))?;
+
+    for polling in ["setInterval(", "setTimeout(", "fetch("] {
+        let code: String = app
+            .lines()
+            .filter(|line| {
+                !line.trim_start().starts_with("//") && !line.trim_start().starts_with('*')
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !code.contains(polling),
+            "§15: the UI updates from events, never by polling — found `{polling}` \
+             in App.tsx"
+        );
+    }
+    Ok(())
+}

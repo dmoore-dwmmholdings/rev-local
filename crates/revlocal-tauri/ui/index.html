@@ -1,95 +1,12 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>rev-local</title>
-<style>
-  :root {
-    --bg: #12141a; --panel: #191c24; --line: #262b36;
-    --text: #e6e9ef; --dim: #8b93a3; --accent: #6ea8fe;
-    --ok: #4ec9a5; --warn: #e0b341; --bad: #e06c75;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
-  }
-  h1 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: .02em; }
-  .spacer { flex: 1; }
-  button {
-    font: inherit; color: var(--text); background: #2a1f22;
-    border: 1px solid #5b2a30; border-radius: 4px; padding: 4px 10px; cursor: pointer;
-  }
-  button:hover { background: #3a272b; }
-  main { padding: 16px; }
-  .note { color: var(--dim); margin: 0 0 14px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  th { color: var(--dim); font-weight: 500; font-size: 11px; text-transform: uppercase; }
-  td.kind { color: var(--accent); }
-  .empty { color: var(--dim); padding: 24px 10px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--ok); }
-</style>
-</head>
-<body>
-<header>
-  <span class="dot" id="dot"></span>
-  <h1>rev-local</h1>
-  <span class="spacer"></span>
-  <!-- SPEC §15: the kill switch is reachable from every screen. -->
-  <button id="kill" title="Stop everything now (SPEC §12.1)">Kill switch</button>
-</header>
-<main>
-  <p class="note">
-    Live activity. Events arrive over <code>revlocal://run-event</code> — this page
-    never polls the database (SPEC §15).
-  </p>
-  <table>
-    <thead>
-      <tr><th>Run</th><th>Event</th><th>Detail</th><th>At</th></tr>
-    </thead>
-    <tbody id="rows">
-      <tr><td colspan="4" class="empty">Waiting for the daemon…</td></tr>
-    </tbody>
-  </table>
-</main>
-<script>
-  const rows = document.getElementById('rows');
-  let empty = true;
-
-  function detailOf(e) {
-    switch (e.kind) {
-      case 'stage_changed': return `${e.from} → ${e.to}`;
-      case 'interrupted':   return `stuck in ${e.stuck_in}`;
-      case 're_enqueued':   return `attempt ${e.attempt}, was run ${e.previous_run_id}`;
-      case 'given_up':      return e.reason;
-      default:              return '';
-    }
-  }
-
-  function render(e) {
-    if (empty) { rows.innerHTML = ''; empty = false; }
-    const tr = document.createElement('tr');
-    const at = new Date().toLocaleTimeString();
-    tr.innerHTML =
-      `<td>${e.run_id}</td><td class="kind">${e.kind}</td>` +
-      `<td>${detailOf(e)}</td><td>${at}</td>`;
-    rows.prepend(tr);
-  }
-
-  // Tauri v2 exposes the event API on window.__TAURI__ when withGlobalTauri is on;
-  // fall back gracefully so this page is still openable in a browser.
-  const tauri = window.__TAURI__;
-  if (tauri && tauri.event) {
-    tauri.event.listen('revlocal://run-event', (msg) => render(msg.payload));
-  }
-  document.getElementById('kill').addEventListener('click', async () => {
-    if (tauri && tauri.core) { await tauri.core.invoke('kill_switch'); }
-  });
-</script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rev-local</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
