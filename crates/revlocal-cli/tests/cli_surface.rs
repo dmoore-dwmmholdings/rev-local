@@ -105,22 +105,17 @@ mod cli_surface {
         "runs",
         "findings",
         "watch",
+        "backfill",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
     ///
     /// An entry is a claim, not a placeholder: naming the blocker is what keeps
     /// this from becoming a list nobody revisits.
-    const NOT_YET: &[(&str, &str)] = &[
-        (
-            "backfill",
-            "RL-1007 built the scheduler; this is its front end",
-        ),
-        (
-            "webhook",
-            "RL-1005 and RL-1006 built the listener and tunnels",
-        ),
-    ];
+    const NOT_YET: &[(&str, &str)] = &[(
+        "webhook",
+        "RL-1005 and RL-1006 built the listener and tunnels",
+    )];
 
     fn binary() -> PathBuf {
         // The test binary lives beside the CLI binary cargo just built.
@@ -1284,6 +1279,95 @@ mod watch_loop {
         assert!(parsed["paused"].is_boolean());
         // Present means "something to say", the same rule the other reports follow.
         assert!(parsed.get("idle").is_none(), "{json}");
+        Ok(())
+    }
+}
+
+// --- backfill (RL-1201, §7.4) ----------------------------------------------
+
+mod backfill_command {
+    use revlocal_cli::backfill::{render, BackfillReport, ENUMERATION_CAP};
+
+    fn report(items: usize, excluded: usize, truncated: bool) -> BackfillReport {
+        BackfillReport {
+            repo: "acme".to_owned(),
+            scope: "backfill:commits:main".to_owned(),
+            resumed_from: None,
+            items: (0..items).map(|i| format!("sha{i} commit {i}")).collect(),
+            excluded_by_limit: excluded,
+            executed: false,
+            truncated_enumeration: truncated,
+        }
+    }
+
+    #[test]
+    fn what_the_limit_excluded_is_stated() {
+        // §18, and the bug this test exists for. `--limit 2` against four
+        // candidates reported "2 change(s) to review" and nothing else, because
+        // the limit was passed to enumeration *and* to planning — so planning
+        // never saw the two it was excluding. That is the "showing 50 of 3,000"
+        // failure, produced by the code written to report it.
+        let human = report(2, 2, false).render_human();
+
+        assert!(human.contains("2 change(s) to review"), "{human}");
+        assert!(
+            human.contains("2 more match --since and were excluded by --limit"),
+            "{human}"
+        );
+    }
+
+    #[test]
+    fn a_capped_enumeration_says_its_own_count_is_a_lower_bound() {
+        // §18 one level up. If enumeration itself stopped early, the excluded
+        // count is not a total either, and printing it as one would be the same
+        // mistake with an extra step.
+        let capped = report(20, 9_980, true);
+        assert!(!capped.counts_are_complete());
+
+        let human = capped.render_human();
+        assert!(human.contains("at least"), "{human}");
+        assert!(human.contains(&ENUMERATION_CAP.to_string()), "{human}");
+
+        // And an uncapped one does not hedge.
+        assert!(!report(2, 2, false).render_human().contains("at least"));
+    }
+
+    #[test]
+    fn a_plan_says_it_enqueued_nothing_rather_than_implying_it_did() {
+        // Same rule as `watch`: a command that lists work and silently does none
+        // of it is indistinguishable from one that did it all.
+        let human = report(3, 0, false).render_human();
+
+        assert!(human.contains("Nothing was enqueued"), "{human}");
+        assert!(
+            human.contains("revlocal review"),
+            "must name what works: {human}"
+        );
+    }
+
+    #[test]
+    fn resuming_names_where_it_resumed_from() {
+        // §7.4's separate `backfill:` cursor exists so an interrupted run picks up
+        // where it stopped. Saying which change that was is what lets somebody
+        // check the claim.
+        let mut resumed = report(2, 0, false);
+        resumed.resumed_from = Some("deadbeef".to_owned());
+
+        let human = resumed.render_human();
+        assert!(
+            human.contains("resuming backfill:commits:main after deadbeef"),
+            "{human}"
+        );
+    }
+
+    #[test]
+    fn the_json_omits_an_absent_resume_rather_than_nulling_it() -> Result<(), String> {
+        let json = render(&report(1, 0, false), true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+        assert!(parsed.get("resumed_from").is_none(), "{json}");
+        assert_eq!(parsed["executed"], false);
+        assert_eq!(parsed["truncated_enumeration"], false);
         Ok(())
     }
 }

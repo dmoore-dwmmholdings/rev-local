@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, doctor, exit, hooks, inspect, repo, watch};
+use revlocal_cli::{backfill, control, doctor, exit, hooks, inspect, repo, watch};
 
 mod publish;
 mod review;
@@ -45,6 +45,31 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Review history, behind live work (SPEC §7.4).
+    Backfill {
+        /// Which repository, by name.
+        #[arg(long, value_name = "NAME")]
+        repo: String,
+        /// Where to start: a ref this repository knows.
+        #[arg(long, value_name = "REF")]
+        since: String,
+        /// How many changes to take.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+        /// Enumerate without enqueueing anything.
+        ///
+        /// The default today, because execution needs the run registry. Kept as a
+        /// flag so the invocation does not change when it starts doing more.
+        #[arg(long)]
+        dry_run: bool,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Run the daemon in the foreground (SPEC §4.2, §7).
@@ -579,6 +604,10 @@ enum CliError {
     #[error(transparent)]
     Watch(#[from] watch::WatchError),
 
+    /// A backfill could not be planned.
+    #[error(transparent)]
+    Backfill(#[from] backfill::BackfillError),
+
     /// A report could not be serialised.
     #[error("could not render the report: {0}")]
     Json(#[from] serde_json::Error),
@@ -629,6 +658,23 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Backfill {
+            repo,
+            since,
+            limit,
+            dry_run,
+            database,
+            json,
+        } => {
+            let _ = dry_run;
+            let pool = revlocal_store::open(&database).await?;
+            let report =
+                backfill::plan_backfill(&pool, &repo, &since, limit, chrono::Utc::now()).await?;
+            pool.close().await;
+            println!("{}", backfill::render(&report, json)?);
+            Ok(())
+        }
+
         Command::Watch {
             once,
             interval,

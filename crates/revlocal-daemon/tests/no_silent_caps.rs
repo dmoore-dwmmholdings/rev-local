@@ -27,6 +27,15 @@ use std::path::{Path, PathBuf};
 /// legitimate entry; a *blank* one is not, which is why the test rejects those.
 const ACCOUNTED_FOR: &[(&str, &str)] = &[
     (
+        "crates/revlocal-cli/src/backfill.rs",
+        "ENUMERATION_CAP bounds how much history `backfill` reads before --limit \
+         is applied. This one genuinely can hide changes, so the report carries \
+         `truncated_enumeration`: when the cap is hit, the excluded count is \
+         printed as a lower bound (\"at least — enumeration stopped at 10000\") \
+         rather than as a total. §18 one level up, since the field being hedged is \
+         itself the one that exists to report a cap.",
+    ),
+    (
         "crates/revlocal-core/src/finding.rs",
         "TITLE_MAX_CHARS is enforced at the schema boundary (result.v1.json, \
          maxLength 80), not by truncating here — an over-long title is a rejected \
