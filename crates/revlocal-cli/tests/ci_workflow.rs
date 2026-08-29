@@ -139,10 +139,28 @@ fn failure_uploads_logs_and_gui_captures() {
         })
         .expect("CI must upload artifacts so a red leg is diagnosable");
 
-    assert_eq!(
-        upload["if"].as_str(),
-        Some("failure()"),
-        "artifacts are uploaded on failure, not on every run"
+    // The condition is asserted as a property rather than a literal, because the
+    // literal changed once for a good reason and an exact match turns that into a
+    // test failure instead of a review.
+    let condition = upload["if"].as_str().unwrap_or_default();
+
+    assert!(
+        !condition.contains("always()"),
+        "artifacts are uploaded on a red leg, not on every run; got {condition:?}"
+    );
+    assert!(
+        condition.contains("failure()"),
+        "a failing leg must upload its logs; got {condition:?}"
+    );
+    // `cancelled()` is not optional. `timeout-minutes` kills a job as CANCELLED,
+    // not failed, so `if: failure()` alone skips the upload on exactly the run
+    // that most needs it. Observed on run 33160541055: the Windows leg hit the
+    // 45-minute bound, this step was skipped, and the hang produced no artifacts
+    // at all. A bound without an upload makes a hang cheaper, not diagnosable.
+    assert!(
+        condition.contains("cancelled()"),
+        "a timed-out leg reports cancelled, not failed, and is the one that most \
+         needs its logs; got {condition:?}"
     );
     let paths = upload["with"]["path"].as_str().unwrap_or_default();
     assert!(
@@ -152,6 +170,26 @@ fn failure_uploads_logs_and_gui_captures() {
     assert!(
         paths.contains("artifacts/gui/*.png"),
         "failure upload must include Framewatch captures (§16.4); got {paths:?}"
+    );
+}
+
+#[test]
+fn the_test_job_is_time_bounded() {
+    // Without a bound a hang runs to GitHub's six-hour default, during which the
+    // job is neither passing nor failing and nothing is uploaded. A hung job
+    // produces strictly less signal than a failing one and costs far more to get
+    // it. The Windows leg has hung twice; this is what makes the second kind of
+    // failure visible.
+    let wf = workflow().expect("ci.yml exists and is valid YAML");
+
+    let timeout = wf["jobs"]["test"]["timeout-minutes"]
+        .as_u64()
+        .expect("the test job must set timeout-minutes so a hang cannot run for six hours");
+
+    assert!(
+        (20..=90).contains(&timeout),
+        "the bound should be a few times the slowest green run, not so tight that a \
+         slow runner fails and not so loose that a hang is free; got {timeout}"
     );
 }
 
