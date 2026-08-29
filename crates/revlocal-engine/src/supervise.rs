@@ -440,8 +440,20 @@ async fn finish(
     // nothing; a killed one may have left a grandchild holding them.
     let grace = killed.map(|_| DRAIN_GRACE);
 
-    let stdout = drain(stdout, grace).await;
-    let stderr = drain(stderr, grace).await;
+    // Concurrently, not one after the other. The two drains wait on independent
+    // pipes, and awaiting them in sequence makes the worst case the *sum* of their
+    // grace periods rather than the longer of the two.
+    //
+    // That is not theoretical. A grandchild that survived the kill holds both
+    // pipes, so both drains wait the full grace — 2s + 2s — and §12.1's
+    // three-second cancellation budget is blown by a second. The Windows CI leg
+    // failed on exactly this, at 4.0237226s, because Windows has no process-group
+    // kill and the grandchild really does survive (see `terminate`). Unix passed
+    // only because `killpg` reaps the grandchild and both pipes close at once.
+    //
+    // Sequential awaits are the easy thing to write and are wrong whenever the
+    // things being awaited are independent and bounded by a timeout.
+    let (stdout, stderr) = tokio::join!(drain(stdout, grace), drain(stderr, grace));
 
     Ok(Supervised {
         stdout,
@@ -451,4 +463,75 @@ async fn finish(
         pid,
         elapsed: started.elapsed(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reader that never yields and never ends — a grandchild holding the pipe.
+    struct NeverEnds;
+
+    impl tokio::io::AsyncRead for NeverEnds {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn a_killed_process_drains_both_pipes_within_one_grace_period() {
+        // The regression this exists for: `finish` awaited the two drains in
+        // sequence, so a process whose pipes are both held open cost
+        // DRAIN_GRACE *twice*. §12.1 gives cancellation three seconds and the
+        // grace is two, so 2 + 2 blew the budget by a second.
+        //
+        // Only the Windows CI leg ever caught it, because Windows has no
+        // process-group kill and the grandchild genuinely survives; on Unix
+        // `killpg` reaps it and both pipes close at once, so the sum was never
+        // paid. A platform-specific test failure for a platform-independent bug.
+        //
+        // `start_paused` means this asserts the awaited duration rather than
+        // wall-clock, so it is exact and takes no real time.
+        let started = tokio::time::Instant::now();
+
+        let result = finish(
+            Some(read_into_shared(NeverEnds)),
+            Some(read_into_shared(NeverEnds)),
+            None,
+            Some(KillReason::Cancelled),
+            Some(1),
+            Instant::now(),
+        )
+        .await;
+
+        let waited = started.elapsed();
+        assert!(result.is_ok());
+        assert!(
+            waited < DRAIN_GRACE * 2,
+            "the drains ran in sequence: waited {waited:?} for a {DRAIN_GRACE:?} grace"
+        );
+        assert!(
+            waited <= DRAIN_GRACE + Duration::from_millis(50),
+            "draining two held pipes must cost one grace period, not two; \
+             waited {waited:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn a_process_that_exited_on_its_own_is_not_bounded_at_all() {
+        // The grace applies only to a killed process. One that exited has closed
+        // its pipes, so the drain finishes immediately and an unbounded await
+        // costs nothing — bounding it would risk truncating output that was
+        // already there.
+        let started = tokio::time::Instant::now();
+
+        let result = finish(None, None, Some(0), None, Some(1), Instant::now()).await;
+
+        assert!(result.is_ok());
+        assert!(started.elapsed() < Duration::from_millis(50));
+    }
 }

@@ -28,7 +28,7 @@ nix = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 jsonschema = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }

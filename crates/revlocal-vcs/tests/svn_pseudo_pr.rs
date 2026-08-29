@@ -31,6 +31,19 @@ const DEFAULT_MERGE_DETECT: &str = r"(?i)\b(merge|reintegrat\w+)\b.*\b(branches?
 fn merge_detect() -> Result<Regex, String> {
     Regex::new(DEFAULT_MERGE_DETECT).map_err(|e| format!("SPEC §13.2's default pattern: {e}"))
 }
+/// Say out loud that a test verified nothing on this machine.
+///
+/// A green "N passed" on a box without Subversion reads as coverage it does not
+/// have. `svn_fixtures.rs` has said this since RL-202 and these files were written
+/// without it; REVL-106's third criterion — no test skipped without an explicit
+/// documented reason — is what caught the omission.
+///
+/// Visible with `--nocapture`. CI installs Subversion on all three runners, so
+/// this path is not taken there; it is the developer machine, and the case where
+/// the install step silently fails, that this exists for.
+fn note_skipped(test: &str) {
+    println!("SKIPPED (svn not installed, nothing verified): {test}");
+}
 
 fn svn_is_installed() -> bool {
     std::process::Command::new("svn")
@@ -386,6 +399,7 @@ async fn fixture_revision(
 #[test]
 fn the_reintegration_revision_produces_both_kinds_of_change() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("the_reintegration_revision_produces_both_kinds_of_change");
         return Ok(());
     }
     let Some(url) = fixture_repo_url()? else {
@@ -426,6 +440,7 @@ fn the_reintegration_revision_produces_both_kinds_of_change() -> Result<(), Stri
 #[test]
 fn the_mergeinfo_only_revision_is_detected_without_the_log_message() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("the_mergeinfo_only_revision_is_detected_without_the_log_message");
         return Ok(());
     }
     let Some(url) = fixture_repo_url()? else {
@@ -465,6 +480,7 @@ fn the_mergeinfo_only_revision_is_detected_without_the_log_message() -> Result<(
 #[test]
 fn an_ordinary_revision_is_not_a_reintegration() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("an_ordinary_revision_is_not_a_reintegration");
         return Ok(());
     }
     let Some(url) = fixture_repo_url()? else {
@@ -498,6 +514,7 @@ fn an_ordinary_revision_is_not_a_reintegration() -> Result<(), String> {
 #[test]
 fn the_pseudo_pr_diff_is_the_branch_not_the_merge_revision() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("the_pseudo_pr_diff_is_the_branch_not_the_merge_revision");
         return Ok(());
     }
     let Some(url) = fixture_repo_url()? else {
@@ -653,6 +670,7 @@ fn branch_with_intervening_merge(dir: &Path) -> Result<(String, PathBuf), String
 #[test]
 fn the_fork_point_survives_an_intervening_trunk_merge() -> Result<(), String> {
     if !svn_is_installed() {
+        note_skipped("the_fork_point_survives_an_intervening_trunk_merge");
         return Ok(());
     }
 
