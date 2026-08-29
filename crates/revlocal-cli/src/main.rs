@@ -277,6 +277,9 @@ enum PublishSubcommand {
         /// Database file.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+        /// Print the machine-readable report instead of the human one.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -316,6 +319,9 @@ enum TargetsCommand {
         /// Where overrides are kept. Defaults to beside the config.
         #[arg(long, value_name = "PATH")]
         overrides: Option<PathBuf>,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Dry-run render every mapped capability. Calls nothing.
@@ -328,6 +334,9 @@ enum TargetsCommand {
         /// Where overrides are kept. Defaults to beside the config.
         #[arg(long, value_name = "PATH")]
         overrides: Option<PathBuf>,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -876,7 +885,8 @@ async fn run(command: Command) -> Result<(), CliError> {
                     run,
                     target,
                     database,
-                } => publish::replay(&database, run, &target)
+                    json,
+                } => publish::replay(&database, run, &target, json)
                     .await
                     .map_err(Box::new)?,
             }
@@ -1303,6 +1313,7 @@ async fn run(command: Command) -> Result<(), CliError> {
                     args,
                     config,
                     overrides,
+                    json,
                 } => {
                     targets::map(
                         &config,
@@ -1311,6 +1322,7 @@ async fn run(command: Command) -> Result<(), CliError> {
                         &capability,
                         &tool,
                         &args,
+                        json,
                     )
                     .await?;
                 }
@@ -1318,7 +1330,8 @@ async fn run(command: Command) -> Result<(), CliError> {
                     target,
                     config,
                     overrides,
-                } => targets::test(&config, overrides.as_deref(), &target).await?,
+                    json,
+                } => targets::test(&config, overrides.as_deref(), &target, json).await?,
             }
             Ok(())
         }

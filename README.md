@@ -10,24 +10,33 @@ review engine is a process you control.
 
 ## Status
 
-**Early development.** The library and its test suite are substantial; the
-user-facing surface is not finished yet.
+**Early development.** The library and its test suite are substantial; reviews are
+not yet run automatically.
 
 Working today:
 
+- **The full command line.** Every command in the specification exists except
+  `db export`, and each is exercised by a test that reads the specification rather
+  than a transcription of it.
 - git discovery, materialization and skip rules — a review never mutates the
   repository under review
 - the review pipeline end to end: depth selection, diff truncation, finding
   normalization, fingerprinting and dedupe
 - engine layer for `claude` and `codex`, with process supervision and an
   environment denylist that keeps credentials away from the review process
+- Subversion, including branch-merge detection
 - SQLite store, audit log and budget ledger
-- MCP client over stdio and streamable HTTP
+- publish queue with idempotent delivery, approval gating and per-target retry
+- triggers: polling, git hooks, and a signature-checked webhook listener
+- a desktop shell that receives live run events without polling
 
-Not wired up yet: live engine selection from the CLI (`revlocal review` runs
-against a mock engine), publishing, triggers, Subversion, and the desktop UI.
+**Not wired up yet:** `revlocal review` runs against a mock engine rather than a
+real one, and `revlocal watch` discovers changes and records them but does not run
+reviews. Every command that is not doing the whole job says so when you run it,
+rather than looking like it worked.
 
-See [USAGE.md](USAGE.md) for what you can run right now.
+See [USAGE.md](USAGE.md) for what you can run right now, and
+[docs/OPERATIONS.md](docs/OPERATIONS.md) for what to do when something goes wrong.
 
 ## Design
 

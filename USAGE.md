@@ -8,6 +8,75 @@ cargo build --workspace
 ./target/debug/revlocal --help
 ```
 
+## Getting to a first review
+
+```
+revlocal doctor                                   # check prerequisites
+revlocal db migrate --database <PATH>             # create the database
+revlocal repo add <PATH> --kind git --name acme --database <PATH>
+revlocal review --repo <PATH> --rev HEAD
+```
+
+`doctor` is the first thing to run on a fresh install and the thing to run again
+when reviews have quietly stopped. It exits non-zero when something is blocking a
+review, so it works in a script.
+
+A repository is added in `dry_run` autonomy, and `repo add` says so:
+
+```
+$ revlocal repo add ~/code/acme --kind git --name acme --database ~/rl.db
+added acme (git), engine claude, autonomy dry_run — nothing is published until you widen it
+```
+
+## The command surface
+
+| group | what it does |
+|---|---|
+| `revlocal doctor` | prerequisites, engines, publish targets |
+| `revlocal repo` | add, list, show, remove and configure repositories |
+| `revlocal review` | review one change now |
+| `revlocal watch` | run the daemon in the foreground |
+| `revlocal backfill` | review history, behind live work |
+| `revlocal runs` | list, show and retry runs |
+| `revlocal findings` | list findings, suppress one by fingerprint |
+| `revlocal approvals` | see what is waiting, approve or reject it |
+| `revlocal publish` | per-target status, retry and replay |
+| `revlocal targets` | publish targets and capability mapping |
+| `revlocal budget` | spend against the daily ceiling, and reset it |
+| `revlocal hooks` | install or remove the git hooks that trigger reviews |
+| `revlocal webhook` | the GitHub webhook listener and its tunnel |
+| `revlocal pause` · `resume` · `kill` | stop and restart everything |
+| `revlocal db` | migrate and vacuum the local database |
+
+Every command takes `--json`. Under `--json`, exactly one document reaches stdout
+and everything informational goes to stderr, so the output is safe to pipe.
+
+[docs/OPERATIONS.md](docs/OPERATIONS.md) covers what to do when a target is down,
+a budget is exhausted, a run is stuck, a branch was force-pushed, or a GitHub check
+is stuck in progress.
+
+## Watching a repository
+
+```
+revlocal watch --once --database <PATH>
+```
+
+```
+$ revlocal watch --once --database ~/rl.db
+  acme — 2 discovered, 1 recorded, 1 skipped
+      skipped: dd1c97f — all 1 path(s) match ignore_globs
+
+Discovery only: reviews are not executed yet. `revlocal review --repo <path> --rev <ref>` reviews one change today.
+```
+
+Discovery is persistent: every change is recorded with its skip reason, and the
+cursor advances past skipped changes, so a second pass over a quiet repository
+finds nothing rather than rediscovering the same commits forever.
+
+**It does not run reviews yet, and says so on every tick.** A `watch` that
+silently reviewed nothing would be indistinguishable from one whose repositories
+are quiet.
+
 ## Reviewing a change
 
 ```
