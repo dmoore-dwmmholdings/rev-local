@@ -11,5 +11,6 @@
 pub mod control;
 pub mod doctor;
 pub mod exit;
+pub mod hooks;
 
 pub use exit::Exit;

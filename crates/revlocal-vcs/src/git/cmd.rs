@@ -566,6 +566,24 @@ mod tests {
 
     // --- timeouts and process groups ----------------------------------------
 
+    // Unix only, for two reasons that both land on the same place.
+    //
+    // The assertions are about a *process group* — that the timeout reaches the
+    // backgrounded grandchild and not merely the direct child. Windows has no
+    // process groups, `command.process_group(0)` is itself `#[cfg(unix)]` a few
+    // hundred lines above, and §8.5's Job Object that would provide the equivalent
+    // is unimplemented (REVL-106).
+    //
+    // It also cannot run there: the test drives a `.sh` script through `bash`, and
+    // `bash` on a Windows PATH is the WSL launcher — which is why
+    // `revlocal_vcs::bash_program()` exists. CI reported exactly that, a bare
+    // `code: 1` with empty stderr, rather than the timeout the test expects.
+    //
+    // Gating rather than porting: rewriting it to use `bash_program()` would make
+    // it *run* on Windows and then assert a guarantee the platform does not offer,
+    // which is a test that fails for the wrong reason. The guarantee comes back
+    // with the Job Object.
+    #[cfg(unix)]
     #[tokio::test]
     async fn git_cmd_a_timeout_kills_the_child_and_its_whole_process_group() {
         // The criterion, and the part that is easy to fake. `git` cannot be made to
