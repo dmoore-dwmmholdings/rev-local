@@ -484,6 +484,77 @@ impl<'a> RunStore<'a> {
             .collect())
     }
 
+    /// Recent runs, newest first, optionally narrowed (§14's `runs list`).
+    ///
+    /// Joined through `change` because a run does not carry its repository — the
+    /// change does. Filtering in SQL rather than in Rust: `runs list` on a
+    /// long-lived install would otherwise read every run ever recorded in order to
+    /// show twenty.
+    ///
+    /// `limit` is applied by the database and reported by the caller. §18: a list
+    /// that silently shows the first twenty of nine hundred reads as nine hundred
+    /// being twenty.
+    pub async fn list_recent(
+        &self,
+        repo_id: Option<RepoId>,
+        status: Option<RunStatus>,
+        limit: u32,
+    ) -> Result<Vec<Run>> {
+        let repo = repo_id.map(RepoId::get);
+        let status = status.map(|s| s.as_str().to_owned());
+        let limit = i64::from(limit);
+
+        // Both filters are optional and SQLite has no dynamic query builder here,
+        // so each is expressed as "unset, or matching" — which keeps this one
+        // prepared statement rather than four.
+        let rows = sqlx::query!(
+            "SELECT run.id AS id
+               FROM run
+               JOIN change ON change.id = run.change_id
+              WHERE (?1 IS NULL OR change.repo_id = ?1)
+                AND (?2 IS NULL OR run.status = ?2)
+              ORDER BY run.id DESC
+              LIMIT ?3",
+            repo,
+            status,
+            limit
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut runs = Vec::with_capacity(rows.len());
+        for row in rows {
+            runs.push(self.get(RunId::new(row.id)).await?);
+        }
+        Ok(runs)
+    }
+
+    /// How many runs match, ignoring `limit`.
+    ///
+    /// So the caller can say "20 of 900" rather than "20".
+    pub async fn count_matching(
+        &self,
+        repo_id: Option<RepoId>,
+        status: Option<RunStatus>,
+    ) -> Result<u32> {
+        let repo = repo_id.map(RepoId::get);
+        let status = status.map(|s| s.as_str().to_owned());
+
+        let row = sqlx::query!(
+            "SELECT COUNT(*) AS total
+               FROM run
+               JOIN change ON change.id = run.change_id
+              WHERE (?1 IS NULL OR change.repo_id = ?1)
+                AND (?2 IS NULL OR run.status = ?2)",
+            repo,
+            status
+        )
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(u32::try_from(row.total).unwrap_or(u32::MAX))
+    }
+
     /// Every run belonging to one change, in creation order.
     pub async fn list_for_change(&self, change_id: ChangeId) -> Result<Vec<Run>> {
         let raw = change_id.get();

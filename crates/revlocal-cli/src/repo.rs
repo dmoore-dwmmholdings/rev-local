@@ -15,7 +15,7 @@ use revlocal_core::{Repo, RepoConfig};
 use revlocal_daemon::poll::{HealthReport, PollSchedule};
 use revlocal_store::{Pool, RepoStore};
 
-/// Why `repo show` could not report.
+/// Why a `repo` command could not complete.
 #[derive(Debug, thiserror::Error)]
 pub enum RepoCommandError {
     /// The database could not be read.
@@ -24,6 +24,41 @@ pub enum RepoCommandError {
         /// Why.
         #[source]
         source: Box<revlocal_store::StoreError>,
+    },
+
+    /// A name that is already taken.
+    ///
+    /// §5 makes `repo.name` unique, and the name is what hooks send and what
+    /// findings are fingerprinted against — so silently accepting a second one
+    /// would merge two repositories' history.
+    #[error(
+        "a repository named {name} is already configured\n  try: pick another \
+         --name, or `revlocal repo remove {name}` first"
+    )]
+    NameTaken {
+        /// The name asked for.
+        name: String,
+    },
+
+    /// A value that is not one of the ones that exist.
+    #[error("{what} `{given}` is not one of: {valid}\n  try: one of those")]
+    NotAValue {
+        /// Which field.
+        what: String,
+        /// What was given.
+        given: String,
+        /// What is allowed.
+        valid: String,
+    },
+
+    /// A `key=value` that is neither.
+    #[error(
+        "`{given}` is not a `key=value` pair\n  try: revlocal repo set <name> \
+         engine=claude autonomy=dry_run"
+    )]
+    NotAPair {
+        /// What was given.
+        given: String,
     },
 
     /// No repository by that name is configured.
@@ -115,4 +150,269 @@ fn render_human(reports: &[HealthReport]) -> String {
         }
     }
     out
+}
+
+// --- add | list | remove | set (RL-1201, SPEC §14) ------------------------
+
+use revlocal_core::{AutonomyMode, EngineKind, RepoKind};
+
+/// Parse one of a string enum's values, naming all of them when it is none.
+///
+/// A message that says only "invalid kind" makes somebody go and find the list.
+/// The list is three words long; printing it costs nothing and saves a lookup.
+fn parse_enum<T>(what: &str, given: &str, all: &[T]) -> Result<T, RepoCommandError>
+where
+    T: Copy,
+    T: AsStr,
+{
+    all.iter()
+        .find(|value| value.as_str() == given)
+        .copied()
+        .ok_or_else(|| RepoCommandError::NotAValue {
+            what: what.to_owned(),
+            given: given.to_owned(),
+            valid: all
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        })
+}
+
+/// The `as_str` every string enum in core already has.
+pub trait AsStr {
+    /// Its wire spelling.
+    fn as_str(&self) -> &'static str;
+}
+
+impl AsStr for RepoKind {
+    fn as_str(&self) -> &'static str {
+        (*self).as_str()
+    }
+}
+impl AsStr for EngineKind {
+    fn as_str(&self) -> &'static str {
+        (*self).as_str()
+    }
+}
+impl AsStr for AutonomyMode {
+    fn as_str(&self) -> &'static str {
+        (*self).as_str()
+    }
+}
+
+/// Every value each field accepts, for parsing and for error messages.
+const KINDS: [RepoKind; 3] = [RepoKind::Git, RepoKind::GitHub, RepoKind::Svn];
+const ENGINES: [EngineKind; 3] = [EngineKind::Claude, EngineKind::Codex, EngineKind::Mock];
+const MODES: [AutonomyMode; 4] = [
+    AutonomyMode::Off,
+    AutonomyMode::DryRun,
+    AutonomyMode::AutoLowAskHigh,
+    AutonomyMode::Auto,
+];
+
+/// What a `repo` write did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RepoWriteReport {
+    /// `add`, `remove` or `set`.
+    pub action: String,
+    /// The repository's id.
+    pub repo_id: i64,
+    /// Its name.
+    pub name: String,
+    /// A sentence for a person.
+    pub detail: String,
+}
+
+/// Add a repository (§14).
+///
+/// `autonomy` defaults to `dry_run` rather than anything that acts. A repository
+/// added a moment ago has never been reviewed, nobody has seen its findings, and
+/// the first thing it does should not be to publish them.
+#[allow(clippy::too_many_arguments)]
+pub async fn add(
+    pool: &Pool,
+    path_or_url: &str,
+    kind: &str,
+    name: Option<&str>,
+    engine: &str,
+    autonomy: &str,
+    at: revlocal_core::Timestamp,
+) -> Result<RepoWriteReport, RepoCommandError> {
+    let kind = parse_enum("kind", kind, &KINDS)?;
+    let engine = parse_enum("engine", engine, &ENGINES)?;
+    let autonomy = parse_enum("autonomy", autonomy, &MODES)?;
+
+    // A name derived from the path is what somebody expects when they did not
+    // give one, and it is what appears in every finding's fingerprint — so it is
+    // derived once, here, rather than at each use.
+    let derived = name
+        .map(str::to_owned)
+        .unwrap_or_else(|| derive_name(path_or_url));
+
+    let store = RepoStore::new(pool);
+    if store
+        .list()
+        .await
+        .map_err(boxed)?
+        .iter()
+        .any(|existing| existing.name == derived)
+    {
+        return Err(RepoCommandError::NameTaken { name: derived });
+    }
+
+    let local_path = (!looks_like_url(path_or_url)).then(|| path_or_url.to_owned());
+    let remote_url = looks_like_url(path_or_url).then(|| path_or_url.to_owned());
+
+    let repo = store
+        .insert(&Repo {
+            id: revlocal_core::RepoId::new(0),
+            name: derived.clone(),
+            kind,
+            local_path,
+            remote_url,
+            default_branch: None,
+            engine,
+            autonomy,
+            enabled: true,
+            config_json: "{}".to_owned(),
+            created_at: at,
+            updated_at: at,
+        })
+        .await
+        .map_err(boxed)?;
+
+    Ok(RepoWriteReport {
+        action: "add".to_owned(),
+        repo_id: repo.id.get(),
+        name: derived.clone(),
+        detail: format!(
+            "added {derived} ({}), engine {}, autonomy {} — nothing is published \
+             until you widen it",
+            kind.as_str(),
+            engine.as_str(),
+            autonomy.as_str()
+        ),
+    })
+}
+
+/// Whether this looks like a remote rather than a path on disk.
+fn looks_like_url(value: &str) -> bool {
+    value.contains("://") || value.starts_with("git@")
+}
+
+/// A repository's name, when the user did not give one.
+fn derive_name(path_or_url: &str) -> String {
+    path_or_url
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("repo")
+        .to_owned()
+}
+
+/// Remove a repository (§14).
+pub async fn remove(pool: &Pool, name: &str) -> Result<RepoWriteReport, RepoCommandError> {
+    let store = RepoStore::new(pool);
+    let repo = store
+        .list()
+        .await
+        .map_err(boxed)?
+        .into_iter()
+        .find(|repo| repo.name == name)
+        .ok_or_else(|| RepoCommandError::NoSuchRepo {
+            name: name.to_owned(),
+        })?;
+
+    store.delete(repo.id).await.map_err(boxed)?;
+
+    Ok(RepoWriteReport {
+        action: "remove".to_owned(),
+        repo_id: repo.id.get(),
+        name: name.to_owned(),
+        detail: format!(
+            "removed {name}. Its runs and findings are gone with it; hooks in the \
+             working copy are not — `revlocal hooks uninstall` removes those"
+        ),
+    })
+}
+
+/// Change settings on a repository (§14's `set <name> key=value...`).
+pub async fn set(
+    pool: &Pool,
+    name: &str,
+    pairs: &[String],
+    at: revlocal_core::Timestamp,
+) -> Result<RepoWriteReport, RepoCommandError> {
+    let store = RepoStore::new(pool);
+    let mut repo = store
+        .list()
+        .await
+        .map_err(boxed)?
+        .into_iter()
+        .find(|repo| repo.name == name)
+        .ok_or_else(|| RepoCommandError::NoSuchRepo {
+            name: name.to_owned(),
+        })?;
+
+    let mut changed = Vec::new();
+    for pair in pairs {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| RepoCommandError::NotAPair {
+                given: pair.clone(),
+            })?;
+
+        match key {
+            "engine" => {
+                repo.engine = parse_enum("engine", value, &ENGINES)?;
+                changed.push(format!("engine={value}"));
+            }
+            "autonomy" => {
+                repo.autonomy = parse_enum("autonomy", value, &MODES)?;
+                changed.push(format!("autonomy={value}"));
+            }
+            "enabled" => {
+                repo.enabled = value == "true";
+                changed.push(format!("enabled={}", repo.enabled));
+            }
+            "default_branch" => {
+                repo.default_branch = Some(value.to_owned());
+                changed.push(format!("default_branch={value}"));
+            }
+            other => {
+                return Err(RepoCommandError::NotAValue {
+                    what: "key".to_owned(),
+                    given: other.to_owned(),
+                    valid: "engine, autonomy, enabled, default_branch".to_owned(),
+                })
+            }
+        }
+    }
+
+    repo.updated_at = at;
+    store.update(&repo).await.map_err(boxed)?;
+
+    Ok(RepoWriteReport {
+        action: "set".to_owned(),
+        repo_id: repo.id.get(),
+        name: name.to_owned(),
+        detail: format!("{name}: {}", changed.join(", ")),
+    })
+}
+
+/// Render a write report.
+pub fn render_write(report: &RepoWriteReport, json: bool) -> Result<String, RepoCommandError> {
+    if json {
+        return serde_json::to_string_pretty(report)
+            .map_err(|source| RepoCommandError::Unrenderable { source });
+    }
+    Ok(report.detail.clone())
+}
+
+fn boxed(source: revlocal_store::StoreError) -> RepoCommandError {
+    RepoCommandError::Store {
+        source: Box::new(source),
+    }
 }

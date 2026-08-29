@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, doctor, exit, hooks, inspect};
+use revlocal_cli::{control, doctor, exit, hooks, inspect, repo};
 
 mod publish;
-mod repo;
 mod review;
 mod targets;
 
@@ -46,6 +45,18 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Inspect runs (SPEC §14).
+    Runs {
+        #[command(subcommand)]
+        command: RunsCommand,
+    },
+
+    /// Inspect findings across runs (SPEC §14).
+    Findings {
+        #[command(subcommand)]
+        command: FindingsCommand,
     },
 
     /// Show what is waiting for a human (SPEC §12.4).
@@ -236,6 +247,73 @@ enum TargetsCommand {
 /// `revlocal repo …`.
 #[derive(Debug, Subcommand)]
 enum RepoCommand {
+    /// Register a repository so rev-local reviews it.
+    Add {
+        /// A working copy on disk, or a remote URL.
+        #[arg(value_name = "PATH|URL")]
+        path_or_url: String,
+        /// `git`, `github` or `svn`.
+        #[arg(long)]
+        kind: String,
+        /// What to call it. Derived from the path when omitted.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Which engine reviews it (decision D3: per repo, not global).
+        #[arg(long, default_value = "claude")]
+        engine: String,
+        /// How much it may do unattended.
+        ///
+        /// Defaults to `dry_run`: a repository added a moment ago has never been
+        /// reviewed and nobody has seen its findings.
+        #[arg(long, default_value = "dry_run")]
+        autonomy: String,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List every configured repository.
+    List {
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Forget a repository. Its runs and findings go with it.
+    Remove {
+        /// Which repository.
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Change settings: `engine=`, `autonomy=`, `enabled=`, `default_branch=`.
+    Set {
+        /// Which repository.
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// One or more `key=value` pairs.
+        #[arg(value_name = "KEY=VALUE", required = true)]
+        pairs: Vec<String>,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show configured repositories and their polling health (SPEC §7.1).
     ///
     /// Reports only. A command that shows you a repository's state must not be
@@ -251,6 +329,65 @@ enum RepoCommand {
         ///
         /// Exactly one JSON document reaches stdout; anything else goes to stderr,
         /// so the output is safe to pipe.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `revlocal runs …`.
+#[derive(Debug, Subcommand)]
+enum RunsCommand {
+    /// List recent runs, newest first.
+    List {
+        /// Narrow to one repository.
+        #[arg(long, value_name = "ID")]
+        repo: Option<i64>,
+        /// Narrow to one status.
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        /// How many to show.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show one run in full, with its findings.
+    Show {
+        /// Which run.
+        #[arg(value_name = "RUN_ID")]
+        run_id: i64,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `revlocal findings …`.
+#[derive(Debug, Subcommand)]
+enum FindingsCommand {
+    /// List findings from recent runs.
+    List {
+        /// Narrow to one repository.
+        #[arg(long, value_name = "ID")]
+        repo: Option<i64>,
+        /// Show only this severity and worse.
+        #[arg(long, value_name = "SEVERITY")]
+        severity: Option<String>,
+        /// How many runs to read.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
         #[arg(long)]
         json: bool,
     },
@@ -469,6 +606,65 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Runs { command } => match command {
+            RunsCommand::List {
+                repo,
+                status,
+                limit,
+                database,
+                json,
+            } => {
+                let status = match status.as_deref() {
+                    None => None,
+                    Some(raw) => Some(inspect::parse_status(raw)?),
+                };
+                let pool = revlocal_store::open(&database).await?;
+                let report =
+                    inspect::runs(&pool, repo.map(revlocal_core::RepoId::new), status, limit)
+                        .await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+
+            RunsCommand::Show {
+                run_id,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = inspect::run_detail(&pool, revlocal_core::RunId::new(run_id)).await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+        },
+
+        Command::Findings { command } => match command {
+            FindingsCommand::List {
+                repo,
+                severity,
+                limit,
+                database,
+                json,
+            } => {
+                let severity = match severity.as_deref() {
+                    None => None,
+                    Some(raw) => Some(inspect::parse_severity(raw)?),
+                };
+                let pool = revlocal_store::open(&database).await?;
+                let report =
+                    inspect::findings(&pool, repo.map(revlocal_core::RepoId::new), severity, limit)
+                        .await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+        },
+
         Command::Approvals { command } => match command {
             ApprovalsCommand::List { database, json } => {
                 let pool = revlocal_store::open(&database).await?;
@@ -581,6 +777,64 @@ async fn run(command: Command) -> Result<(), CliError> {
         }
 
         Command::Repo { command } => match command {
+            RepoCommand::Add {
+                path_or_url,
+                kind,
+                name,
+                engine,
+                autonomy,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::add(
+                    &pool,
+                    &path_or_url,
+                    &kind,
+                    name.as_deref(),
+                    &engine,
+                    &autonomy,
+                    chrono::Utc::now(),
+                )
+                .await?;
+                pool.close().await;
+                println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+
+            RepoCommand::List { database, json } => {
+                let pool = revlocal_store::open(&database).await?;
+                let out = repo::run(&pool, None, json).await?;
+                pool.close().await;
+                println!("{out}");
+                Ok(())
+            }
+
+            RepoCommand::Remove {
+                name,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::remove(&pool, &name).await?;
+                pool.close().await;
+                println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+
+            RepoCommand::Set {
+                name,
+                pairs,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::set(&pool, &name, &pairs, chrono::Utc::now()).await?;
+                pool.close().await;
+                println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+
             RepoCommand::Show {
                 name,
                 database,
