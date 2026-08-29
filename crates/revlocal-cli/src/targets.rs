@@ -396,6 +396,7 @@ pub async fn map(
     capability: &str,
     tool: &str,
     args: &[String],
+    json: bool,
 ) -> Result<(), TargetsCommandError> {
     let config = read_config(config_path)?;
     let (_spec, tools) = tools_for(&config, target).await?;
@@ -423,10 +424,22 @@ pub async fn map(
     overrides.set(entry);
     overrides.save(&path)?;
 
-    println!(
-        "revlocal: {target}/{capability} → {tool} (saved to {})",
-        path.display()
-    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "target": target,
+                "capability": capability,
+                "tool": tool,
+                "saved_to": path.display().to_string(),
+            }))?
+        );
+    } else {
+        println!(
+            "revlocal: {target}/{capability} → {tool} (saved to {})",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -458,6 +471,7 @@ pub async fn test(
     config_path: &Path,
     overrides_path: Option<&Path>,
     target: &str,
+    json: bool,
 ) -> Result<(), TargetsCommandError> {
     let config = read_config(config_path)?;
     let (spec, tools) = tools_for(&config, target).await?;
@@ -471,6 +485,52 @@ pub async fn test(
 
     let context = sample_context();
     let mut failed = 0;
+
+    if json {
+        // Each binding carries its own outcome rather than the document carrying
+        // one verdict: a caller fixing a template needs to know *which* rendered
+        // and which did not, and a single pass/fail throws that away.
+        let bindings: Vec<serde_json::Value> = mapping
+            .bound
+            .iter()
+            .map(|binding| {
+                let rendered = binding.render(&context);
+                if rendered.is_err() {
+                    failed += 1;
+                }
+                serde_json::json!({
+                    "capability": binding.capability.to_string(),
+                    "tool": binding.tool,
+                    "from_override": binding.from_override,
+                    "ok": rendered.is_ok(),
+                    "detail": match rendered {
+                        Ok(payload) => payload.to_string(),
+                        Err(error) => error.to_string(),
+                    },
+                })
+            })
+            .collect();
+        let document = serde_json::json!({
+            "target": target,
+            "bindings": bindings,
+            "unmapped": mapping
+                .unmapped
+                .iter()
+                .map(|unmapped| unmapped.explain())
+                .collect::<Vec<_>>(),
+            "called_anything": false,
+        });
+        println!("{}", serde_json::to_string_pretty(&document)?);
+
+        return if failed == 0 {
+            Ok(())
+        } else {
+            Err(TargetsCommandError::DryRunFailed {
+                failed,
+                total: mapping.bound.len(),
+            })
+        };
+    }
 
     println!("{}", mapping.summary_line());
     for binding in &mapping.bound {

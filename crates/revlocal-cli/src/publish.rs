@@ -60,7 +60,12 @@ pub async fn status(database: &Path, run: i64, json: bool) -> Result<(), Publish
 }
 
 /// Run `revlocal publish replay`.
-pub async fn replay(database: &Path, run: i64, target: &str) -> Result<(), PublishCommandError> {
+pub async fn replay(
+    database: &Path,
+    run: i64,
+    target: &str,
+    json: bool,
+) -> Result<(), PublishCommandError> {
     let pool = revlocal_store::open(database).await?;
 
     // No targets are registered here yet — the GitHub, Andare and Trama targets
@@ -74,6 +79,28 @@ pub async fn replay(database: &Path, run: i64, target: &str) -> Result<(), Publi
 
     let report = RunPublishReport::load(&pool, RunId::new(run)).await?;
     pool.close().await;
+
+    if json {
+        // One document on stdout, like every other `--json` path. `requeued` and
+        // the dispatch counts are separate because "put back in the queue" and
+        // "sent" are different things, and a caller that conflates them will
+        // report a delivery that has not happened.
+        let mut document = as_json(&report);
+        if let Some(object) = document.as_object_mut() {
+            object.insert("requeued".to_owned(), requeued.into());
+            object.insert(
+                "dispatch".to_owned(),
+                serde_json::json!({
+                    "attempted": dispatch.attempted(),
+                    "sent": dispatch.sent,
+                    "retryable": dispatch.retryable,
+                    "failed": dispatch.failed,
+                }),
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
 
     println!("revlocal: requeued {requeued} action(s) for `{target}`");
     if dispatch.attempted() > 0 {
