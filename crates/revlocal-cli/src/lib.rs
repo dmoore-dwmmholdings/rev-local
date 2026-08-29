@@ -16,5 +16,6 @@ pub mod hooks;
 pub mod inspect;
 pub mod repo;
 pub mod watch;
+pub mod webhook;
 
 pub use exit::Exit;

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{backfill, control, doctor, exit, hooks, inspect, repo, watch};
+use revlocal_cli::{backfill, control, doctor, exit, hooks, inspect, repo, watch, webhook};
 
 mod publish;
 mod review;
@@ -119,6 +119,12 @@ enum Command {
     Hooks {
         #[command(subcommand)]
         command: HooksCommand,
+    },
+
+    /// Control the GitHub webhook listener and its tunnel (SPEC §7.3).
+    Webhook {
+        #[command(subcommand)]
+        command: WebhookCommand,
     },
 
     /// Check prerequisites, engines and publish targets (SPEC §8.4).
@@ -469,6 +475,56 @@ enum BudgetCommand {
 }
 
 /// `revlocal hooks …`.
+/// `revlocal webhook start | stop | status` (SPEC §7.3, §14).
+#[derive(Debug, Subcommand)]
+enum WebhookCommand {
+    /// Enable the listener and choose a tunnel.
+    Start {
+        /// Which tunnel exposes the listener: cloudflared, ngrok or manual.
+        ///
+        /// Omitted keeps whatever was chosen last, so re-starting after a stop
+        /// does not silently lose the choice.
+        #[arg(long, value_name = "PROVIDER")]
+        tunnel: Option<String>,
+        /// The global config file to read.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable the listener, keeping the tunnel choice.
+    Stop {
+        /// The global config file to read.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report both switches, what is on the port, and what is still missing.
+    Status {
+        /// Ask what a provider would look like, without choosing it.
+        #[arg(long, value_name = "PROVIDER")]
+        tunnel: Option<String>,
+        /// The global config file to read.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum HooksCommand {
     /// Add rev-local's hooks. Existing hooks are appended to, never overwritten.
@@ -607,6 +663,10 @@ enum CliError {
     /// A backfill could not be planned.
     #[error(transparent)]
     Backfill(#[from] backfill::BackfillError),
+
+    /// A webhook command failed.
+    #[error(transparent)]
+    Webhook(#[from] webhook::WebhookError),
 
     /// A report could not be serialised.
     #[error("could not render the report: {0}")]
@@ -806,6 +866,42 @@ async fn run(command: Command) -> Result<(), CliError> {
                 Ok(())
             }
         },
+
+        Command::Webhook { command } => {
+            let (config, database, json) = match &command {
+                WebhookCommand::Start {
+                    config,
+                    database,
+                    json,
+                    ..
+                }
+                | WebhookCommand::Stop {
+                    config,
+                    database,
+                    json,
+                }
+                | WebhookCommand::Status {
+                    config,
+                    database,
+                    json,
+                    ..
+                } => (config.clone(), database.clone(), *json),
+            };
+            let pool = revlocal_store::open(&database).await?;
+            let now = chrono::Utc::now();
+            let report = match &command {
+                WebhookCommand::Start { tunnel, .. } => {
+                    webhook::start(&pool, &config, tunnel.as_deref(), now).await
+                }
+                WebhookCommand::Stop { .. } => webhook::stop(&pool, &config, now).await,
+                WebhookCommand::Status { tunnel, .. } => {
+                    webhook::status(&pool, &config, tunnel.as_deref(), now).await
+                }
+            };
+            pool.close().await;
+            println!("{}", webhook::render(&report?, json)?);
+            Ok(())
+        }
 
         Command::Hooks { command } => match command {
             HooksCommand::Install {
