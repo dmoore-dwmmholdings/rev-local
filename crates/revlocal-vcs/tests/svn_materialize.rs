@@ -71,7 +71,10 @@ fn purpose_built(dir: &Path) -> Result<String, String> {
     let wc = dir.join("wc");
     run("svnadmin", &["create", &repo.display().to_string()], dir)?;
 
-    let url = format!("file://{}", repo.display());
+    // `file://{path}` is wrong on Windows twice over — backslashes, and a
+    // drive letter needing the third slash. svn rejects both as non-canonical
+    // and names a line in its own C source when it does.
+    let url = revlocal_vcs::svn::file_url(&repo);
     run(
         "svn",
         &["checkout", "--quiet", &url, &wc.display().to_string()],

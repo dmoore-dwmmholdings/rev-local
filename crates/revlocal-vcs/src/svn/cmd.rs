@@ -412,6 +412,58 @@ pub async fn is_available() -> bool {
 ///
 /// Takes whether any SVN repository is configured, because that is what decides
 /// whether absence is a problem or a fact.
+/// A canonical `file://` URL for a local repository path.
+///
+/// svn is strict about this and says so in a way nobody can act on:
+/// `E235000: assertion failed (svn_uri_is_canonical(url, pool))`, naming a line in
+/// its own C source. Two things make a Windows path non-canonical, and both have
+/// now cost a CI round each:
+///
+/// - **Separators.** `file:///C:\Users\x` must be `file:///C:/Users/x`. A URL is
+///   not a path, and svn will not translate one into the other.
+/// - **Slash count.** `file://C:/x` names a *host* called `C:`; a drive letter
+///   needs the third slash, while a POSIX path already begins with one and takes
+///   the two-slash form.
+///
+/// One helper rather than the same two lines in four test files, because the
+/// second of those bugs was fixed in three of them and missed in the fourth.
+pub fn file_url(path: &std::path::Path) -> String {
+    /// Windows' extended-length path prefix: `\\?\`.
+    ///
+    /// Named rather than written inline because it is four characters, three of
+    /// which are escapes, and getting it wrong is silent: `strip_prefix` simply
+    /// does not match and the path falls through to the UNC branch.
+    const EXTENDED_LENGTH_PREFIX: &str = "\\\\?\\";
+
+    let mut text = path.display().to_string();
+
+    // Windows extended-length form. `std::fs::canonicalize` *returns* these, so a
+    // caller who canonicalised before calling would otherwise get `file:////?/C:/x`
+    // — four slashes, and a URL svn likes even less than the one it replaced. My
+    // own property test found this; the four examples I wrote by hand did not.
+    if let Some(rest) = text.strip_prefix(EXTENDED_LENGTH_PREFIX) {
+        text = rest.to_owned();
+    }
+
+    let text = text.replace('\\', "/");
+
+    if text.starts_with("//") {
+        // A UNC path: `//server/share` is genuinely a host and a path, which is
+        // the one case where two slashes is right.
+        format!("file:{text}")
+    } else if text.starts_with('/') {
+        // POSIX. The path's own leading slash is the third one.
+        format!("file://{text}")
+    } else {
+        // A drive letter, or any other path not beginning at the root.
+        format!("file:///{text}")
+    }
+}
+
+/// What `revlocal doctor` says about Subversion.
+///
+/// Takes whether any SVN repository is configured, because that is what decides
+/// whether absence is a problem or a fact.
 pub fn doctor_line(available: bool, svn_repos_configured: usize) -> String {
     match (available, svn_repos_configured) {
         (true, 0) => "svn: available (no SVN repositories configured)".to_owned(),
@@ -658,5 +710,88 @@ mod tests {
             error.to_string().contains("svn:"),
             "svn's own error should reach the user: {error}"
         );
+    }
+}
+
+#[cfg(test)]
+mod file_url_tests {
+    use super::file_url;
+    use std::path::Path;
+
+    #[test]
+    fn a_posix_path_takes_the_two_slash_form() {
+        // It already begins at the root, so the path's own leading slash is the
+        // third one.
+        assert_eq!(
+            file_url(Path::new("/tmp/repos/acme")),
+            "file:///tmp/repos/acme"
+        );
+    }
+
+    #[test]
+    fn a_drive_letter_gets_the_third_slash() {
+        // `file://C:/x` names a HOST called `C:`. This is the bug that presented
+        // as a silent non-zero exit in the fixture generator and as
+        // `svn_uri_is_canonical` here.
+        assert_eq!(
+            file_url(Path::new("C:/Users/dev/acme")),
+            "file:///C:/Users/dev/acme"
+        );
+    }
+
+    #[test]
+    fn backslashes_become_slashes() {
+        // A URL is not a path, and svn will not translate one into the other. This
+        // is the half that was missed in three test files after the slash count
+        // was fixed in them.
+        assert_eq!(
+            file_url(Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp\repo")),
+            "file:///C:/Users/RUNNER~1/AppData/Local/Temp/repo"
+        );
+    }
+
+    #[test]
+    fn a_mixed_path_is_normalised_whole() {
+        assert_eq!(
+            file_url(Path::new(r"C:\Users/dev\acme")),
+            "file:///C:/Users/dev/acme"
+        );
+    }
+
+    #[test]
+    fn an_extended_length_path_names_the_drive_not_a_host() {
+        // `std::fs::canonicalize` returns these on Windows, so a caller who
+        // canonicalised first would hit it.
+        //
+        // This assertion is stronger than the property test below on purpose. That
+        // one only checked the URL was not *obviously* broken — and it passed while
+        // `strip_prefix` silently matched nothing and the path fell through to the
+        // UNC branch, producing `file://?/C:/a`: a host called `?`. A test that
+        // asserts a shape rather than a value passes for the wrong reason.
+        assert_eq!(file_url(Path::new(r"\\?\C:\a")), "file:///C:/a");
+    }
+
+    #[test]
+    fn a_unc_path_keeps_its_host() {
+        // The one case where two slashes is right: `//server/share` genuinely is a
+        // host and a path, and forcing a third slash would break it.
+        assert_eq!(
+            file_url(Path::new(r"\\server\share\repo")),
+            "file://server/share/repo"
+        );
+    }
+
+    #[test]
+    fn the_result_is_always_one_scheme_and_never_four_slashes() {
+        for path in ["/a/b", "C:/a/b", r"C:\a\b", r"\\?\C:\a", r"\\server\share"] {
+            let url = file_url(Path::new(path));
+            assert!(url.starts_with("file://"), "{path} -> {url}");
+            assert!(!url.starts_with("file:////"), "{path} -> {url}");
+            assert!(!url.contains('\\'), "{path} -> {url}");
+            assert!(
+                !url.contains("://?"),
+                "a `?` host is not a drive: {path} -> {url}"
+            );
+        }
     }
 }
