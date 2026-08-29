@@ -13,14 +13,24 @@
 //! That split is why the ordering rules could be asserted directly rather than
 //! inferred from timing, and it is why this file is short enough to read.
 //!
-//! # Discovery only, for now
+//! # Discovery is persistent; reviewing is not wired yet
 //!
-//! A pass discovers changes and records them. It does **not** yet run reviews:
-//! `revlocal review` does that for one change, and wiring it here needs the run
-//! registry that `runs` and the kill switch will share. Saying so in the output
-//! rather than implying otherwise — a `watch` that silently reviewed nothing would
-//! be indistinguishable from one whose repositories are quiet, which is §18's
-//! failure exactly.
+//! A pass records every change it finds, applies §9.4's skip rules, and advances
+//! the cursor — so a second pass over a quiet repository finds nothing rather than
+//! rediscovering the same commits forever.
+//!
+//! It does **not** yet run reviews. `revlocal review` does that for one change,
+//! and wiring it here needs the run registry the kill switch's cancellation path
+//! also wants. Every tick says so, because a `watch` that silently reviewed
+//! nothing would be indistinguishable from one whose repositories are quiet —
+//! §18's failure exactly.
+//!
+//! # The cursor advances last, and past skipped changes too
+//!
+//! Last, because a crash between recording and advancing costs a re-read and a
+//! crash the other way loses a change permanently. Past skipped ones, because a
+//! change that was looked at and deliberately not reviewed is *finished* — leaving
+//! the cursor behind it means re-deciding it on every poll forever.
 
 use std::collections::BTreeMap;
 
@@ -77,6 +87,16 @@ pub struct RepoPass {
     pub repo: String,
     /// Changes discovered.
     pub discovered: usize,
+    /// Changes recorded for review.
+    pub recorded: usize,
+    /// Changes recorded and deliberately skipped (§9.4), with the reason.
+    ///
+    /// Counted separately because "nothing to review" and "everything was a
+    /// lockfile" are different facts, and only one of them is a quiet repository.
+    pub skipped: Vec<String>,
+    /// Where the cursor now stands, when it moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     /// What went wrong, if anything.
     ///
     /// A repository that fails is reported and skipped, never fatal: one
@@ -113,10 +133,22 @@ impl WatchReport {
         for pass in &self.passes {
             match &pass.error {
                 Some(error) => out.push_str(&format!("  {} — FAILED: {error}\n", pass.repo)),
-                None => out.push_str(&format!(
-                    "  {} — {} change(s) discovered\n",
-                    pass.repo, pass.discovered
-                )),
+                None => {
+                    out.push_str(&format!(
+                        "  {} — {} discovered, {} recorded",
+                        pass.repo, pass.discovered, pass.recorded
+                    ));
+                    if !pass.skipped.is_empty() {
+                        out.push_str(&format!(", {} skipped", pass.skipped.len()));
+                    }
+                    out.push('\n');
+                    // §9.4: a skipped change is recorded with its reason, and the
+                    // reason is the point — "why did rev-local ignore my commit?"
+                    // has an answer only if it is shown.
+                    for reason in &pass.skipped {
+                        out.push_str(&format!("      skipped: {reason}\n"));
+                    }
+                }
             }
         }
         // Said every time, so nobody concludes from a quiet run that reviews are
@@ -185,7 +217,7 @@ pub async fn tick(pool: &Pool, at: Timestamp) -> Result<WatchReport, WatchError>
         Decision::Discover(_) | Decision::Backfill { .. } => {
             let mut passes = Vec::new();
             for repo in &repos {
-                passes.push(discover_one(pool, repo).await);
+                passes.push(discover_one(pool, repo, at).await);
             }
             Ok(WatchReport {
                 repos: repos.len(),
@@ -206,8 +238,10 @@ fn idle_line(idle: &Idle) -> Option<String> {
     }
 }
 
-/// Discover one repository, turning a failure into a recorded one.
-async fn discover_one(pool: &Pool, repo: &Repo) -> RepoPass {
+/// Discover one repository, record what it found, and advance its cursor.
+///
+/// A failure becomes a recorded one: see the caller.
+async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
     let cursor: Option<Cursor> = match CursorStore::new(pool)
         .get(
             repo.id,
@@ -220,25 +254,118 @@ async fn discover_one(pool: &Pool, repo: &Repo) -> RepoPass {
             return RepoPass {
                 repo: repo.name.clone(),
                 discovered: 0,
+                recorded: 0,
+                skipped: Vec::new(),
+                cursor: None,
                 error: Some(error.to_string()),
             }
         }
     };
 
+    let scope = Cursor::commits_scope(repo.default_branch.as_deref().unwrap_or("main"));
+
     match GitAdapter::new().discover(repo, cursor.as_ref(), 50).await {
-        Ok(changes) => RepoPass {
-            repo: repo.name.clone(),
-            discovered: changes.len(),
-            error: None,
-        },
+        Ok(changes) => {
+            let config = serde_json::from_str::<RepoConfig>(&repo.config_json).unwrap_or_default();
+
+            let mut recorded = 0_usize;
+            let mut skipped = Vec::new();
+            let mut furthest: Option<String> = None;
+
+            for change in &changes {
+                let skip = revlocal_vcs::skip_rules::evaluate(change, &config);
+
+                // Recorded either way. §9.4's rule is that a skipped change is
+                // still written down with its reason — a change that vanishes is
+                // indistinguishable from one that was never seen.
+                if let Err(error) = record(pool, repo, change, at).await {
+                    return RepoPass {
+                        repo: repo.name.clone(),
+                        discovered: changes.len(),
+                        recorded,
+                        skipped,
+                        cursor: furthest,
+                        error: Some(error.to_string()),
+                    };
+                }
+
+                match skip {
+                    Some(skip) => skipped.push(format!("{} — {}", change.external_id, skip.detail)),
+                    None => recorded += 1,
+                }
+                furthest = Some(change.cursor_value.clone());
+            }
+
+            // Last, and past skipped changes too. See the module docs.
+            if let Some(value) = &furthest {
+                if let Err(error) = CursorStore::new(pool)
+                    .advance(repo.id, &scope, value, at)
+                    .await
+                {
+                    return RepoPass {
+                        repo: repo.name.clone(),
+                        discovered: changes.len(),
+                        recorded,
+                        skipped,
+                        cursor: None,
+                        error: Some(error.to_string()),
+                    };
+                }
+            }
+
+            RepoPass {
+                repo: repo.name.clone(),
+                discovered: changes.len(),
+                recorded,
+                skipped,
+                cursor: furthest,
+                error: None,
+            }
+        }
         // One unreachable remote must not stop every other repository being
         // reviewed, so this is recorded rather than returned.
         Err(error) => RepoPass {
             repo: repo.name.clone(),
             discovered: 0,
+            recorded: 0,
+            skipped: Vec::new(),
+            cursor: None,
             error: Some(error.to_string()),
         },
     }
+}
+
+/// Write one discovered change down.
+///
+/// `upsert`, not `insert`: discovery can legitimately see the same change twice —
+/// a force-push, an overlapping poll — and a unique-constraint failure there would
+/// stop a pass over something harmless.
+async fn record(
+    pool: &Pool,
+    repo: &Repo,
+    change: &revlocal_vcs::DetectedChange,
+    at: Timestamp,
+) -> Result<(), WatchError> {
+    revlocal_store::ChangeStore::new(pool)
+        .upsert(&revlocal_core::Change {
+            id: revlocal_core::ChangeId::new(0),
+            repo_id: repo.id,
+            kind: change.kind,
+            external_id: change.external_id.clone(),
+            title: change.title.clone(),
+            author_name: change.author_name.clone(),
+            author_email: change.author_email.clone(),
+            authored_at: change.authored_at,
+            branch: change.branch.clone(),
+            base_ref: change.base_ref.clone(),
+            head_ref: change.head_ref.clone(),
+            url: change.url.clone(),
+            diff_stat: change.diff_stat,
+            detected_at: at,
+        })
+        .await
+        .map_err(boxed)?;
+    Ok(())
 }
 
 /// Render for whichever output the caller asked for.

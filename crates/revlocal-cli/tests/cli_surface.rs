@@ -106,16 +106,14 @@ mod cli_surface {
         "findings",
         "watch",
         "backfill",
+        "webhook",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
     ///
     /// An entry is a claim, not a placeholder: naming the blocker is what keeps
     /// this from becoming a list nobody revisits.
-    const NOT_YET: &[(&str, &str)] = &[(
-        "webhook",
-        "RL-1005 and RL-1006 built the listener and tunnels",
-    )];
+    const NOT_YET: &[(&str, &str)] = &[];
 
     fn binary() -> PathBuf {
         // The test binary lives beside the CLI binary cargo just built.
@@ -1230,6 +1228,110 @@ mod watch_loop {
         Ok(())
     }
 
+    /// A real git repository with `commits`, one of which is a lockfile bump.
+    fn a_repo_with_a_lockfile_commit(dir: &std::path::Path) -> Result<(), String> {
+        let run = |args: &[&str]| -> Result<(), String> {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+            }
+            Ok(())
+        };
+        run(&["init", "--quiet", "-b", "main", "."])?;
+        run(&["config", "user.email", "t@e.invalid"])?;
+        run(&["config", "user.name", "T"])?;
+        std::fs::write(dir.join("a.rs"), "code\n").map_err(|e| e.to_string())?;
+        run(&["add", "a.rs"])?;
+        run(&["commit", "--quiet", "-m", "add a helper"])?;
+        std::fs::write(dir.join("Cargo.lock"), "lock\n").map_err(|e| e.to_string())?;
+        run(&["add", "Cargo.lock"])?;
+        run(&["commit", "--quiet", "-m", "bump deps"])?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_skipped_change_is_recorded_and_its_reason_shown() -> Result<(), String> {
+        // §9.4: a skipped change is written down with its reason. A change that
+        // vanishes is indistinguishable from one that was never seen, and "why did
+        // rev-local ignore my commit?" has an answer only if the reason is shown.
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
+
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let pass = report.passes.first().ok_or("one repository, one pass")?;
+
+        assert_eq!(pass.discovered, 2);
+        assert_eq!(pass.recorded, 1, "the lockfile commit is not for reviewing");
+        assert_eq!(pass.skipped.len(), 1);
+        assert!(
+            pass.skipped[0].contains("ignore_globs"),
+            "the reason must survive: {:?}",
+            pass.skipped
+        );
+
+        let human = report.render_human();
+        assert!(
+            human.contains("2 discovered, 1 recorded, 1 skipped"),
+            "{human}"
+        );
+        assert!(human.contains("skipped:"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_cursor_advances_so_a_second_pass_finds_nothing() -> Result<(), String> {
+        // Without this, every poll rediscovers the whole history forever — which
+        // looks like working and costs the same as never advancing.
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
+
+        let first = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert_eq!(first.passes[0].discovered, 2);
+        assert!(
+            first.passes[0].cursor.is_some(),
+            "the cursor must have moved"
+        );
+
+        let second = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert_eq!(
+            second.passes[0].discovered, 0,
+            "a quiet repository must stay quiet"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_cursor_advances_past_a_skipped_change() -> Result<(), String> {
+        // The lockfile commit is the newest one. If the cursor stopped short of a
+        // skipped change, it would be re-decided on every poll forever.
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
+
+        tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let second = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert_eq!(second.passes[0].discovered, 0);
+        assert!(
+            second.passes[0].skipped.is_empty(),
+            "a skipped change must not be re-decided: {:?}",
+            second.passes[0].skipped
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn a_tick_says_reviews_are_not_running_yet() -> Result<(), String> {
         // §18. A `watch` that silently reviewed nothing would be indistinguishable
@@ -1368,6 +1470,325 @@ mod backfill_command {
         assert!(parsed.get("resumed_from").is_none(), "{json}");
         assert_eq!(parsed["executed"], false);
         assert_eq!(parsed["truncated_enumeration"], false);
+        Ok(())
+    }
+}
+
+// --- webhook (RL-1201, §7.3) -----------------------------------------------
+
+mod webhook_command {
+    use revlocal_cli::webhook::{start, status, stop, Listener};
+    use revlocal_store::Pool;
+
+    async fn store() -> Result<(Pool, tempfile::TempDir), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((pool, dir))
+    }
+
+    fn now() -> revlocal_core::Timestamp {
+        chrono::Utc::now()
+    }
+
+    /// Write a config naming `port`, and return its path.
+    ///
+    /// ADR 0003: a helper returns its failure rather than panicking, so a broken
+    /// fixture is reported as a broken fixture and not as the test's subject
+    /// failing.
+    fn config(dir: &tempfile::TempDir, port: u16) -> Result<std::path::PathBuf, String> {
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, format!("[global]\nwebhook_port = {port}\n"))
+            .map_err(|e| e.to_string())?;
+        Ok(path)
+    }
+
+    /// A port nothing is listening on, found by binding and releasing one.
+    async fn a_free_port() -> Result<u16, String> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        drop(listener);
+        Ok(port)
+    }
+
+    async fn add_repo(pool: &Pool, name: &str, config_json: &str) -> Result<(), String> {
+        let at = now();
+        revlocal_store::RepoStore::new(pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: name.to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                local_path: Some("/nowhere".to_owned()),
+                remote_url: None,
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: config_json.to_owned(),
+                created_at: at,
+                updated_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_refuses_when_the_port_is_zero_and_names_a_free_one() -> Result<(), String> {
+        // §13.1's `webhook_port = 0` disables the listener. Starting anyway would
+        // enable a switch that cannot do anything, and picking a port here would
+        // make the config file stop explaining the behaviour.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, 0)?;
+
+        let error = start(&pool, &path, Some("cloudflared"), now())
+            .await
+            .err()
+            .ok_or("port 0 must refuse")?;
+        let text = error.to_string();
+
+        assert!(text.contains("webhook_port is 0"), "{text}");
+        assert!(text.contains("try: set global.webhook_port = "), "{text}");
+        // §18: the remedy must be a value, not a suggestion to go and find one.
+        let suggested = text
+            .split("webhook_port = ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse::<u16>().ok())
+            .ok_or_else(|| format!("no port in: {text}"))?;
+        assert!(suggested > 0, "suggested {suggested}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_unknown_provider_lists_the_ones_that_exist() -> Result<(), String> {
+        // The common case is a typo, and it is fixed the moment the right
+        // spelling is on screen.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, a_free_port().await?)?;
+
+        let error = start(&pool, &path, Some("cloudfared"), now())
+            .await
+            .err()
+            .ok_or("a misspelt provider must fail")?;
+        let text = error.to_string();
+
+        assert!(text.contains("cloudfared"), "{text}");
+        assert!(text.contains("cloudflared"), "{text}");
+        assert!(text.contains("ngrok"), "{text}");
+        assert!(text.contains("manual"), "{text}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stop_keeps_the_tunnel_choice() -> Result<(), String> {
+        // Stopping is not unconfiguring. Making somebody re-pick their tunnel
+        // every time they pause deliveries teaches them to leave it running.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, a_free_port().await?)?;
+
+        let started = start(&pool, &path, Some("ngrok"), now())
+            .await
+            .map_err(|e| e.to_string())?;
+        assert!(started.enabled && started.changed);
+
+        let stopped = stop(&pool, &path, now()).await.map_err(|e| e.to_string())?;
+        assert!(!stopped.enabled);
+        assert!(stopped.changed, "the first stop changed something");
+        assert_eq!(stopped.tunnel.as_deref(), Some("ngrok"));
+
+        // And starting again without --tunnel does not lose it.
+        let restarted = start(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(restarted.tunnel.as_deref(), Some("ngrok"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_second_stop_reports_no_change() -> Result<(), String> {
+        // `enabled` and `changed` are separate so a script can tell "I turned it
+        // off" from "it was already off" — which matters when two operators reach
+        // for the same switch.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, a_free_port().await?)?;
+
+        stop(&pool, &path, now()).await.map_err(|e| e.to_string())?;
+        let again = stop(&pool, &path, now()).await.map_err(|e| e.to_string())?;
+
+        assert!(!again.enabled);
+        assert!(!again.changed, "nothing was there to change");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_probe_distinguishes_a_bound_port_from_a_free_one() -> Result<(), String> {
+        // A stored "enabled" is intent; what is on the port is an observation.
+        // Reporting the first as if it were the second is how a dead listener
+        // reads as a healthy one.
+        let (pool, dir) = store().await?;
+        let port = a_free_port().await?;
+        let path = config(&dir, port)?;
+
+        let free = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(free.listener, Listener::NotListening);
+
+        let held = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .map_err(|e| e.to_string())?;
+        let bound = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(bound.listener, Listener::InUse);
+        drop(held);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_port_of_zero_is_disabled_rather_than_free() -> Result<(), String> {
+        // Binding to port 0 asks the OS for any free port and always succeeds.
+        // Probing it would report "nothing is listening" about a port that does
+        // not exist — and send somebody to restart a daemon that was never meant
+        // to bind.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, 0)?;
+
+        let report = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.listener, Listener::Disabled);
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .any(|s| s.contains("global.webhook_port")),
+            "{:?}",
+            report.next_steps
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn status_says_when_no_repository_has_opted_in() -> Result<(), String> {
+        // §7.3's second switch. Port set, tunnel up, nobody opted in is a
+        // configuration where every check passes and no review ever happens —
+        // which reads exactly like a quiet week.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, a_free_port().await?)?;
+        add_repo(&pool, "acme", "{}").await?;
+
+        let report = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.repos.len(), 1);
+        assert_eq!(report.opted_in(), 0);
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .any(|s| s.contains("no repository has webhook_enabled")),
+            "{:?}",
+            report.next_steps
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_opted_in_repo_with_no_secret_is_called_out() -> Result<(), String> {
+        // Without a secret every delivery fails signature verification, which
+        // from the outside is indistinguishable from GitHub not sending anything.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, a_free_port().await?)?;
+        add_repo(&pool, "acme", r#"{"webhook_enabled": true}"#).await?;
+
+        let report = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.opted_in(), 1);
+        assert!(!report.repos[0].secret_configured);
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .any(|s| s.contains("webhook_secret_ref")),
+            "{:?}",
+            report.next_steps
+        );
+        assert!(report.render_human().contains("NO SECRET"), "and visibly");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_repo_whose_config_will_not_parse_is_treated_as_opted_out() -> Result<(), String> {
+        // The one wrong direction to fail in: reporting a repository as receiving
+        // webhooks because its config could not be read.
+        let (pool, dir) = store().await?;
+        let path = config(&dir, a_free_port().await?)?;
+        add_repo(&pool, "acme", "not json at all").await?;
+
+        let report = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.opted_in(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_missing_config_file_is_the_spec_default_not_an_error() -> Result<(), String> {
+        // A fresh install has no config file, and §13.1's document is the default.
+        let (pool, dir) = store().await?;
+        let path = dir.path().join("nothing-here.toml");
+
+        let report = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(report.port, 0, "§13.1 defaults webhook_port to 0");
+        assert_eq!(report.listener, Listener::Disabled);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn status_offers_no_next_steps_it_cannot_justify() -> Result<(), String> {
+        // With both switches on, a secret set and the listener bound, the only
+        // thing that can still be missing is the tunnel binary — and `manual`
+        // does not need one. Nothing else should be invented to fill the list.
+        let (pool, dir) = store().await?;
+        let port = a_free_port().await?;
+        let path = config(&dir, port)?;
+        add_repo(
+            &pool,
+            "acme",
+            r#"{"webhook_enabled": true, "webhook_secret_ref": "keychain:acme"}"#,
+        )
+        .await?;
+        start(&pool, &path, Some("manual"), now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let held = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .map_err(|e| e.to_string())?;
+        let report = status(&pool, &path, None, now())
+            .await
+            .map_err(|e| e.to_string())?;
+        drop(held);
+
+        assert_eq!(report.next_steps.len(), 1, "{:?}", report.next_steps);
+        assert!(
+            report.next_steps[0].contains("public URL"),
+            "{:?}",
+            report.next_steps
+        );
         Ok(())
     }
 }
