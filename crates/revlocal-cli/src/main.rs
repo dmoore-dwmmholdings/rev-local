@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use revlocal_cli::exit;
 
 mod publish;
 mod repo;
@@ -15,7 +16,13 @@ mod targets;
 
 /// Autonomous local code review for git, GitHub and Subversion.
 #[derive(Debug, Parser)]
-#[command(name = "revlocal", version, about, long_about = None)]
+#[command(
+    name = "revlocal",
+    version,
+    about,
+    long_about = None,
+    after_help = "Exit codes:\n  0  the command succeeded\n  1  the command failed; retrying may work\n  2  the command was wrong; fix it rather than retrying\n  3  a daily budget stopped this; retrying today will not help (SPEC §13.1)\n  4  this needs a human to approve it; retrying will not help (SPEC §12.4)\n\nEvery command accepts --json for machine-readable output."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -193,15 +200,18 @@ fn main() -> ExitCode {
         Ok(runtime) => runtime,
         Err(e) => {
             eprintln!("revlocal: could not start the async runtime: {e}");
-            return ExitCode::FAILURE;
+            return exit::Exit::Error.into();
         }
     };
 
     match runtime.block_on(run(command)) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => exit::Exit::Ok.into(),
         Err(e) => {
             eprintln!("revlocal: {e}");
-            ExitCode::FAILURE
+            // Every error is `Error` until a command has a reason to say otherwise.
+            // §14's 3 and 4 are claims about *why* something stopped, and a command
+            // that cannot yet be stopped that way must not pretend it can.
+            exit::Exit::Error.into()
         }
     }
 }
