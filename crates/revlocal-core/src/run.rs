@@ -95,34 +95,95 @@ impl Run {
 
 /// Token and cost accounting for one run (`run.tokens_*`, `run.cost_usd`).
 ///
-/// `cost_usd` is optional because not every engine reports a price; a missing cost
-/// is recorded as missing rather than as zero, so budget maths cannot silently
-/// treat an unknown spend as free (SPEC §18).
+/// Both halves can say "unknown", and for the same reason (SPEC §18): a value the
+/// system could not measure must not be recorded as a value of zero, because a
+/// budget cannot tell the difference and will happily spend forever against it.
+///
+/// `cost_usd` has always said so with an `Option`. Tokens did not, and RL-409
+/// found what that cost: §8.3's `result.json` schema carries no usage field, so a
+/// real engine's runner returned `Usage::default()` — **zero tokens** — and a run
+/// that spent forty thousand was recorded as spending none. ADR 0010 asserted
+/// "token counts are always known"; that was true of the mock and false of every
+/// real engine, which is exactly why the fixtures were more honest than the thing
+/// they stood in for.
+///
+/// `tokens_in` and `tokens_out` are therefore the **known portion**, the same role
+/// `BudgetLedgerEntry::known_cost_usd` plays for money, and `tokens_known` says
+/// whether that portion is the whole story.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
-    /// Input tokens consumed.
+    /// Input tokens consumed, as far as is known.
     pub tokens_in: u64,
-    /// Output tokens produced.
+    /// Output tokens produced, as far as is known.
     pub tokens_out: u64,
+    /// Whether the counts above account for the whole run.
+    ///
+    /// `Default` is **false**, deliberately. An engine that reports nothing must
+    /// produce a run recorded as unmeasured, not one recorded as free — and the
+    /// bug this field exists for was precisely a `Usage::default()` standing in
+    /// for counts nobody had.
+    #[serde(default)]
+    pub tokens_known: bool,
     /// Cost in USD, when the engine reports one.
     pub cost_usd: Option<f64>,
 }
 
 impl Usage {
-    /// Total tokens, which is what per-repo budgets are denominated in (D10).
+    /// Usage an engine actually reported.
+    ///
+    /// The only constructor that claims the counts are complete. Building a
+    /// `Usage` literally is still possible, but reaching for this is what makes
+    /// "did anyone measure this?" a question with an answer.
+    pub const fn measured(tokens_in: u64, tokens_out: u64) -> Self {
+        Self {
+            tokens_in,
+            tokens_out,
+            tokens_known: true,
+            cost_usd: None,
+        }
+    }
+
+    /// A run whose token usage nobody could determine.
+    pub const fn unmeasured() -> Self {
+        Self {
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_known: false,
+            cost_usd: None,
+        }
+    }
+
+    /// Record a cost alongside the tokens.
+    #[must_use]
+    pub const fn with_cost(mut self, cost_usd: f64) -> Self {
+        self.cost_usd = Some(cost_usd);
+        self
+    }
+
+    /// Total tokens **known** to have been spent (D10).
+    ///
+    /// A lower bound when [`tokens_are_known`](Self::tokens_are_known) is false.
+    /// Callers deciding whether a budget is exhausted must ask that too — see
+    /// [`BudgetLedgerEntry::tokens_exhausted`](crate::BudgetLedgerEntry::tokens_exhausted).
     pub const fn total_tokens(&self) -> u64 {
         self.tokens_in + self.tokens_out
     }
 
+    /// Whether the token counts account for everything spent.
+    pub const fn tokens_are_known(&self) -> bool {
+        self.tokens_known
+    }
+
     /// Add another run's usage to this one.
     ///
-    /// An unknown cost stays unknown rather than being read as zero: if either side
-    /// reports a cost the sum is `Some`, and the unknown side contributes nothing —
-    /// which is why [`cost_is_complete`](Self::cost_is_complete) exists to say
-    /// whether the total can be trusted.
+    /// Unknowns stay unknown rather than being read as zero, on both halves. One
+    /// unmeasured run makes the day's tokens incomplete, exactly as one unpriced
+    /// run makes its cost incomplete — a total that quietly excluded it would be a
+    /// budget that stops enforcing the moment an engine stops reporting.
     pub fn add(&mut self, other: &Self) {
         self.tokens_in += other.tokens_in;
         self.tokens_out += other.tokens_out;
+        self.tokens_known = self.tokens_known && other.tokens_known;
         self.cost_usd = match (self.cost_usd, other.cost_usd) {
             (None, None) => None,
             (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),

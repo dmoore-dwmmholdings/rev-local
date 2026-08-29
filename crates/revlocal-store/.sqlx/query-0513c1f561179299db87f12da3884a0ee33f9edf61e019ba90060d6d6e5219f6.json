@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO budget_ledger\n               (repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete,\n                tokens_complete)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT (repo_id, day) DO UPDATE SET\n               runs = budget_ledger.runs + excluded.runs,\n               tokens_in = budget_ledger.tokens_in + excluded.tokens_in,\n               tokens_out = budget_ledger.tokens_out + excluded.tokens_out,\n               cost_usd = budget_ledger.cost_usd + excluded.cost_usd,\n               cost_complete = MIN(budget_ledger.cost_complete, excluded.cost_complete),\n               -- MIN, so one unmeasured run makes the whole day incomplete and no\n               -- later measured run can quietly restore the claim.\n               tokens_complete = MIN(budget_ledger.tokens_complete, excluded.tokens_complete)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "0513c1f561179299db87f12da3884a0ee33f9edf61e019ba90060d6d6e5219f6"
+}

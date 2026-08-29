@@ -38,6 +38,10 @@ fn spent(runs: u32, tokens_in: u64, tokens_out: u64, cost: Option<f64>) -> Budge
         usage: Usage {
             tokens_in,
             tokens_out,
+            // These helpers build ledgers for budget arithmetic, where the counts
+            // are the point; an unmeasured day gets its own test rather than
+            // being the default here.
+            tokens_known: true,
             cost_usd: cost,
         },
         known_cost_usd: cost.unwrap_or(0.0),

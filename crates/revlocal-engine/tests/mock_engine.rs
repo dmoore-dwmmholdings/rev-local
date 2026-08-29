@@ -8,7 +8,12 @@
 
 mod mock_engine {
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::Command;
+    // Only the SIGTERM test pipes stdio, and that test is `#[cfg(unix)]` — so on
+    // Windows this import is unused and `-D warnings` fails the build. A platform
+    // gate on an item is also a gate on everything only that item uses.
+    #[cfg(unix)]
+    use std::process::Stdio;
 
     /// The modes SPEC §8.2 needs covered, and what each is for.
     const LADDER_MODES: [&str; 8] = [

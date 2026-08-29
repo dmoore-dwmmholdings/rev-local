@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,\n                    error, degraded, tokens_in, tokens_out, cost_usd, started_at,\n                    finished_at, transcript_path, created_at, truncated,\n                    omitted_files_json, verdict, summary\n             FROM run WHERE id = ?",
+  "query": "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,\n                    error, degraded, tokens_in, tokens_out, tokens_known, cost_usd, started_at,\n                    finished_at, transcript_path, created_at, truncated,\n                    omitted_files_json, verdict, summary\n             FROM run WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -136,8 +136,19 @@
         }
       },
       {
-        "name": "cost_usd",
+        "name": "tokens_known",
         "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "tokens_known"
+          }
+        }
+      },
+      {
+        "name": "cost_usd",
+        "ordinal": 13,
         "type_info": "Float",
         "origin": {
           "Table": {
@@ -148,7 +159,7 @@
       },
       {
         "name": "started_at",
-        "ordinal": 13,
+        "ordinal": 14,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -159,7 +170,7 @@
       },
       {
         "name": "finished_at",
-        "ordinal": 14,
+        "ordinal": 15,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -170,7 +181,7 @@
       },
       {
         "name": "transcript_path",
-        "ordinal": 15,
+        "ordinal": 16,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -181,7 +192,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 16,
+        "ordinal": 17,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -192,7 +203,7 @@
       },
       {
         "name": "truncated",
-        "ordinal": 17,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -203,7 +214,7 @@
       },
       {
         "name": "omitted_files_json",
-        "ordinal": 18,
+        "ordinal": 19,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -214,7 +225,7 @@
       },
       {
         "name": "verdict",
-        "ordinal": 19,
+        "ordinal": 20,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -225,7 +236,7 @@
       },
       {
         "name": "summary",
-        "ordinal": 20,
+        "ordinal": 21,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -251,6 +262,7 @@
       true,
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -262,5 +274,5 @@
       true
     ]
   },
-  "hash": "bbd2d523b724081d4224a0f3fd47405eb76d98165c50bbc506a91979269b8e35"
+  "hash": "59bd2a7f18064968ddf17995a39cfadb6fd7e5a416b70b161556e6123218019b"
 }

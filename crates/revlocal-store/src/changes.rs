@@ -200,6 +200,7 @@ impl<'a> RunStore<'a> {
         let trigger = run.trigger.as_str();
         let tokens_in = i64::try_from(run.usage.tokens_in).unwrap_or(i64::MAX);
         let tokens_out = i64::try_from(run.usage.tokens_out).unwrap_or(i64::MAX);
+        let tokens_known = i64::from(run.usage.tokens_are_known());
         let started = run.started_at.map(format_time);
         let finished = run.finished_at.map(format_time);
         let created = format_time(run.created_at);
@@ -214,10 +215,10 @@ impl<'a> RunStore<'a> {
         let id = sqlx::query!(
             "INSERT INTO run
                (change_id, attempt, status, engine, depth, trigger, skip_reason, error,
-                degraded, tokens_in, tokens_out, cost_usd, started_at, finished_at,
+                degraded, tokens_in, tokens_out, tokens_known, cost_usd, started_at, finished_at,
                 transcript_path, created_at, truncated, omitted_files_json, verdict,
                 summary)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
             change_id,
             attempt,
@@ -230,6 +231,7 @@ impl<'a> RunStore<'a> {
             run.degraded,
             tokens_in,
             tokens_out,
+            tokens_known,
             run.usage.cost_usd,
             started,
             finished,
@@ -262,7 +264,7 @@ impl<'a> RunStore<'a> {
         let raw = id.get();
         let row = sqlx::query!(
             "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,
-                    error, degraded, tokens_in, tokens_out, cost_usd, started_at,
+                    error, degraded, tokens_in, tokens_out, tokens_known, cost_usd, started_at,
                     finished_at, transcript_path, created_at, truncated,
                     omitted_files_json, verdict, summary
              FROM run WHERE id = ?",
@@ -289,6 +291,7 @@ impl<'a> RunStore<'a> {
             usage: Usage {
                 tokens_in: u64::try_from(row.tokens_in).unwrap_or_default(),
                 tokens_out: u64::try_from(row.tokens_out).unwrap_or_default(),
+                tokens_known: row.tokens_known != 0,
                 cost_usd: row.cost_usd,
             },
             started_at: row
