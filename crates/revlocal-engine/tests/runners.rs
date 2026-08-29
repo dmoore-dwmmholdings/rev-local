@@ -253,6 +253,16 @@ mod runners {
         assert!(outcome.findings.len() == 2, "and the review still arrived");
     }
 
+    // Unix only. These are the two tests in this file that kill a hang-mode
+    // engine, and on Windows killing `run.cmd` terminates cmd.exe while the `node`
+    // grandchild survives holding the pipes — so they hang rather than fail, which
+    // stops the whole run. §8.5's Job Object is unimplemented; REVL-106 tracks it,
+    // and both gates come back with it.
+    //
+    // The fourth file to need this. Every test that kills a hang-mode engine hangs
+    // on Windows and no other test does, which is what makes the mechanism — not
+    // the file — the thing being gated.
+    #[cfg(unix)]
     #[tokio::test]
     async fn runners_a_cancelled_run_is_a_cancellation_not_a_failure() {
         // They lead to different terminal run statuses. Reporting a deliberate stop
@@ -285,6 +295,16 @@ mod runners {
         assert_eq!(error.code(), "engine_cancelled");
     }
 
+    // Unix only. These are the two tests in this file that kill a hang-mode
+    // engine, and on Windows killing `run.cmd` terminates cmd.exe while the `node`
+    // grandchild survives holding the pipes — so they hang rather than fail, which
+    // stops the whole run. §8.5's Job Object is unimplemented; REVL-106 tracks it,
+    // and both gates come back with it.
+    //
+    // The fourth file to need this. Every test that kills a hang-mode engine hangs
+    // on Windows and no other test does, which is what makes the mechanism — not
+    // the file — the thing being gated.
+    #[cfg(unix)]
     #[tokio::test]
     async fn runners_a_timeout_is_reported_as_a_timeout_and_keeps_nothing_fabricated() {
         let cwd = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
