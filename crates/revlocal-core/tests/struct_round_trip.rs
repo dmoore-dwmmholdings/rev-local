@@ -83,6 +83,7 @@ fn a_run() -> Run {
         usage: Usage {
             tokens_in: 1_000,
             tokens_out: 250,
+            tokens_known: true,
             cost_usd: Some(0.01),
         },
         started_at: Some(at()),
@@ -239,6 +240,7 @@ fn an_unknown_cost_never_reads_as_zero_spend() {
     let mut total = Usage {
         tokens_in: 10,
         tokens_out: 5,
+        tokens_known: true,
         cost_usd: None,
     };
     assert!(!total.cost_is_complete());
@@ -246,6 +248,7 @@ fn an_unknown_cost_never_reads_as_zero_spend() {
     total.add(&Usage {
         tokens_in: 1,
         tokens_out: 1,
+        tokens_known: true,
         cost_usd: None,
     });
     assert_eq!(total.cost_usd, None, "unknown + unknown is still unknown");
@@ -254,6 +257,7 @@ fn an_unknown_cost_never_reads_as_zero_spend() {
     total.add(&Usage {
         tokens_in: 0,
         tokens_out: 0,
+        tokens_known: true,
         cost_usd: Some(0.25),
     });
     assert_eq!(total.cost_usd, Some(0.25));
@@ -361,6 +365,7 @@ fn budget_exhaustion_pauses_rather_than_being_read_as_headroom() {
         usage: Usage {
             tokens_in: 900,
             tokens_out: 100,
+            tokens_known: true,
             cost_usd: None,
         },
         known_cost_usd: 0.0,
@@ -369,8 +374,10 @@ fn budget_exhaustion_pauses_rather_than_being_read_as_headroom() {
         entry.runs_exhausted(10),
         "at the limit is exhausted, not one short"
     );
-    assert!(entry.tokens_exhausted(1_000));
-    assert!(!entry.tokens_exhausted(1_001));
+    // Tokens answer the same three ways cost does, since RL-409. This entry's
+    // counts are measured, so "cannot tell" is not one of them here.
+    assert_eq!(entry.tokens_exhausted(1_000), Some(true));
+    assert_eq!(entry.tokens_exhausted(1_001), Some(false));
 
     // The cost side cannot answer, and "cannot tell" must not read as "fine".
     assert!(!entry.cost_is_complete());

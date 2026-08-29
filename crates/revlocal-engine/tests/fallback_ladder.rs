@@ -52,6 +52,7 @@ mod fallback_ladder {
                     usage: Usage {
                         tokens_in: 400,
                         tokens_out: 120,
+                        tokens_known: true,
                         cost_usd: None,
                     },
                 }),

@@ -51,8 +51,25 @@ level, and the tempting collapse is to `false`. D10 says an exhausted budget
 pauses, queues or skips; "unknown" belongs on that side of the line, not on the
 side that proceeds. `Option<bool>` makes a caller write down which it chose.
 
-`tokens_exhausted` stays a plain `bool` — token counts are always known, so there
-is no third case to represent.
+~~`tokens_exhausted` stays a plain `bool` — token counts are always known, so there
+is no third case to represent.~~
+
+**Corrected 2026-08-29 (RL-409).** That sentence was wrong, and wrong in the exact
+way this ADR was written to prevent. Token counts are *not* always known: SPEC
+§8.3's `result.json` schema carries no usage field, so a runner reading it has no
+counts to report and returned `Usage::default()` — zero tokens. A run that spent
+forty thousand was recorded as spending none, and a repo with a two-million-token
+daily limit never reached it.
+
+It read as true because the mock engine reports counts, so every test passed with
+the gap present. The fixture was more honest than the thing it stood in for, which
+is the failure mode a fixture is least able to warn you about.
+
+`tokens_exhausted` now returns `Option<bool>`, for exactly the reason the paragraph
+above gives for cost, and `Usage` carries `tokens_known` so an unmeasured run is
+recorded as unmeasured rather than as free. `Usage::default()` therefore means
+"nobody counted", not "nothing was spent" — the safe direction, and the one that
+makes the original bug impossible to reintroduce by omission.
 
 ## Consequences
 

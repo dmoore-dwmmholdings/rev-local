@@ -85,6 +85,7 @@ mod changes {
             usage: Usage {
                 tokens_in: 100,
                 tokens_out: 20,
+                tokens_known: true,
                 cost_usd: None,
             },
             started_at: Some(at(3)),

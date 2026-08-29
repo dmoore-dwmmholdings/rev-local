@@ -140,6 +140,7 @@ mod budget {
         let usage = Usage {
             tokens_in: 100,
             tokens_out: 50,
+            tokens_known: true,
             cost_usd: Some(1.0),
         };
 
@@ -232,6 +233,7 @@ mod budget {
                 &Usage {
                     tokens_in: 10,
                     tokens_out: 5,
+                    tokens_known: true,
                     cost_usd: None,
                 },
             )
@@ -287,6 +289,7 @@ mod budget {
                         &Usage {
                             tokens_in: 100,
                             tokens_out: 50,
+                            tokens_known: true,
                             cost_usd: Some(0.5),
                         },
                     )
@@ -342,6 +345,7 @@ mod budget {
                             &Usage {
                                 tokens_in: 10,
                                 tokens_out: 0,
+                                tokens_known: true,
                                 cost_usd: Some(0.01),
                             },
                         )

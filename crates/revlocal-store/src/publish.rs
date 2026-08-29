@@ -718,6 +718,9 @@ impl<'a> BudgetLedgerStore<'a> {
     ///
     /// An unreported cost does not add zero and move on: it clears
     /// `cost_complete`, so the day is marked as not fully measured (ADR 0010).
+    /// Since RL-409 an unmeasured *token* count does the same to `tokens_complete`
+    /// — the day's total becomes a lower bound rather than a total, and one
+    /// unmeasured run is enough to say so.
     pub async fn add_run(
         &self,
         repo_id: RepoId,
@@ -731,17 +734,22 @@ impl<'a> BudgetLedgerStore<'a> {
         let tokens_out = i64::try_from(usage.tokens_out).unwrap_or(i64::MAX);
         let cost = usage.cost_usd.unwrap_or(0.0);
         let complete = i64::from(usage.cost_is_complete());
+        let tokens_complete = i64::from(usage.tokens_are_known());
 
         sqlx::query!(
             "INSERT INTO budget_ledger
-               (repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+               (repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete,
+                tokens_complete)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (repo_id, day) DO UPDATE SET
                runs = budget_ledger.runs + excluded.runs,
                tokens_in = budget_ledger.tokens_in + excluded.tokens_in,
                tokens_out = budget_ledger.tokens_out + excluded.tokens_out,
                cost_usd = budget_ledger.cost_usd + excluded.cost_usd,
-               cost_complete = MIN(budget_ledger.cost_complete, excluded.cost_complete)",
+               cost_complete = MIN(budget_ledger.cost_complete, excluded.cost_complete),
+               -- MIN, so one unmeasured run makes the whole day incomplete and no
+               -- later measured run can quietly restore the claim.
+               tokens_complete = MIN(budget_ledger.tokens_complete, excluded.tokens_complete)",
             raw,
             day,
             runs,
@@ -749,6 +757,7 @@ impl<'a> BudgetLedgerStore<'a> {
             tokens_out,
             cost,
             complete,
+            tokens_complete,
         )
         .execute(self.pool)
         .await
@@ -763,7 +772,8 @@ impl<'a> BudgetLedgerStore<'a> {
     pub async fn get(&self, repo_id: RepoId, day: &str) -> Result<Option<BudgetLedgerEntry>> {
         let raw = repo_id.get();
         let row = sqlx::query!(
-            "SELECT repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete
+            "SELECT repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete,
+                    tokens_complete
              FROM budget_ledger WHERE repo_id = ? AND day = ?",
             raw,
             day
@@ -781,8 +791,9 @@ impl<'a> BudgetLedgerStore<'a> {
                 usage: Usage {
                     tokens_in: u64::try_from(row.tokens_in).unwrap_or_default(),
                     tokens_out: u64::try_from(row.tokens_out).unwrap_or_default(),
-                    // Some only when the day is fully measured, so a cost budget
-                    // cannot read an unmeasured day as a cheap one.
+                    // Same rule as cost: a day containing one unmeasured run is a
+                    // day whose token total is a lower bound, not a total.
+                    tokens_known: row.tokens_complete != 0,
                     cost_usd: complete.then_some(known_cost_usd),
                 },
                 known_cost_usd,

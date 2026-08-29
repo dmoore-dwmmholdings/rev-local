@@ -451,6 +451,7 @@ mod state_machine {
         crashed.usage = Usage {
             tokens_in: 5_000,
             tokens_out: 900,
+            tokens_known: true,
             cost_usd: Some(0.4),
         };
         crashed.degraded = Some("salvaged from a fenced block".to_owned());

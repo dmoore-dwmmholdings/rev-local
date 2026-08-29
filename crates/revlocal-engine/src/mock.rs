@@ -131,11 +131,10 @@ impl MockEngine {
             verdict: Verdict::RequestChanges,
             // No cost, exactly like the fixture engine — which is why every
             // inner-loop day is cost-incomplete by design (ADR 0010).
-            usage: Usage {
-                tokens_in: 1_200,
-                tokens_out: 340,
-                cost_usd: None,
-            },
+            // The mock reports counts, which is exactly why RL-409's gap was
+            // invisible: every test passed because the fixture is more honest
+            // than the real engine it stands in for.
+            usage: Usage::measured(1_200, 340),
             transcript: "mock-engine: wrote result.json".to_owned(),
             degraded: None,
             coverage_notes: None,

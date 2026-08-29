@@ -51,6 +51,16 @@ string_enum! {
         /// differs: a real overspend means the budget worked, while this means an
         /// engine reported no price and the budget cannot be enforced at all.
         CostUnknown => "cost_unknown",
+        /// A token limit is configured, but the day's token count is not fully
+        /// known.
+        ///
+        /// Distinct from [`Tokens`](Self::Tokens) for the same reason
+        /// [`CostUnknown`](Self::CostUnknown) is distinct from
+        /// [`Cost`](Self::Cost): a real overspend means the budget worked, while
+        /// this means an engine reported no counts and the budget cannot be
+        /// enforced at all. An operator seeing this should know their token budget
+        /// is advisory for that engine (RL-409).
+        TokensUnknown => "tokens_unknown",
     }
 }
 
@@ -114,17 +124,38 @@ pub fn check(limits: &BudgetLimits, today: Option<&BudgetLedgerEntry>) -> Budget
         };
     }
 
-    if limits.daily_tokens > 0 && today.tokens_exhausted(limits.daily_tokens) {
-        return BudgetDecision::Exhausted {
-            limit: ExhaustedLimit::Tokens,
-            action: limits.on_exhausted,
-            reason: format!(
-                "{} of {} daily tokens used for {}",
-                today.usage.total_tokens(),
-                limits.daily_tokens,
-                today.day
-            ),
-        };
+    if limits.daily_tokens > 0 {
+        // The same three-way answer cost has had since D10. Tokens gained it in
+        // RL-409, when it turned out a real engine reports none and the runner was
+        // recording that as zero.
+        match today.tokens_exhausted(limits.daily_tokens) {
+            Some(true) => {
+                return BudgetDecision::Exhausted {
+                    limit: ExhaustedLimit::Tokens,
+                    action: limits.on_exhausted,
+                    reason: format!(
+                        "{} of {} daily tokens used for {}",
+                        today.usage.total_tokens(),
+                        limits.daily_tokens,
+                        today.day
+                    ),
+                };
+            }
+            Some(false) => {}
+            None => {
+                return BudgetDecision::Exhausted {
+                    limit: ExhaustedLimit::TokensUnknown,
+                    action: limits.on_exhausted,
+                    reason: format!(
+                        "token limit {} cannot be enforced for {}: at least one run \
+                         reported no token count, so the {} recorded is a lower bound",
+                        limits.daily_tokens,
+                        today.day,
+                        today.usage.total_tokens()
+                    ),
+                };
+            }
+        }
     }
 
     if limits.has_cost_limit() {
@@ -179,6 +210,7 @@ mod tests {
             usage: Usage {
                 tokens_in: tokens,
                 tokens_out: 0,
+                tokens_known: true,
                 cost_usd: cost,
             },
             known_cost_usd: cost.unwrap_or(0.0),

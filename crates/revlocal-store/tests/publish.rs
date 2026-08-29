@@ -494,6 +494,7 @@ mod publish {
                     &Usage {
                         tokens_in: 100,
                         tokens_out: 20,
+                        tokens_known: true,
                         cost_usd: Some(0.05),
                     },
                 )
@@ -524,6 +525,7 @@ mod publish {
         let usage = Usage {
             tokens_in: 10,
             tokens_out: 1,
+            tokens_known: true,
             cost_usd: Some(0.01),
         };
 
@@ -571,6 +573,7 @@ mod publish {
                 &Usage {
                     tokens_in: 100,
                     tokens_out: 10,
+                    tokens_known: true,
                     cost_usd: Some(5.0),
                 },
             )
@@ -584,6 +587,7 @@ mod publish {
                 &Usage {
                     tokens_in: 100,
                     tokens_out: 10,
+                    tokens_known: true,
                     cost_usd: None,
                 },
             )
@@ -610,8 +614,10 @@ mod publish {
             entry.known_cost_usd
         );
 
-        // Tokens are always known, so the token budget still holds.
-        assert!(entry.tokens_exhausted(220));
+        // Tokens are known *here* — every run in this test reported counts — so
+        // the token budget still holds. "Always known" was the assumption RL-409
+        // disproved; it is a property of these runs, not of tokens.
+        assert_eq!(entry.tokens_exhausted(220), Some(true));
         // The cost budget cannot answer, and "cannot tell" is not "not exhausted".
         assert_eq!(entry.cost_exhausted(100.0), None);
         // ...unless the known portion already passed it.
@@ -637,6 +643,7 @@ mod publish {
                         &Usage {
                             tokens_in: 10,
                             tokens_out: 5,
+                            tokens_known: true,
                             cost_usd: Some(0.25),
                         },
                     )

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete\n             FROM budget_ledger WHERE repo_id = ? AND day = ?",
+  "query": "SELECT repo_id, day, runs, tokens_in, tokens_out, cost_usd, cost_complete,\n                    tokens_complete\n             FROM budget_ledger WHERE repo_id = ? AND day = ?",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "cost_complete"
           }
         }
+      },
+      {
+        "name": "tokens_complete",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "budget_ledger",
+            "name": "tokens_complete"
+          }
+        }
       }
     ],
     "parameters": {
@@ -91,8 +102,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "fd42962d1d84d40e6aa0d70c5ca91243c7c312a9dda5b49e871fb3ffd0ddb8a1"
+  "hash": "340b4c08114a5df93a01f19197cadc1a98b3c64d791097a2486a618bbf1b8549"
 }

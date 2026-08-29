@@ -65,9 +65,34 @@ impl BudgetLedgerEntry {
         self.runs >= limit
     }
 
-    /// Whether this day's spend has reached `limit` total tokens.
-    pub const fn tokens_exhausted(&self, limit: u64) -> bool {
-        self.usage.total_tokens() >= limit
+    /// Whether this day's token spend has reached `limit`.
+    ///
+    /// Returns `None` when the day contains a run whose tokens nobody measured and
+    /// the known portion has not already passed the limit. The honest answer is
+    /// "cannot tell", and D10 says an exhausted-or-unknown budget pauses rather
+    /// than proceeding.
+    ///
+    /// This was a plain `bool` until RL-409, on ADR 0010's stated grounds that
+    /// "token counts are always known". They are not: §8.3's `result.json` carries
+    /// no usage field, so a real engine's runner had no counts to report and
+    /// returned zero. A caller treating a missing count as "not exhausted" is doing
+    /// exactly what §18 forbids, which is why this is no longer a `bool`.
+    pub const fn tokens_exhausted(&self, limit: u64) -> Option<bool> {
+        if self.usage.total_tokens() >= limit {
+            // Already over on the tokens we do know about; an unmeasured remainder
+            // can only make that more true.
+            return Some(true);
+        }
+        if self.usage.tokens_are_known() {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// Whether this day's token count is fully known.
+    pub const fn tokens_are_complete(&self) -> bool {
+        self.usage.tokens_are_known()
     }
 
     /// Whether this day's cost is fully known.

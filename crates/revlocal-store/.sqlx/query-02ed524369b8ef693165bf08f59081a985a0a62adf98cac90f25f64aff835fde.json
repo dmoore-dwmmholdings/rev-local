@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO run\n               (change_id, attempt, status, engine, depth, trigger, skip_reason, error,\n                degraded, tokens_in, tokens_out, tokens_known, cost_usd, started_at, finished_at,\n                transcript_path, created_at, truncated, omitted_files_json, verdict,\n                summary)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 21
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "02ed524369b8ef693165bf08f59081a985a0a62adf98cac90f25f64aff835fde"
+}
