@@ -1230,6 +1230,110 @@ mod watch_loop {
         Ok(())
     }
 
+    /// A real git repository with `commits`, one of which is a lockfile bump.
+    fn a_repo_with_a_lockfile_commit(dir: &std::path::Path) -> Result<(), String> {
+        let run = |args: &[&str]| -> Result<(), String> {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+            }
+            Ok(())
+        };
+        run(&["init", "--quiet", "-b", "main", "."])?;
+        run(&["config", "user.email", "t@e.invalid"])?;
+        run(&["config", "user.name", "T"])?;
+        std::fs::write(dir.join("a.rs"), "code\n").map_err(|e| e.to_string())?;
+        run(&["add", "a.rs"])?;
+        run(&["commit", "--quiet", "-m", "add a helper"])?;
+        std::fs::write(dir.join("Cargo.lock"), "lock\n").map_err(|e| e.to_string())?;
+        run(&["add", "Cargo.lock"])?;
+        run(&["commit", "--quiet", "-m", "bump deps"])?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_skipped_change_is_recorded_and_its_reason_shown() -> Result<(), String> {
+        // §9.4: a skipped change is written down with its reason. A change that
+        // vanishes is indistinguishable from one that was never seen, and "why did
+        // rev-local ignore my commit?" has an answer only if the reason is shown.
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
+
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let pass = report.passes.first().ok_or("one repository, one pass")?;
+
+        assert_eq!(pass.discovered, 2);
+        assert_eq!(pass.recorded, 1, "the lockfile commit is not for reviewing");
+        assert_eq!(pass.skipped.len(), 1);
+        assert!(
+            pass.skipped[0].contains("ignore_globs"),
+            "the reason must survive: {:?}",
+            pass.skipped
+        );
+
+        let human = report.render_human();
+        assert!(
+            human.contains("2 discovered, 1 recorded, 1 skipped"),
+            "{human}"
+        );
+        assert!(human.contains("skipped:"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_cursor_advances_so_a_second_pass_finds_nothing() -> Result<(), String> {
+        // Without this, every poll rediscovers the whole history forever — which
+        // looks like working and costs the same as never advancing.
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
+
+        let first = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert_eq!(first.passes[0].discovered, 2);
+        assert!(
+            first.passes[0].cursor.is_some(),
+            "the cursor must have moved"
+        );
+
+        let second = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert_eq!(
+            second.passes[0].discovered, 0,
+            "a quiet repository must stay quiet"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_cursor_advances_past_a_skipped_change() -> Result<(), String> {
+        // The lockfile commit is the newest one. If the cursor stopped short of a
+        // skipped change, it would be re-decided on every poll forever.
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
+
+        tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let second = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert_eq!(second.passes[0].discovered, 0);
+        assert!(
+            second.passes[0].skipped.is_empty(),
+            "a skipped change must not be re-decided: {:?}",
+            second.passes[0].skipped
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn a_tick_says_reviews_are_not_running_yet() -> Result<(), String> {
         // §18. A `watch` that silently reviewed nothing would be indistinguishable
