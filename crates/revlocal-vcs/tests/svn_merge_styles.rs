@@ -93,10 +93,7 @@ fn four_merge_styles(dir: &Path) -> Result<String, String> {
     let repo = dir.join("repo");
     run("svnadmin", &["create", &repo.display().to_string()], dir)?;
     // Three slashes so a Windows drive letter reads as a path, not a host.
-    let url = format!(
-        "file:///{}",
-        repo.display().to_string().trim_start_matches('/')
-    );
+    let url = revlocal_vcs::svn::file_url(&repo);
 
     run(
         "svn",

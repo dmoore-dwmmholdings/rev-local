@@ -13,8 +13,8 @@ pub mod materialize;
 pub mod pseudo_pr;
 
 pub use cmd::{
-    doctor_line, is_available, non_interactive_env, CertFailure, SvnError, SvnOutput, SvnRunner,
-    DEFAULT_TIMEOUT,
+    doctor_line, file_url, is_available, non_interactive_env, CertFailure, SvnError, SvnOutput,
+    SvnRunner, DEFAULT_TIMEOUT,
 };
 pub use demotion::{
     constituent_revisions, plan, prior_context, DemotionPlan, Disposition, PlannedFinding,
