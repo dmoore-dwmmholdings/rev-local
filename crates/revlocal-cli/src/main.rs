@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, doctor, exit, hooks, inspect, repo};
+use revlocal_cli::{control, doctor, exit, hooks, inspect, repo, watch};
 
 mod publish;
 mod review;
@@ -45,6 +45,25 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Run the daemon in the foreground (SPEC §4.2, §7).
+    Watch {
+        /// Do one tick and stop, rather than looping.
+        ///
+        /// What a test and a cron job both want, and what makes the loop's
+        /// decision observable without waiting for an interval.
+        #[arg(long)]
+        once: bool,
+        /// Seconds between ticks when looping.
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Inspect runs (SPEC §14).
@@ -556,6 +575,10 @@ enum CliError {
     #[error(transparent)]
     Inspect(#[from] inspect::InspectError),
 
+    /// A watch tick failed.
+    #[error(transparent)]
+    Watch(#[from] watch::WatchError),
+
     /// A report could not be serialised.
     #[error("could not render the report: {0}")]
     Json(#[from] serde_json::Error),
@@ -606,6 +629,44 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Watch {
+            once,
+            interval,
+            database,
+            json,
+        } => {
+            let pool = revlocal_store::open(&database).await?;
+
+            // Ctrl-C ends the loop rather than killing the process: §4.2 runs the
+            // daemon in-process, and a half-written run row is worse than a
+            // slightly later exit. RL-501's recovery exists for the case where
+            // that promise cannot be kept.
+            let stop = tokio_util::sync::CancellationToken::new();
+            let signal = stop.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    eprintln!("revlocal: stopping after this tick");
+                    signal.cancel();
+                }
+            });
+
+            loop {
+                let report = watch::tick(&pool, chrono::Utc::now()).await?;
+                println!("{}", watch::render(&report, json)?);
+
+                if once || stop.is_cancelled() {
+                    break;
+                }
+                tokio::select! {
+                    () = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
+                    () = stop.cancelled() => break,
+                }
+            }
+
+            pool.close().await;
+            Ok(())
+        }
+
         Command::Runs { command } => match command {
             RunsCommand::List {
                 repo,

@@ -104,6 +104,7 @@ mod cli_surface {
         "budget",
         "runs",
         "findings",
+        "watch",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
@@ -111,10 +112,6 @@ mod cli_surface {
     /// An entry is a claim, not a placeholder: naming the blocker is what keeps
     /// this from becoming a list nobody revisits.
     const NOT_YET: &[(&str, &str)] = &[
-        (
-            "watch",
-            "needs the daemon main loop; the pieces exist, nothing runs them",
-        ),
         (
             "backfill",
             "RL-1007 built the scheduler; this is its front end",
@@ -1135,5 +1132,158 @@ mod runs_and_findings {
         assert!(human.contains("skipped: ignored_paths"), "{human}");
         assert!(human.contains("degraded: output salvaged"), "{human}");
         assert!(human.contains("error: interrupted"), "{human}");
+    }
+}
+
+// --- watch (RL-1201, §4.2, §7) ---------------------------------------------
+
+mod watch_loop {
+    use revlocal_cli::watch::{render, tick};
+    use revlocal_store::Pool;
+
+    async fn store() -> Result<(Pool, tempfile::TempDir), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((pool, dir))
+    }
+
+    fn now() -> revlocal_core::Timestamp {
+        chrono::Utc::now()
+    }
+
+    async fn add_repo(pool: &Pool, name: &str, path: &str, enabled: bool) -> Result<(), String> {
+        let at = now();
+        revlocal_store::RepoStore::new(pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: name.to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                local_path: Some(path.to_owned()),
+                remote_url: None,
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled,
+                config_json: "{}".to_owned(),
+                created_at: at,
+                updated_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_kill_switch_stops_the_loop_and_says_how_to_undo_it() -> Result<(), String> {
+        // §12.1, checked at the level that actually enforces it. The scheduler
+        // orders the check first; this asserts `watch` honours the answer.
+        let (pool, _dir) = store().await?;
+        add_repo(&pool, "acme", "/nonexistent", true).await?;
+        revlocal_store::SettingStore::new(&pool)
+            .set_paused(true, now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert!(report.paused);
+        assert!(report.passes.is_empty(), "nothing may run while paused");
+        let idle = report.idle.clone().unwrap_or_default();
+        assert!(idle.contains("kill switch"), "{idle}");
+        assert!(
+            idle.contains("revlocal resume"),
+            "must say how to undo it: {idle}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_disabled_repository_is_not_polled() -> Result<(), String> {
+        // `enabled` is the per-repo switch §13.2 gives, and it has to mean
+        // something before the scheduler is asked anything.
+        let (pool, _dir) = store().await?;
+        add_repo(&pool, "off", "/nonexistent", false).await?;
+
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        assert_eq!(report.repos, 0);
+        assert!(report.passes.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_broken_repository_does_not_stop_the_others() -> Result<(), String> {
+        // The property that decides whether a daemon is usable with eleven
+        // repositories. An unreachable remote is recorded against the repository
+        // that has it, and the rest are still polled.
+        let (pool, _dir) = store().await?;
+        add_repo(&pool, "broken", "/definitely/not/a/repo", true).await?;
+        add_repo(&pool, "also-broken", "/nor/this/one", true).await?;
+
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert_eq!(report.passes.len(), 2, "both were attempted");
+        assert!(
+            report.passes.iter().all(|p| p.error.is_some()),
+            "each failure is recorded against its own repository"
+        );
+
+        let human = report.render_human();
+        assert!(human.contains("broken — FAILED"), "{human}");
+        assert!(human.contains("also-broken — FAILED"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_tick_says_reviews_are_not_running_yet() -> Result<(), String> {
+        // §18. A `watch` that silently reviewed nothing would be indistinguishable
+        // from one whose repositories are quiet — which is the failure this whole
+        // project keeps documenting.
+        let (pool, _dir) = store().await?;
+        add_repo(&pool, "acme", "/nonexistent", true).await?;
+
+        let human = tick(&pool, now())
+            .await
+            .map_err(|e| e.to_string())?
+            .render_human();
+
+        assert!(human.contains("Discovery only"), "{human}");
+        assert!(
+            human.contains("revlocal review"),
+            "must name what does work: {human}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_empty_install_ticks_without_complaining() -> Result<(), String> {
+        // Running `watch` before adding a repository is how somebody checks it
+        // works. It should say what it saw, not fail.
+        let (pool, _dir) = store().await?;
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert_eq!(report.repos, 0);
+        assert!(
+            report.idle.is_none(),
+            "an empty install is not an error state"
+        );
+        assert!(report.render_human().contains("nothing due"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_json_omits_what_is_absent_rather_than_nulling_it() -> Result<(), String> {
+        let (pool, _dir) = store().await?;
+        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let json = render(&report, true).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+        assert!(parsed["repos"].is_number());
+        assert!(parsed["passes"].is_array());
+        assert!(parsed["paused"].is_boolean());
+        // Present means "something to say", the same rule the other reports follow.
+        assert!(parsed.get("idle").is_none(), "{json}");
+        Ok(())
     }
 }

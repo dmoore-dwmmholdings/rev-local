@@ -14,5 +14,6 @@ pub mod exit;
 pub mod hooks;
 pub mod inspect;
 pub mod repo;
+pub mod watch;
 
 pub use exit::Exit;
