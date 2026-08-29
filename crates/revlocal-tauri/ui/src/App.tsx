@@ -4,6 +4,15 @@ import { describe, inTauri, invoke, onRunEvent, severityOf, type UiEvent } from 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
 
+/** Read something a rejected promise threw, without assuming it is an Error. */
+function messageOf(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'remediation' in error) {
+    return String((error as { remediation: unknown }).remediation);
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 export function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [connected, setConnected] = useState(false);
@@ -12,19 +21,46 @@ export function App() {
   useEffect(() => {
     let seq = 0;
     let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    // Two different failures, and they had the same symptom until this was split.
+    //
+    // Not being in the app at all is one thing. Being in the app and having the
+    // subscription *rejected* — a capability Tauri did not grant — is another,
+    // and it used to render as "open this from the app rather than a browser":
+    // the one diagnosis guaranteed to be wrong for somebody already looking at
+    // the app. §18 — an error must say what to do, and that one sent people to
+    // do the thing they had already done.
+    if (!inTauri()) {
+      setNotice('Not connected. Open this window from the rev-local app rather than a browser.');
+      return;
+    }
 
     // §15: live updates come from events, not from polling the database. There is
     // no interval here and no fetch — if this component ever grows one, that rule
     // has been broken.
-    void onRunEvent((event) => {
+    onRunEvent((event) => {
       seq += 1;
       setEntries((previous) => [{ event, at: new Date(), seq }, ...previous].slice(0, 500));
-    }).then((off) => {
-      unsubscribe = off;
-      setConnected(inTauri());
-    });
+    })
+      .then((off) => {
+        // An effect that has already been cleaned up must still release the
+        // subscription it asked for, or a remount leaks one listener per mount.
+        if (cancelled) {
+          off();
+          return;
+        }
+        unsubscribe = off;
+        setConnected(true);
+      })
+      .catch((error: unknown) => {
+        setNotice(`Live updates are not arriving — ${messageOf(error)}`);
+      });
 
-    return () => unsubscribe?.();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   async function killSwitch() {
@@ -41,11 +77,7 @@ export function App() {
       await invoke('kill_switch');
       setNotice('Kill switch engaged. Reviews stopped; pending actions held.');
     } catch (error) {
-      const remediation =
-        typeof error === 'object' && error !== null && 'remediation' in error
-          ? String((error as { remediation: unknown }).remediation)
-          : null;
-      setNotice(remediation ? `Could not engage the kill switch — ${remediation}` : 'Could not engage the kill switch.');
+      setNotice(`Could not engage the kill switch — ${messageOf(error)}`);
     }
   }
 
@@ -77,7 +109,7 @@ export function App() {
           <p className="empty">
             {connected
               ? 'Waiting for the daemon. Nothing has run yet.'
-              : 'Not connected. Open this window from the rev-local app rather than a browser.'}
+              : 'Not receiving events. See the message above.'}
           </p>
         ) : (
           <table>

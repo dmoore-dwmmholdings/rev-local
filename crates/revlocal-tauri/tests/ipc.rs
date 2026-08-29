@@ -414,3 +414,93 @@ fn the_front_end_does_not_poll() -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Tauri v2 denies every core API call no capability grants (RL-1101, §15).
+///
+/// This is the shape of bug that compiles, launches, renders, and does nothing.
+/// With no `capabilities/` directory the window came up perfectly and
+/// `event.listen` rejected — so the front end sat at "not connected" while every
+/// Rust-side test passed, because none of them cross the boundary.
+///
+/// A file's existence is a weak thing to assert. It is asserted here because the
+/// alternative is a webview, and because deleting this file is exactly how the
+/// bug happened the first time.
+#[test]
+fn the_window_is_granted_the_permissions_it_needs() -> Result<(), String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/default.json");
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "reading {}: {e}\n  Tauri v2 denies every core API call that no \
+             capability grants, so without this the window renders and the front \
+             end can do nothing",
+            path.display()
+        )
+    })?;
+
+    let capability: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+
+    let permissions = capability
+        .get("permissions")
+        .and_then(|p| p.as_array())
+        .ok_or("no `permissions` array")?
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect::<Vec<_>>();
+
+    // The event channel is the whole of §15's "live updates come from events".
+    // Losing this one permission turns the live UI into a blank one, silently.
+    assert!(
+        permissions
+            .iter()
+            .any(|p| *p == "core:event:allow-listen" || *p == "core:default"),
+        "nothing grants event listening; the run feed will never receive anything: {permissions:?}"
+    );
+
+    // The window this applies to must be the one that exists. A capability
+    // scoped to a label no window has is indistinguishable from no capability.
+    let windows = capability
+        .get("windows")
+        .and_then(|w| w.as_array())
+        .ok_or("no `windows` array")?;
+    let conf = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"),
+    )
+    .map_err(|e| format!("reading tauri.conf.json: {e}"))?;
+    let conf: serde_json::Value = serde_json::from_str(&conf).map_err(|e| e.to_string())?;
+    let label = conf
+        .pointer("/app/windows/0/label")
+        .and_then(|l| l.as_str())
+        .unwrap_or("main");
+    assert!(
+        windows.iter().any(|w| w.as_str() == Some(label)),
+        "the capability targets {windows:?} but the window is labelled {label:?}"
+    );
+    Ok(())
+}
+
+/// A rejected subscription must not be reported as "you are in a browser".
+///
+/// It was. A denied capability made `listen` reject, the `.then` never ran, and
+/// the UI said "open this window from the rev-local app rather than a browser" to
+/// somebody already looking at the rev-local app — §18's rule broken in the worst
+/// direction, since the suggested fix was the thing they had already done.
+#[test]
+fn a_failed_subscription_is_distinguished_from_a_browser() -> Result<(), String> {
+    let app = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/src/App.tsx"),
+    )
+    .map_err(|e| format!("reading ui/src/App.tsx: {e}"))?;
+
+    assert!(
+        app.contains(".catch("),
+        "the subscription's rejection is swallowed; a denied capability will \
+         render as some other diagnosis"
+    );
+    assert!(
+        app.contains("if (!inTauri())"),
+        "not being in the app must be decided before subscribing, so the two \
+         failures cannot share a message"
+    );
+    Ok(())
+}

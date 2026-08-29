@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"What the rev-local window is allowed to do. Tauri v2 denies every core API call that is not granted here, and a denial arrives in the front end as a rejected promise — so an absent capability file is not a smaller surface, it is a window that renders and can do nothing.","local":true,"windows":["main"],"permissions":["core:default","core:event:allow-listen","core:event:allow-unlisten"]}}

@@ -66,7 +66,21 @@ fn tray_menu(app: &tauri::AppHandle<tauri::Wry>) -> tauri::Result<Menu<tauri::Wr
     Ok(menu)
 }
 
-fn main() {
+/// Exit code, not a panic (ADR 0003).
+///
+/// A window that fails to start is the one moment a desktop user has no window to
+/// be told anything in, so the message goes to stderr and the shell gets a code.
+/// A panic here would print a backtrace and the word "panicked" to somebody whose
+/// actual problem is a missing webview.
+fn main() -> std::process::ExitCode {
+    if let Err(error) = run() {
+        eprintln!("revlocal: the desktop app could not start: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![kill_switch])
         .setup(|app| {
@@ -121,5 +135,4 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("the rev-local window could not start");
 }
