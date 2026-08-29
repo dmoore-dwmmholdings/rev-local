@@ -423,6 +423,38 @@ impl<'a> PublishActionStore<'a> {
         Ok(affected)
     }
 
+    /// Put one failed action back in the queue.
+    ///
+    /// §14 names this and `replay` separately, and the difference is the unit:
+    /// `replay --run R --target T` re-queues every failed action for a target,
+    /// while this re-queues exactly one. When a run produced eight comments and
+    /// one was rejected for a bad path, replaying the target re-posts the seven
+    /// that already landed.
+    ///
+    /// Only a `failed` action is retryable. Returning the count rather than `()`
+    /// lets the caller tell "retried it" from "there was nothing in that state",
+    /// which is the difference between a working command and one that quietly did
+    /// nothing.
+    pub async fn reset_one_for_retry(&self, id: PublishActionId) -> Result<u64> {
+        let raw = id.get();
+        let pending = PublishActionStatus::Pending.as_str();
+        let failed = PublishActionStatus::Failed.as_str();
+
+        let affected = sqlx::query!(
+            "UPDATE publish_action
+             SET status = ?, attempts = 0, next_attempt_at = NULL, error = NULL
+             WHERE id = ? AND status = ?",
+            pending,
+            raw,
+            failed
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        Ok(affected)
+    }
+
     /// Whether a `(target, capability)` pair has ever been delivered successfully.    /// Whether a `(target, capability)` pair has ever been delivered successfully.
     ///
     /// Feeds the decision of record that first use of a pair is always high risk
@@ -766,6 +798,28 @@ impl<'a> BudgetLedgerStore<'a> {
         })?;
 
         Ok(())
+    }
+
+    /// Clear one repo's spend for one day (§14's `budget reset --repo N`).
+    ///
+    /// Returns whether a row was there. An operator resetting a budget that was
+    /// never spent should be told so, not left wondering whether it worked.
+    ///
+    /// This deletes the *allowance* accounting, not the record that the work
+    /// happened: runs, findings and the audit log are untouched, so the spend is
+    /// still explainable afterwards. A reset that erased the history would make a
+    /// budget question unanswerable the moment somebody used the escape hatch.
+    pub async fn reset(&self, repo_id: RepoId, day: &str) -> Result<bool> {
+        let raw = repo_id.get();
+        let affected = sqlx::query!(
+            "DELETE FROM budget_ledger WHERE repo_id = ? AND day = ?",
+            raw,
+            day
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
     }
 
     /// One day's spend, if anything was spent.

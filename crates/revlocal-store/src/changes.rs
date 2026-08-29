@@ -555,6 +555,46 @@ impl<'a> RunStore<'a> {
         Ok(u32::try_from(row.total).unwrap_or(u32::MAX))
     }
 
+    /// Delete runs finished before `before`, and say what went (SPEC §5.1, §14).
+    ///
+    /// §5.1: run and finding rows are never auto-deleted in v1, and this is the
+    /// manual escape hatch. Findings and publish actions go with their runs by
+    /// `ON DELETE CASCADE`.
+    ///
+    /// The transcript paths are returned rather than just counted, because the
+    /// row is the only thing that knows where the file is. Deleting the row and
+    /// leaving the file would leak disk space permanently and silently — the
+    /// opposite of what somebody reclaiming space asked for.
+    ///
+    /// Only runs that have **finished** are eligible. A run with no `finished_at`
+    /// is either in flight or was interrupted, and deleting it mid-flight would
+    /// leave the daemon writing to a row that is gone.
+    pub async fn delete_finished_before(&self, before: Timestamp) -> Result<(u64, Vec<String>)> {
+        let cutoff = format_time(before);
+
+        // Read the paths first: after the delete there is nothing left to ask.
+        let transcripts = sqlx::query!(
+            "SELECT transcript_path FROM run
+             WHERE finished_at IS NOT NULL AND finished_at < ?",
+            cutoff
+        )
+        .fetch_all(self.pool)
+        .await?
+        .into_iter()
+        .filter_map(|row| row.transcript_path)
+        .collect();
+
+        let deleted = sqlx::query!(
+            "DELETE FROM run WHERE finished_at IS NOT NULL AND finished_at < ?",
+            cutoff
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        Ok((deleted, transcripts))
+    }
+
     /// Every run belonging to one change, in creation order.
     pub async fn list_for_change(&self, change_id: ChangeId) -> Result<Vec<Run>> {
         let raw = change_id.get();

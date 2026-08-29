@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{backfill, control, doctor, exit, hooks, inspect, repo, watch, webhook};
+use revlocal_cli::{backfill, control, decide, doctor, exit, hooks, inspect, repo, watch, webhook};
 
 mod publish;
 mod review;
@@ -210,6 +210,26 @@ enum DbCommand {
         /// Database file. Created if it does not exist.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete runs that finished before a date, with their findings.
+    ///
+    /// §5.1 keeps run and finding rows forever in v1; this is the manual escape
+    /// hatch. Transcript files go with their runs, because the row is the only
+    /// thing that knows where the file is.
+    Vacuum {
+        /// Delete runs that finished before this day, `YYYY-MM-DD`.
+        #[arg(long, value_name = "DATE")]
+        before: String,
+        /// Database file.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -221,6 +241,23 @@ enum PublishSubcommand {
         /// The run to report on.
         #[arg(long, value_name = "ID")]
         run: i64,
+        /// Database file.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Print the machine-readable report instead of the human one.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Put one failed action back in the queue.
+    ///
+    /// One action, not one target — which is the difference from `replay`. When a
+    /// run produced eight comments and one was rejected for a bad path, replaying
+    /// the target re-posts the seven that already landed.
+    Retry {
+        /// The action to retry, from `revlocal publish status`.
+        #[arg(value_name = "ACTION_ID")]
+        action_id: i64,
         /// Database file.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
@@ -387,6 +424,22 @@ enum RepoCommand {
 /// `revlocal runs …`.
 #[derive(Debug, Subcommand)]
 enum RunsCommand {
+    /// Queue another attempt at the same change.
+    ///
+    /// The old run is left as it is. A run is the record of one attempt, and
+    /// rewriting it would lose the evidence of what went wrong the first time.
+    Retry {
+        /// The run to retry.
+        #[arg(value_name = "RUN_ID")]
+        run_id: i64,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// List recent runs, newest first.
     List {
         /// Narrow to one repository.
@@ -423,6 +476,26 @@ enum RunsCommand {
 /// `revlocal findings …`.
 #[derive(Debug, Subcommand)]
 enum FindingsCommand {
+    /// Stop proposing a finding, by its fingerprint.
+    Suppress {
+        /// The fingerprint to suppress, from `revlocal findings list`.
+        #[arg(value_name = "FINGERPRINT")]
+        fingerprint: String,
+        /// Scope it to one repository. Omitted suppresses it everywhere.
+        ///
+        /// Global is the wider choice, not the safer one, so it is what you get
+        /// by asking rather than by leaving something out — and the report always
+        /// says which it did.
+        #[arg(long, value_name = "NAME")]
+        repo: Option<String>,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// List findings from recent runs.
     List {
         /// Narrow to one repository.
@@ -455,11 +528,65 @@ enum ApprovalsCommand {
         #[arg(long)]
         json: bool,
     },
+
+    /// Approve one action, every action in a run, or everything waiting.
+    Approve {
+        /// The action to approve.
+        ///
+        /// Exactly one of this, `--run` or `--all`. Approving is the one
+        /// irreversible half of §12.4, so the scope is stated rather than defaulted.
+        #[arg(value_name = "ID", group = "scope")]
+        id: Option<i64>,
+        /// Approve every waiting action for one run.
+        #[arg(long, value_name = "RUN", group = "scope")]
+        run: Option<i64>,
+        /// Approve everything waiting.
+        #[arg(long, group = "scope")]
+        all: bool,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Reject one action, optionally suppressing its finding.
+    Reject {
+        /// The action to reject.
+        #[arg(value_name = "ID")]
+        id: i64,
+        /// Also suppress the finding, so it is not proposed again.
+        #[arg(long)]
+        suppress: bool,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// `revlocal budget …`.
 #[derive(Debug, Subcommand)]
 enum BudgetCommand {
+    /// Clear today's spend so work can resume before midnight.
+    ///
+    /// The allowance accounting only: runs, findings and the audit log are
+    /// untouched, so the spend is still explainable afterwards.
+    Reset {
+        /// Which repository, by name.
+        #[arg(long, value_name = "NAME")]
+        repo: String,
+        /// The database to use.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show today's spend against the configured ceilings.
     Show {
         /// Which repository.
@@ -668,6 +795,10 @@ enum CliError {
     #[error(transparent)]
     Webhook(#[from] webhook::WebhookError),
 
+    /// A decision could not be recorded.
+    #[error(transparent)]
+    Decide(#[from] decide::DecideError),
+
     /// A report could not be serialised.
     #[error("could not render the report: {0}")]
     Json(#[from] serde_json::Error),
@@ -687,14 +818,35 @@ enum CliError {
 /// Dispatch one command.
 async fn run(command: Command) -> Result<(), CliError> {
     match command {
-        Command::Db {
-            command: DbCommand::Migrate { database },
-        } => {
-            let pool = revlocal_store::open(&database).await?;
-            pool.close().await;
-            println!("revlocal: schema is up to date at {}", database.display());
-            Ok(())
-        }
+        Command::Db { command } => match command {
+            DbCommand::Migrate { database, json } => {
+                let pool = revlocal_store::open(&database).await?;
+                pool.close().await;
+                let path = database.display().to_string();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"database": path, "migrated": true})
+                    );
+                } else {
+                    println!("revlocal: schema is up to date at {path}");
+                }
+                Ok(())
+            }
+
+            DbCommand::Vacuum {
+                before,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::vacuum(&pool, &before).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+        },
         Command::Review { repo, rev, json } => {
             review::run(&repo, &rev, json).await?;
             Ok(())
@@ -708,6 +860,18 @@ async fn run(command: Command) -> Result<(), CliError> {
                 } => publish::status(&database, run, json)
                     .await
                     .map_err(Box::new)?,
+                PublishSubcommand::Retry {
+                    action_id,
+                    database,
+                    json,
+                } => {
+                    let pool = revlocal_store::open(&database).await?;
+                    let report = decide::retry_action(&pool, action_id).await;
+                    pool.close().await;
+                    let report = report?;
+                    println!("{}", decide::render(&report, report.render_human(), json)?);
+                }
+
                 PublishSubcommand::Replay {
                     run,
                     target,
@@ -774,6 +938,19 @@ async fn run(command: Command) -> Result<(), CliError> {
         }
 
         Command::Runs { command } => match command {
+            RunsCommand::Retry {
+                run_id,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::retry_run(&pool, run_id, chrono::Utc::now()).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+
             RunsCommand::List {
                 repo,
                 status,
@@ -810,6 +987,22 @@ async fn run(command: Command) -> Result<(), CliError> {
         },
 
         Command::Findings { command } => match command {
+            FindingsCommand::Suppress {
+                fingerprint,
+                repo,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report =
+                    decide::suppress(&pool, &fingerprint, repo.as_deref(), chrono::Utc::now())
+                        .await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+
             FindingsCommand::List {
                 repo,
                 severity,
@@ -833,6 +1026,42 @@ async fn run(command: Command) -> Result<(), CliError> {
         },
 
         Command::Approvals { command } => match command {
+            ApprovalsCommand::Approve {
+                id,
+                run,
+                database,
+                json,
+                ..
+            } => {
+                // `--all` is the remaining case: clap's group has already refused
+                // any two of the three together.
+                let scope = match (id, run) {
+                    (Some(id), _) => decide::Scope::One(id),
+                    (_, Some(run)) => decide::Scope::Run(run),
+                    _ => decide::Scope::All,
+                };
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::approve(&pool, scope).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+
+            ApprovalsCommand::Reject {
+                id,
+                suppress,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::reject(&pool, id, suppress, chrono::Utc::now()).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+
             ApprovalsCommand::List { database, json } => {
                 let pool = revlocal_store::open(&database).await?;
                 let report = inspect::approvals(&pool).await?;
@@ -844,6 +1073,19 @@ async fn run(command: Command) -> Result<(), CliError> {
         },
 
         Command::Budget { command } => match command {
+            BudgetCommand::Reset {
+                repo,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = decide::reset_budget(&pool, &repo, chrono::Utc::now()).await;
+                pool.close().await;
+                let report = report?;
+                println!("{}", decide::render(&report, report.render_human(), json)?);
+                Ok(())
+            }
+
             BudgetCommand::Show {
                 repo,
                 database,

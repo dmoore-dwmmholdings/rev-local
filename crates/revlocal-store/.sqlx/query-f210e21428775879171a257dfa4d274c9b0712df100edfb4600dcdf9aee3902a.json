@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM budget_ledger WHERE repo_id = ? AND day = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f210e21428775879171a257dfa4d274c9b0712df100edfb4600dcdf9aee3902a"
+}

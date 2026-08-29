@@ -10,6 +10,7 @@
 
 pub mod backfill;
 pub mod control;
+pub mod decide;
 pub mod doctor;
 pub mod exit;
 pub mod hooks;

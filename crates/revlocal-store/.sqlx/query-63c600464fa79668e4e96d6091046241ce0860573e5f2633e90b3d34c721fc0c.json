@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM run WHERE finished_at IS NOT NULL AND finished_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "63c600464fa79668e4e96d6091046241ce0860573e5f2633e90b3d34c721fc0c"
+}

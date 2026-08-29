@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT transcript_path FROM run\n             WHERE finished_at IS NOT NULL AND finished_at < ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "transcript_path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run",
+            "name": "transcript_path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "329b0a3ccf3ce83355c7c9d01ab3f42eb0cedca8822a69409d884c2a98d566c7"
+}
