@@ -90,7 +90,7 @@ mod cli_surface {
 
     /// Command groups that exist today.
     const IMPLEMENTED: &[&str] = &[
-        "db", "publish", "targets", "review", "repo", "pause", "resume", "kill",
+        "db", "publish", "targets", "review", "repo", "pause", "resume", "kill", "doctor",
     ];
 
     /// Command groups §14 names that are not built yet, and what each waits on.
@@ -98,10 +98,6 @@ mod cli_surface {
     /// An entry is a claim, not a placeholder: naming the blocker is what keeps
     /// this from becoming a list nobody revisits.
     const NOT_YET: &[(&str, &str)] = &[
-        (
-            "doctor",
-            "RL-1202 — needs the engine and MCP probes assembled",
-        ),
         (
             "watch",
             "needs the daemon main loop; the pieces exist, nothing runs them",

@@ -9,6 +9,7 @@
 //! stabilise.
 
 pub mod control;
+pub mod doctor;
 pub mod exit;
 
 pub use exit::Exit;

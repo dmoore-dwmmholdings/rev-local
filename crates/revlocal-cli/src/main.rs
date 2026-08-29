@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, exit};
+use revlocal_cli::{control, doctor, exit};
 
 mod publish;
 mod repo;
@@ -46,6 +46,22 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Check prerequisites, engines and publish targets (SPEC §8.4).
+    ///
+    /// The first thing to run on a fresh install, and the thing to run again when
+    /// reviews have quietly stopped.
+    Doctor {
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+        /// How many configured repositories use Subversion.
+        ///
+        /// Temporary: once `repo add` lands this comes from the database. Until
+        /// then, a missing `svn` cannot be judged blocking or not without it.
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        svn_repos: usize,
     },
 
     /// Stop all reviewing (SPEC §12.1). Reversible; nothing is lost.
@@ -245,6 +261,9 @@ fn main() -> ExitCode {
         // §14's 2: the caller's mistake. Retrying will not help, and the command
         // has already printed what to do instead.
         Err(CliError::Usage) => exit::Exit::Usage.into(),
+        // `doctor` printed the failing checks and their remediation; repeating a
+        // summary line here would say less than the report already did.
+        Err(CliError::Unhealthy) => exit::Exit::Error.into(),
         Err(e) => {
             eprintln!("revlocal: {e}");
             // Every other error is `Error` until a command has a reason to say
@@ -282,6 +301,14 @@ enum CliError {
     /// A control command failed.
     #[error(transparent)]
     Control(#[from] control::ControlError),
+
+    /// A report could not be serialised.
+    #[error("could not render the report: {0}")]
+    Json(#[from] serde_json::Error),
+
+    /// `doctor` found something blocking. Exits 1, having already said what.
+    #[error("")]
+    Unhealthy,
 
     /// The invocation was wrong. Exits 2 rather than 1 (§14).
     ///
@@ -325,6 +352,16 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Doctor { json, svn_repos } => {
+            let report = doctor::gather(svn_repos);
+            println!("{}", doctor::render(&report, json)?);
+            // §14: a doctor that always exits 0 is a doctor no script can use.
+            if report.has_failures() {
+                return Err(CliError::Unhealthy);
+            }
+            Ok(())
+        }
+
         Command::Pause { database, json } => {
             let pool = revlocal_store::open(&database).await?;
             let report = control::pause(&pool, chrono::Utc::now()).await?;
