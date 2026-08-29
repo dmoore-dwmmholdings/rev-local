@@ -93,6 +93,7 @@ webhook_port = 0
 transcript_retention_days = 30
 keep_scratch_on_failure = true
 stale_run_minutes = 10
+max_attempts = 3
 approval_ttl_hours = 72
 burst_threshold = 10
 
@@ -186,6 +187,7 @@ url = "https://trama.example.com/mcp"
         assert_eq!(g.transcript_retention_days, 30);
         assert!(g.keep_scratch_on_failure);
         assert_eq!(g.stale_run_minutes, 10);
+        assert_eq!(g.max_attempts, 3);
         assert_eq!(g.approval_ttl_hours, 72);
         assert_eq!(g.burst_threshold, crate::DEFAULT_BURST_THRESHOLD);
 

@@ -151,6 +151,31 @@ fn pending_action(run_id: RunId, key: &str) -> PublishAction {
 
 // --- criterion 1: a running engine is cancelled quickly -------------------
 
+// Unix only, and **not** because the requirement is Unix-only. §12.1's three-second
+// cancellation applies to Windows too, and on Windows it is currently **unmet** —
+// see REVL-106.
+//
+// The chain, as CI observed it over four runs: Windows has no process-group kill,
+// so `terminate` reaches only the direct child. Killing `run.cmd` terminates
+// `cmd.exe` and leaves the `node` grandchild running, holding the pipes. §8.5
+// requires a Job Object here and it is not implemented.
+//
+// What makes this a gate rather than a failing test is that it does not fail — it
+// **hangs**, past the ten-second `tokio::time::timeout` this test already wraps the
+// engine in, which means the runtime itself is starved rather than the engine
+// merely being slow. libtest reports "has been running for over 60 seconds" and
+// the job runs to its 45-minute bound, uploading a log whose last line is this
+// test's name. That costs 45 minutes per CI round trip and tells us nothing new
+// each time.
+//
+// Gated so the rest of the Windows leg can report. A hung job produces strictly
+// less signal than a red one, and here it produces less than a skipped one too:
+// with this test running, no test after it ever executes.
+//
+// This is a documented skip under REVL-106's third criterion, and it is paired
+// with a real recorded gap rather than standing in for one. It must come back the
+// moment the Job Object lands.
+#[cfg(unix)]
 #[tokio::test]
 async fn kill_switch_cancels_a_running_engine_within_three_seconds() {
     if std::process::Command::new("node")

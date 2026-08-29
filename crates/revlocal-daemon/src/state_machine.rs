@@ -35,6 +35,23 @@ use revlocal_store::{Pool, RunStore, StoreError};
 /// than bad luck.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 
+/// The attempt ceiling to use, given a repository's global settings.
+///
+/// RL-1305 added `max_attempts` to §13.1, so config is the source of truth and
+/// this is how a caller reaches it. [`DEFAULT_MAX_ATTEMPTS`] remains for callers
+/// with no config — a test harness, or the recovery pass that runs before config
+/// is loaded — and `state_machine_the_config_default_matches_the_constant` fails
+/// if the two ever disagree.
+pub const fn max_attempts_from(global: &revlocal_core::GlobalSettings) -> u32 {
+    // Zero would mean "give up before trying", which is a configuration mistake
+    // rather than an instruction. One attempt is the least that can mean anything.
+    if global.max_attempts == 0 {
+        1
+    } else {
+        global.max_attempts
+    }
+}
+
 /// The `run.error` recorded for a run the daemon abandoned by dying.
 pub const INTERRUPTED: &str = "interrupted";
 
