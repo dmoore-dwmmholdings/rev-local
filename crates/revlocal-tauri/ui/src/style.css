@@ -1,0 +1,87 @@
+/* An operations console, not a marketing surface (SPEC §15): plain and dense. */
+:root {
+  --bg: #12141a;
+  --panel: #191c24;
+  --line: #262b36;
+  --text: #e6e9ef;
+  --dim: #8b93a3;
+  --accent: #6ea8fe;
+  --ok: #4ec9a5;
+  --warn: #e0b341;
+  --bad: #e06c75;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+}
+
+h1 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: 0.02em; }
+.spacer { flex: 1; }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--ok); }
+.dot.idle { background: var(--dim); }
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: #232734;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover { background: #2c3140; }
+button.danger { background: #2a1f22; border-color: #5b2a30; }
+button.danger:hover { background: #3a272b; }
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0 0 0 10px;
+  text-decoration: underline;
+}
+
+.notice {
+  padding: 8px 16px;
+  background: #1d2430;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+
+main { padding: 16px; }
+.note { color: var(--dim); margin: 0 0 14px; }
+.empty { color: var(--dim); padding: 24px 2px; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+th {
+  color: var(--dim);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+td.num { color: var(--dim); font-variant-numeric: tabular-nums; }
+td.kind { color: var(--accent); }
+
+/* §18: the events an operator most needs to notice are the ones least likely to
+   announce themselves. */
+tr.warn td.kind { color: var(--warn); }
+tr.bad td.kind { color: var(--bad); }

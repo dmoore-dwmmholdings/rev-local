@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.dwmmholdings.revlocal",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "ui/dist",
+    "beforeBuildCommand": "npm --prefix ui ci && npm --prefix ui run build"
   },
   "app": {
     "withGlobalTauri": true,
