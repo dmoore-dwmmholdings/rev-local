@@ -253,3 +253,72 @@ fn the_ipc_layer_does_not_reach_a_webview() -> Result<(), String> {
     );
     Ok(())
 }
+
+// --- window and tray lifecycle (criterion 3) ------------------------------
+
+use revlocal_tauri::lifecycle::{on_close, CloseAction, CloseCause, TrayItem};
+
+#[test]
+fn closing_the_window_keeps_the_daemon_running() {
+    // Criterion 3, first half. §4.2 runs the daemon in-process and says the app
+    // must be running to review — so the window closing and the app quitting are
+    // different things. Conflating them stops every review the first time somebody
+    // hits Cmd-W out of habit.
+    let action = on_close(CloseCause::WindowControl);
+
+    assert_eq!(action, CloseAction::HideToTray);
+    assert!(action.keeps_daemon_running());
+}
+
+#[test]
+fn quitting_actually_quits() {
+    // Criterion 3, second half, and the one that is tempting to get wrong in the
+    // safe-looking direction. An app that can only be hidden is one people
+    // force-kill — and a force-killed daemon leaves runs stuck mid-stage for
+    // RL-501's recovery to find on the next start.
+    for cause in [CloseCause::QuitRequested, CloseCause::SystemShutdown] {
+        let action = on_close(cause);
+        assert_eq!(action, CloseAction::Exit, "{cause:?} must exit");
+        assert!(!action.keeps_daemon_running(), "{cause:?}");
+    }
+}
+
+#[test]
+fn the_kill_switch_is_in_the_tray() {
+    // §15: "the kill switch is reachable from every screen and from the tray."
+    // The window has it in the header; this is the other half.
+    assert!(
+        TrayItem::ALL.contains(&TrayItem::KillSwitch),
+        "the tray must carry the kill switch"
+    );
+
+    // Before Quit, because somebody reaching for the tray in a hurry is likelier
+    // to want the first than the second.
+    let order: Vec<&str> = TrayItem::ALL.iter().map(|item| item.id()).collect();
+    let kill = order.iter().position(|id| *id == "kill_switch");
+    let quit = order.iter().position(|id| *id == "quit");
+    assert!(kill < quit, "kill switch must come before quit: {order:?}");
+}
+
+#[test]
+fn every_tray_id_round_trips() {
+    // The menu is built from `TrayItem::ALL` and dispatched through `from_id`, so
+    // an item that does not round-trip is a menu entry that silently does nothing.
+    for item in TrayItem::ALL {
+        assert_eq!(TrayItem::from_id(item.id()), Some(item), "{item:?}");
+        assert!(!item.label().is_empty(), "{item:?} needs a label");
+    }
+    assert_eq!(TrayItem::from_id("not-a-menu-item"), None);
+}
+
+#[test]
+fn tray_labels_say_what_they_do() {
+    // §15: every destructive action names what it does. "Quit" on its own is fine;
+    // a kill switch labelled "Kill switch" alone is not obviously a global stop.
+    assert!(
+        TrayItem::KillSwitch.label().contains("stop everything"),
+        "got {:?}",
+        TrayItem::KillSwitch.label()
+    );
+    assert!(TrayItem::Quit.label().contains("Quit"));
+}
