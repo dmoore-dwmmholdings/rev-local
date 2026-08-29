@@ -30,9 +30,11 @@
 
 pub mod events;
 pub mod ipc;
+pub mod lifecycle;
 
 #[cfg(feature = "desktop")]
 pub mod commands;
 
 pub use events::{EventBridge, UiEvent, UiEventSink};
 pub use ipc::{IpcError, IpcRequest, IpcResponse};
+pub use lifecycle::{on_close, CloseAction, CloseCause, TrayItem};

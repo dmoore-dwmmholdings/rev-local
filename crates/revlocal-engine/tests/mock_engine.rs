@@ -277,6 +277,22 @@ mod mock_engine {
         );
     }
 
+    // SIGTERM is a POSIX concept. Windows has no signal a console process can
+    // choose to ignore, so "ignores SIGTERM" is not a behaviour that exists there
+    // to test — `terminate` says as much, and uses TerminateProcess instead.
+    //
+    // Gated rather than adapted, and gated *loudly*: REVL-106's third criterion is
+    // that no test is skipped on Windows without an explicit documented reason,
+    // and this is the reason.
+    //
+    // This gate is also what unblocked the Windows CI leg. Ungated, the test ran
+    // `kill -TERM <pid>` against a native Windows pid — which Git-bash's `kill`
+    // cannot address, reporting "No such process" — and the resulting panic fired
+    // *before* the cleanup below, leaking the hang-mode process. That orphan held
+    // the inherited stdout pipe, so `tee` never saw EOF and the whole job hung
+    // until the 45-minute bound. One leaked child, two symptoms: a failing test
+    // and a job that would not end.
+    #[cfg(unix)]
     #[test]
     fn mock_engine_hang_mode_ignores_sigterm_so_the_sigkill_path_is_real() {
         // Acceptance criterion 2, and the one most easily faked. A `hang` mode that
@@ -299,22 +315,32 @@ mod mock_engine {
         let pid = child.id();
         let termed = Command::new("kill")
             .args(["-TERM", &pid.to_string()])
-            .status()
-            .unwrap_or_else(|e| panic!("kill -TERM: {e}"));
-        assert!(termed.success(), "could not send SIGTERM to {pid}");
-
-        std::thread::sleep(std::time::Duration::from_millis(600));
-        let still_running = child
-            .try_wait()
-            .unwrap_or_else(|e| panic!("try_wait: {e}"))
-            .is_none();
-
-        // Clean up before asserting, so a failure does not leak a process.
-        let _ = Command::new("kill")
-            .args(["-KILL", &pid.to_string()])
             .status();
+
+        // Everything below is gathered first and asserted last, so no failure path
+        // can leave the child running. The previous shape asserted on the kill's
+        // status immediately, and a process that outlives its test holds whatever
+        // pipes it inherited — which is how a failing assertion became a hung CI
+        // job rather than a red one.
+        let sent = matches!(&termed, Ok(status) if status.success());
+
+        let still_running = if sent {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            child
+                .try_wait()
+                .unwrap_or_else(|e| panic!("try_wait: {e}"))
+                .is_none()
+        } else {
+            false
+        };
+
+        // `Child::kill` rather than shelling out: cleanup must not depend on a
+        // `kill` binary being present, since a missing one is exactly the case
+        // that leaks.
+        let _ = child.kill();
         let _ = child.wait();
 
+        assert!(sent, "could not send SIGTERM to {pid}: {termed:?}");
         assert!(
             still_running,
             "hang mode exited on SIGTERM; the SIGKILL escalation path would never be exercised"

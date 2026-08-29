@@ -61,7 +61,11 @@ quick-xml = { version = "0.37", features = ["serialize"] }
 # a hand-rolled HTTP parser. Default features off: no multipart, no tracing layer,
 # no tower-http — this listens on loopback and answers one POST.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-tauri = { version = "2", default-features = false }
+# Default features on: `wry` is the window runtime, and a desktop shell without
+# one is not a desktop shell. The crate that pulls this is feature-gated off by
+# default, so CI still never links it.
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-build = { version = "2", default-features = false }
 clap = { version = "4.5", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
