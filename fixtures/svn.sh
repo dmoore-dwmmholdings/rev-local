@@ -29,6 +29,23 @@ head_revision() {
 # checks that and writes the skip manifest when they do not.
 build_svn_fixture() {
   local out_dir="$1"
+
+  # Resolve to a path svn can open, whatever form the caller passed.
+  #
+  # `build.ps1` invokes this through Git-for-Windows bash, and the argument that
+  # arrives is not the one PowerShell sent: CI observed `C:\Users\...` reaching
+  # here as `c/Users/...` — drive letter lowercased, colon and leading slash both
+  # gone. That produced `file://c/Users/...`, which names a HOST called `c`, and
+  # svn reported E180001 from inside a PowerShell stack trace.
+  #
+  # Rather than guess which layer mangled it, normalise here, where the path is
+  # about to be used. `pwd -W` is Git-bash's own answer for "this path in Windows
+  # terms" and gives `C:/Users/...`; everywhere else it is unsupported and plain
+  # `pwd` is already correct. The directory has to exist to `cd` into it, so this
+  # creates it first — which build.sh did a moment later anyway.
+  mkdir -p "$out_dir"
+  out_dir="$(cd "$out_dir" && { pwd -W 2>/dev/null || pwd; })"
+
   local repo="${out_dir}/svn-basic"
   # Windows needs three slashes and the drive letter inside the path:
   # `file://D:/x` names a HOST called `D:`, which is why this presented as a
@@ -42,7 +59,6 @@ build_svn_fixture() {
   local wc="${out_dir}/.svn-wc"
 
   rm -rf "$repo" "$wc"
-  mkdir -p "$out_dir"
 
   svnadmin create "$repo"
 

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{control, doctor, exit, hooks};
+use revlocal_cli::{control, doctor, exit, hooks, inspect};
 
 mod publish;
 mod repo;
@@ -46,6 +46,18 @@ enum Command {
     Targets {
         #[command(subcommand)]
         command: TargetsCommand,
+    },
+
+    /// Show what is waiting for a human (SPEC §12.4).
+    Approvals {
+        #[command(subcommand)]
+        command: ApprovalsCommand,
+    },
+
+    /// Show a repository's spend against its budget (SPEC §13.1).
+    Budget {
+        #[command(subcommand)]
+        command: BudgetCommand,
     },
 
     /// Install or remove the git hooks that trigger reviews (SPEC §7.2).
@@ -244,6 +256,37 @@ enum RepoCommand {
     },
 }
 
+/// `revlocal approvals …`.
+#[derive(Debug, Subcommand)]
+enum ApprovalsCommand {
+    /// List everything waiting, with the target each would be sent to.
+    List {
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// `revlocal budget …`.
+#[derive(Debug, Subcommand)]
+enum BudgetCommand {
+    /// Show today's spend against the configured ceilings.
+    Show {
+        /// Which repository.
+        #[arg(long, value_name = "ID")]
+        repo: i64,
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// `revlocal hooks …`.
 #[derive(Debug, Subcommand)]
 enum HooksCommand {
@@ -372,6 +415,10 @@ enum CliError {
     #[error(transparent)]
     Hooks(#[from] hooks::HooksCommandError),
 
+    /// An inspection failed.
+    #[error(transparent)]
+    Inspect(#[from] inspect::InspectError),
+
     /// A report could not be serialised.
     #[error("could not render the report: {0}")]
     Json(#[from] serde_json::Error),
@@ -422,6 +469,41 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Command::Approvals { command } => match command {
+            ApprovalsCommand::List { database, json } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = inspect::approvals(&pool).await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+        },
+
+        Command::Budget { command } => match command {
+            BudgetCommand::Show {
+                repo,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = inspect::budget(
+                    &pool,
+                    revlocal_core::RepoId::new(repo),
+                    chrono::Utc::now(),
+                    // TODO(RL-1201): per-repo settings arrive with `repo add`.
+                    // §13.1's defaults until then, which is what a fresh install
+                    // actually has.
+                    &revlocal_core::BudgetSettings::default(),
+                )
+                .await?;
+                pool.close().await;
+                let human = report.render_human();
+                println!("{}", inspect::render(&report, human, json)?);
+                Ok(())
+            }
+        },
+
         Command::Hooks { command } => match command {
             HooksCommand::Install {
                 repo,
