@@ -3535,6 +3535,7 @@ dependencies = [
  "revlocal-mcp",
  "revlocal-publish",
  "revlocal-store",
+ "revlocal-tauri",
  "revlocal-vcs",
  "serde",
  "serde_json",

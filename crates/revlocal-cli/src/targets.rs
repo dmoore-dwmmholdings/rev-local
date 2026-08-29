@@ -38,7 +38,11 @@ pub enum TargetsCommandError {
     /// The source is boxed: `toml::de::Error` is 96 bytes, and an error type that
     /// large travels in every `Result` this command returns. clippy's
     /// `result_large_err` is right about it.
-    #[error("could not parse {path}: {source}")]
+    #[error(
+        "could not parse {path}: {source}\n  try: check the TOML syntax at the line \
+         the parser names above; a stray quote or an unclosed [table] header is \
+         the usual cause"
+    )]
     Malformed {
         /// Which file.
         path: String,
@@ -106,7 +110,11 @@ pub enum TargetsCommandError {
     },
 
     /// A dry run produced at least one capability that would not render.
-    #[error("{failed} of {total} mapped capabilities would not render")]
+    #[error(
+        "{failed} of {total} mapped capabilities would not render\n  try: run \
+         `revlocal targets list --json` to see which capability failed to bind, \
+         then `revlocal targets map` to bind it by hand"
+    )]
     DryRunFailed {
         /// How many failed.
         failed: usize,
