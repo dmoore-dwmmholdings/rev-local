@@ -259,6 +259,65 @@ async fn edit_payload(id: i64, payload_json: String) -> Result<(), String> {
     .await
 }
 
+/// Findings across every repository, filtered (§15 screen 4).
+///
+/// The filter crosses the boundary and the daemon applies it. Filtering in the
+/// front end would mean sending the whole table first — this is the one screen
+/// that can be large, and that cost would be paid on every keystroke.
+#[tauri::command]
+async fn list_findings(
+    filter: revlocal_daemon::findings_view::FindingFilter,
+) -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let view = revlocal_daemon::findings_view::gather(&pool, &filter).await;
+    pool.close().await;
+
+    serde_json::to_value(view.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Suppress one finding, scoped to its own repository (§14, §15 screen 4).
+///
+/// Returns the finding's new state so the screen can show the row changing
+/// rather than assuming it did.
+#[tauri::command]
+async fn suppress_finding(id: i64) -> Result<String, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let state = revlocal_daemon::findings_view::suppress(&pool, id, chrono::Utc::now()).await;
+    pool.close().await;
+
+    Ok(state.map_err(|e| e.to_string())?.as_str().to_owned())
+}
+
+/// File a finding to Andare by hand — gated exactly like an automatic action.
+///
+/// Returns the status the action was *given*, not "filed". Under the default mode
+/// this queues for approval, and a command that reported success would have the
+/// screen telling somebody an issue exists that does not.
+#[tauri::command]
+async fn file_to_andare(id: i64) -> Result<String, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    // The same reader the dashboard uses, so the mode shown and the mode enforced
+    // cannot drift apart.
+    let mode = revlocal_daemon::dashboard::global_mode(&pool).await;
+    let status = match mode {
+        Ok(mode) => {
+            revlocal_daemon::findings_view::file_to_andare(&pool, id, mode, chrono::Utc::now())
+                .await
+                .map_err(|e| e.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    };
+    pool.close().await;
+
+    Ok(status?.as_str().to_owned())
+}
+
 /// Open the store, run one thing, close it.
 ///
 /// Every command here is short-lived and owns its connection: §4.2 runs the
@@ -405,6 +464,9 @@ fn run() -> tauri::Result<()> {
             approve_run,
             reject_action,
             edit_payload,
+            list_findings,
+            suppress_finding,
+            file_to_andare,
             initial_screen
         ])
         .setup(|app| {

@@ -9,6 +9,7 @@ pub mod backfill;
 pub mod budgets;
 pub mod dashboard;
 pub mod depth;
+pub mod findings_view;
 pub mod gating;
 pub mod hooks;
 pub mod kill_switch;

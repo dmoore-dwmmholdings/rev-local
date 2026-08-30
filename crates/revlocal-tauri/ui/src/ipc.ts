@@ -257,3 +257,69 @@ export function editPayload(id: number, payloadJson: string): Promise<void> {
 export function fetchInitialScreen(): Promise<string> {
   return invoke<string>('initial_screen');
 }
+
+// --- findings (RL-1108, SPEC §15 screen 4) ----------------------------------
+
+/** §10.1's severities, worst first — the order the filter means by "and worse". */
+export const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const;
+export type Severity = (typeof SEVERITIES)[number];
+
+/** §5's finding states. */
+export const FINDING_STATES = ['open', 'published', 'suppressed', 'superseded'] as const;
+
+export type FindingRow = {
+  id: number;
+  run_id: number;
+  repo_id: number;
+  repo: string;
+  severity: string;
+  category: string;
+  state: string;
+  title: string;
+  file?: string;
+  fingerprint: string;
+};
+
+/**
+ * What the filter panel sends.
+ *
+ * Independent optional fields, because they compose: severity *and* category
+ * means both. Filtering happens in the daemon — a cross-repository table is the
+ * one screen that can be large, and filtering in the browser means fetching it
+ * all first and paying for the size on every keystroke.
+ */
+export type FindingFilter = {
+  min_severity?: string;
+  category?: string;
+  state?: string;
+  repo_id?: number;
+};
+
+export type FindingsView = {
+  rows: FindingRow[];
+  /** Every category present before filtering, so the dropdown has no dead ends. */
+  categories: string[];
+  /** So the screen can say "12 of 340" rather than presenting a slice as a whole. */
+  total_before_filter: number;
+  /** Whether the scan stopped at its cap (§18). */
+  truncated: boolean;
+};
+
+export function fetchFindings(filter: FindingFilter): Promise<FindingsView> {
+  return invoke<FindingsView>('list_findings', { filter });
+}
+
+/** Suppress one finding. Returns its new state. */
+export function suppressFinding(id: number): Promise<string> {
+  return invoke<string>('suppress_finding', { id });
+}
+
+/**
+ * File a finding to Andare by hand. Returns the status it was *given*.
+ *
+ * Not "filed" — under the default mode it is queued for approval, and the caller
+ * has to say which happened rather than assume the optimistic one.
+ */
+export function fileToAndare(id: number): Promise<string> {
+  return invoke<string>('file_to_andare', { id });
+}

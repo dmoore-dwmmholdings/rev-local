@@ -198,6 +198,24 @@ fn render_budget(budget: &BudgetBar) -> String {
     format!("today: {runs}, {tokens}{hedge}")
 }
 
+/// The global autonomy ceiling, as everything that respects it must read it.
+///
+/// One reader. A second place that fell back to a different default — or forgot
+/// that an unparseable value is a *stored* value and not an absent one — would
+/// have the dashboard showing one mode while an action was gated by another, and
+/// the screen would be the one telling the reassuring lie.
+///
+/// Config's value is the default and the store's is an override, so a fresh
+/// install behaves as §13.1 says without anything having been written.
+pub async fn global_mode(pool: &Pool) -> Result<AutonomyMode, DashboardError> {
+    Ok(SettingStore::new(pool)
+        .get(SETTING_MODE)
+        .await
+        .map_err(boxed)?
+        .and_then(|value| value.parse::<AutonomyMode>().ok())
+        .unwrap_or(AutonomyMode::AutoLowAskHigh))
+}
+
 /// Assemble the dashboard (SPEC §15).
 pub async fn gather(
     pool: &Pool,
@@ -207,14 +225,7 @@ pub async fn gather(
     let settings = SettingStore::new(pool);
     let paused = settings.is_paused().await.map_err(boxed)?;
 
-    // Config's value is the default and the store's is an override, so a fresh
-    // install shows what §13.1 says without anything having been written.
-    let mode = settings
-        .get(SETTING_MODE)
-        .await
-        .map_err(boxed)?
-        .and_then(|value| value.parse::<AutonomyMode>().ok())
-        .unwrap_or(AutonomyMode::AutoLowAskHigh);
+    let mode = global_mode(pool).await?;
 
     let views: Vec<RepoView> = revlocal_store::RepoStore::new(pool)
         .list()
