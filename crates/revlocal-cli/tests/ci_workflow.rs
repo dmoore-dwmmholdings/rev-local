@@ -223,25 +223,34 @@ fn the_desktop_lint_builds_its_front_end_first() {
     let wf = workflow().expect("ci.yml exists and is valid YAML");
     let scripts = all_run_scripts(&wf);
 
-    let lint = scripts.find("--features desktop");
-    let Some(lint) = lint else {
-        // Not linting the desktop shell at all is a different problem, and one
+    // Every step that enables the feature, not just the first. There are two now
+    // — clippy on macOS and a build on Windows — and checking only the earliest
+    // would let a second one be added before the npm step without anybody
+    // noticing.
+    let uses: Vec<usize> = scripts
+        .match_indices("--features desktop")
+        .map(|(at, _)| at)
+        .collect();
+    if uses.is_empty() {
+        // Not compiling the desktop shell at all is a different problem, and one
         // this test deliberately does not have an opinion about.
         return;
-    };
+    }
 
     let build = scripts
         .find("npm --prefix crates/revlocal-tauri/ui run build")
         .unwrap_or_else(|| {
             panic!(
-                "CI lints the desktop shell but never builds `ui/dist`; \
+                "CI compiles the desktop shell but never builds `ui/dist`; \
                  Tauri's build script will fail on a fresh checkout"
             )
         });
 
-    assert!(
-        build < lint,
-        "the front end must be built before the desktop shell is linted, \
-         not after — `frontendDist` is read at compile time"
-    );
+    for at in uses {
+        assert!(
+            build < at,
+            "the front end must be built before every step that compiles the \
+             desktop shell, not after — `frontendDist` is read at compile time"
+        );
+    }
 }

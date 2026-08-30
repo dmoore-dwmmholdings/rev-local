@@ -126,7 +126,7 @@ jobs:
       # exists on a developer's machine and never on a fresh checkout. That is
       # exactly how the step below passed locally and failed here on its first run.
       - name: build the desktop front end
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' || runner.os == 'Windows'
         run: npm --prefix crates/revlocal-tauri/ui ci && npm --prefix crates/revlocal-tauri/ui run build
 
       - name: cargo clippy (desktop shell)
@@ -135,6 +135,25 @@ jobs:
           set -o pipefail
           cargo clippy -p revlocal-tauri --features desktop --all-targets -- -D warnings 2>&1 \
             | tee artifacts/logs/clippy-desktop-${{ matrix.os }}.log
+
+      # REVL-87's first criterion is that the app launches on all three platforms.
+      # A CI runner has no desktop session, so launching is not something this can
+      # check — but *compiling* is a necessary part of it, and the desktop shell
+      # has never been compiled anywhere but this one macOS machine.
+      #
+      # Windows needs no extra packages for it: WebView2 ships with the runner
+      # image and MSVC is already here for the rest of the build. Linux is the
+      # expensive one — Tauri pulls webkit2gtk and a dozen system libraries there —
+      # so it stays out until somebody decides that trade is worth making.
+      #
+      # `build`, not `clippy`: the lint runs on macOS and lints the same source.
+      # What this adds is whether it links on a second platform.
+      - name: cargo build (desktop shell)
+        if: runner.os == 'Windows'
+        run: |
+          set -o pipefail
+          cargo build -p revlocal-tauri --features desktop --bin revlocal-desktop 2>&1 \
+            | tee artifacts/logs/build-desktop-${{ matrix.os }}.log
 
       - name: cargo build
         run: |
