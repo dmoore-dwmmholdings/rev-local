@@ -93,6 +93,23 @@ fn subversion_is_installed_and_verified_on_every_runner() {
         );
     }
 
+    // Windows must have more than one source to try.
+    //
+    // On 2026-08-30 a green Windows leg went red without a line of our code
+    // changing: `choco install svn` fetches a 2015 MSI from SourceForge and that
+    // URL began returning 404. One external host with one dead link should not be
+    // able to do that, so the step tries several publishers in turn.
+    //
+    // Asserted by name rather than by counting `||`s: what matters is that the
+    // alternatives are *different publishers*, and only the names show that.
+    for fallback in ["tortoisesvn", "winget install"] {
+        assert!(
+            scripts.contains(fallback),
+            "the Windows svn install has no fallback to {fallback}; a single \
+             source going away takes the whole leg with it"
+        );
+    }
+
     // The verification step must be unconditional — that is what makes
     // "`svn --version` succeeds on every runner" an assertion and not a hope.
     let verify_is_unconditional = test_job_steps(&wf).iter().any(|s| {
