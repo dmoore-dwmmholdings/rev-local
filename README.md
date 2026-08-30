@@ -67,6 +67,48 @@ Some tests skip cleanly when an optional tool is absent and say so rather than
 passing quietly — `svn` for the Subversion fixtures, `pwsh` for the Windows
 fixture-parity check.
 
+### The desktop app
+
+```
+cargo install tauri-cli --version "^2" --locked
+cd crates/revlocal-tauri
+cargo tauri build --features desktop
+```
+
+This produces a `.app` and `.dmg` on macOS, `.msi` and an NSIS installer on
+Windows, and `.deb` and `.AppImage` on Linux, under `target/release/bundle/`.
+The front end is built by the bundler itself, so there is no separate `npm`
+step to remember.
+
+Linux additionally needs the WebKitGTK development packages:
+
+```
+sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev patchelf file
+```
+
+### These builds are not signed
+
+No code-signing identity is configured, and CI does not hold one. What that
+means for you, rather than what it means in the abstract:
+
+- **macOS** puts an unsigned app in quarantine. Double-clicking it reports that
+  the app "is damaged and can't be opened", which is Gatekeeper's phrasing for
+  "not notarised" and is not a claim about the file. Right-click → Open, or
+  `xattr -dr com.apple.quarantine /Applications/rev-local.app`, gets past it.
+- **Windows** SmartScreen shows "Windows protected your PC" for an installer
+  with no reputation. More info → Run anyway.
+- **Linux** does not sign desktop packages by convention, so nothing changes
+  there.
+
+Building it yourself avoids all of this, and is three commands.
+
+If you have signing credentials, Tauri reads them from the standard environment
+variables — `APPLE_SIGNING_IDENTITY` and the notarisation pair on macOS, a
+`certificateThumbprint` in `tauri.conf.json` on Windows. They are deliberately
+absent rather than blank: an empty identity is a value that something downstream
+has to decide is not a certificate, and Tauri reads it as one.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
