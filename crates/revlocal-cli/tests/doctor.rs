@@ -258,88 +258,47 @@ mod doctor {
 /// Doctor says which engines cannot report token usage (RL-409, §8.1, §18).
 ///
 /// A budget against an engine whose usage nobody can read is advisory. `budget
-/// show` already reports the ledger honestly — it hedges an unmeasured day rather
-/// than presenting it as a total — but by then the operator has already trusted a
-/// ceiling that was not holding anything. Doctor is where they find out first.
+/// show` already reports the ledger honestly, but by then the operator has trusted
+/// a ceiling that was not holding. Doctor is where they find out first.
+///
+/// **No engine is unmeasured today** — RL-409 read Claude's payload and RL-408
+/// read Codex's, so both have extractors tested against captured responses. So
+/// this asserts the report is *silent*, which is the harder half to get right: a
+/// warning about a measured engine is as false as silence about an unmeasured one.
 #[test]
-fn doctor_names_the_engines_whose_token_budgets_are_advisory() -> Result<(), String> {
+fn doctor_warns_about_no_engine_now_that_both_report_usage() -> Result<(), String> {
     let report = revlocal_cli::doctor::gather(0);
 
-    let usage: Vec<&revlocal_cli::doctor::Check> = report
+    let usage: Vec<&str> = report
         .engines
         .iter()
         .filter(|check| check.name.ends_with(":usage"))
+        .map(|check| check.name.as_str())
         .collect();
 
-    // One, not two. Claude became measured when RL-409's extractor landed —
-    // `from_claude_json`, tested against a captured payload — so warning about it
-    // would now be false. Codex has no extractor until RL-408 establishes what
-    // `codex exec --json` emits.
-    assert_eq!(
-        usage.len(),
-        1,
-        "only unmeasured engines should be named: {:?}",
-        report.engines.iter().map(|c| &c.name).collect::<Vec<_>>()
-    );
     assert!(
-        usage[0].name.contains("codex"),
-        "and it is codex that is unmeasured: {}",
-        usage[0].name
+        usage.is_empty(),
+        "every engine reports usage; warning about one would be false: {usage:?}"
     );
-
-    for check in &usage {
-        // A warning, not a failure: reviews work, the budget is what does not.
-        assert_eq!(
-            check.health,
-            revlocal_cli::doctor::Health::Warn,
-            "{}: an engine that reviews fine must not fail doctor",
-            check.name
-        );
-        assert!(
-            check.detail.contains("advisory"),
-            "{}: must say what it means for a budget, not just that a feature is \
-             missing: {}",
-            check.name,
-            check.detail
-        );
-        // §8.4's rule: every non-ok check carries something to type next.
-        let remediation = check
-            .remediation
-            .as_deref()
-            .ok_or_else(|| format!("{} has no remediation", check.name))?;
-        assert!(
-            remediation.contains("daily_runs_per_repo"),
-            "the remedy is the ceiling that *is* enforceable: {remediation}"
-        );
-    }
-
-    // Neither the mock nor claude is listed: both are measured, and a line per
-    // measured engine would bury the one that is not.
-    for measured in ["mock", "claude"] {
-        assert!(
-            !report.engines.iter().any(|c| c.name.contains(measured)),
-            "{measured} reports usage; warning about it would be false"
-        );
-    }
     Ok(())
 }
 
-/// The warning does not block a review.
+/// The wording still works, for the next engine that arrives without an extractor.
+///
+/// The check above passes by finding nothing, which is exactly the shape that
+/// keeps passing after somebody deletes the code it was watching. This exercises
+/// the value instead, so the remediation cannot rot unnoticed.
 #[test]
-fn doctor_still_exits_zero_when_only_usage_is_unmeasured() {
-    let report = revlocal_cli::doctor::gather(0);
+fn doctor_would_name_the_run_ceiling_for_an_unmeasured_engine() -> Result<(), String> {
+    let unmeasured = revlocal_engine::usage::UsageSupport::Unmeasured {
+        source: "`someengine --json`",
+    };
 
-    // Whatever else is true of this machine, an unmeasured engine must not be
-    // the thing that stops somebody reviewing code.
-    let blocking: Vec<&str> = report
-        .all()
-        .filter(|check| check.health == revlocal_cli::doctor::Health::Fail)
-        .map(|check| check.name.as_str())
-        .filter(|name| name.ends_with(":usage"))
-        .collect();
-
+    let line = unmeasured.summary_line(revlocal_core::EngineKind::Codex);
+    assert!(line.contains("advisory"), "{line}");
     assert!(
-        blocking.is_empty(),
-        "usage checks must never block: {blocking:?}"
+        line.contains("someengine"),
+        "and where the counts would come from: {line}"
     );
+    Ok(())
 }
