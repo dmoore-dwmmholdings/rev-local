@@ -18,6 +18,12 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WindowEvent};
 
+/// Printed once the window and tray exist, when `REVLOCAL_SMOKE` is set.
+///
+/// The smoke test greps for exactly this, so it lives here rather than being
+/// spelled twice.
+pub const READY_LINE: &str = "revlocal-desktop: window ready";
+
 /// Delivers events to the window.
 ///
 /// The bridge does not know it is talking to a webview; this is the only place
@@ -121,6 +127,22 @@ fn run() -> tauri::Result<()> {
                     None => {}
                 })
                 .build(app)?;
+
+            // A CI smoke test can see that a process exists; it cannot see that
+            // the window was created. Without this, an app that *hung* inside
+            // setup and one that started correctly look identical from outside —
+            // and hanging is the failure mode this project has been bitten by
+            // most.
+            //
+            // Behind an environment variable so a real user never sees it. Set by
+            // the workflow's smoke step and by nothing else.
+            if std::env::var_os("REVLOCAL_SMOKE").is_some() {
+                println!("{READY_LINE}");
+                // Unbuffered, because the smoke test greps for this while the
+                // process is still running and stdout to a pipe is block-buffered.
+                use std::io::Write as _;
+                let _ = std::io::stdout().flush();
+            }
 
             Ok(())
         })
