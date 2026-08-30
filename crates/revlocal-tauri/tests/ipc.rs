@@ -670,3 +670,60 @@ fn the_new_requests_round_trip() -> Result<(), String> {
     }
     Ok(())
 }
+
+/// The bundle is configured, and carries no credential (RL-1204).
+///
+/// Two things, because they fail in opposite directions. A `tauri.conf.json` with
+/// `bundle.active = false` builds a binary and no installer, and says so nowhere —
+/// the packaging job would go green having produced nothing. And a signing
+/// identity written into a committed config is a credential in a public
+/// repository, which is the one packaging mistake that cannot be taken back.
+#[test]
+fn the_bundle_is_configured_and_holds_no_credentials() -> Result<(), String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {path:?}: {e}"))?;
+    let config: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("parsing {path:?}: {e}"))?;
+
+    assert_eq!(
+        config["bundle"]["active"],
+        serde_json::Value::Bool(true),
+        "bundle.active is false, so `cargo tauri build` produces a binary and no \
+         installer — and reports success either way"
+    );
+
+    // Absent, not empty. An empty identity is a value something downstream has to
+    // decide is not a certificate, and Tauri reads it as one.
+    for credential in [
+        "signingIdentity",
+        "certificateThumbprint",
+        "providerShortName",
+    ] {
+        assert!(
+            !text.contains(credential),
+            "tauri.conf.json names `{credential}`. Signing credentials belong in \
+             environment variables, not in a file that is committed and published"
+        );
+    }
+
+    // The README is where the consequence of not signing is explained. A build
+    // that is unsigned and undocumented is one whose users conclude the download
+    // is corrupt — macOS says "is damaged", which is not a claim about the file.
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("README.md"),
+    )
+    .map_err(|e| format!("reading README.md: {e}"))?;
+    assert!(
+        readme.contains("not signed"),
+        "the unsigned build has to be documented rather than discovered"
+    );
+    assert!(
+        readme.contains("quarantine"),
+        "the README must say what macOS actually does, not that signing is absent"
+    );
+
+    Ok(())
+}

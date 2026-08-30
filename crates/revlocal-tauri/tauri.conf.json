@@ -5,7 +5,7 @@
   "identifier": "com.dwmmholdings.revlocal",
   "build": {
     "frontendDist": "ui/dist",
-    "beforeBuildCommand": "npm --prefix ui ci && npm --prefix ui run build"
+    "beforeBuildCommand": "npm ci && npm run build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -22,10 +22,32 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": "all",
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Local-first automated code review",
+    "longDescription": "rev-local watches your repositories, reviews changes with a coding agent you already have installed, and publishes findings only as far as you allow.",
+    "copyright": "",
+    "licenseFile": "../../LICENSE",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
+      }
+    }
   }
 }

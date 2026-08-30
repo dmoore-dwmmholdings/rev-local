@@ -347,3 +347,70 @@ jobs:
             artifacts/gui/*.png
           if-no-files-found: warn
           retention-days: 14
+
+  # Installers, on all three platforms (RL-1204).
+  #
+  # Separate from `test` on purpose: a release build with a webview toolchain and
+  # a bundler is several minutes even when nothing is wrong, and hanging it off
+  # the job that gates every push would make every push pay for it. This runs on
+  # the same triggers and reports separately, so a red bundle is a red bundle
+  # rather than a red test run.
+  #
+  # Nothing here is signed. See README — an unsigned build is what a repository
+  # with no credentials can honestly produce, and a workflow that pretended
+  # otherwise would emit a bundle that fails Gatekeeper with a confusing message
+  # instead of a documented one.
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The bundlers download SDK pieces on first use; a hang here should cost
+    # minutes, not an hour. Same reasoning as the test matrix's bound.
+    timeout-minutes: 45
+    strategy:
+      # One platform's bundler failing says nothing about the others, and the
+      # whole point of this job is to learn about all three at once.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install the Linux webview and bundler toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev patchelf file
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # `beforeBuildCommand` runs `npm ci && npm run build` from `ui/`, so the
+      # front end is built by the bundler rather than by a step here — one place
+      # that knows how, rather than two that can disagree about which built the
+      # `dist/` that got bundled.
+      - name: cargo tauri build
+        shell: bash
+        run: |
+          set -o pipefail
+          cd crates/revlocal-tauri
+          cargo tauri build --features desktop 2>&1 | tee ../../bundle-${{ matrix.os }}.log
+
+      # Kept whether or not the job passed: a bundle nobody can download is a
+      # bundle nobody can check, and "it built" is not the same claim as "it
+      # installs".
+      - name: Upload bundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            target/release/bundle/**
+            bundle-${{ matrix.os }}.log
+          if-no-files-found: warn
+          retention-days: 14
