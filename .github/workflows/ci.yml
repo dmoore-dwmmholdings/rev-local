@@ -155,6 +155,65 @@ jobs:
           cargo build -p revlocal-tauri --features desktop --bin revlocal-desktop 2>&1 \
             | tee artifacts/logs/build-desktop-${{ matrix.os }}.log
 
+      # Compiling is necessary for REVL-87's "launches on all three platforms" and
+      # nowhere near sufficient. This starts the thing.
+      #
+      # What it actually proves: the process reaches and stays past Tauri's
+      # `run()` — so WebView2 is present, `tauri.conf.json` parses, the capability
+      # file is valid, and the tray builds. Every one of those failed here at some
+      # point and none of them are visible to a compiler.
+      #
+      # What it does NOT prove: that a window rendered anything. That needs a
+      # desktop session and a capture tool, and is REVL-90's question rather than
+      # this step's. The check is deliberately the weaker one it can actually make.
+      #
+      # The failure branch prints both streams, and that is deliberate rather than
+      # belt-and-braces. `main` returns an exit code for errors `run()` hands
+      # back, but a failure inside Tauri's *setup hook* never reaches it: Tauri
+      # panics there, in a non-unwinding context, and the process aborts. Verified
+      # by breaking setup on purpose and reading what came out.
+      #
+      # So the signal this step trusts is the absence of the ready line, and the
+      # diagnosis comes from captured stderr — which does carry Tauri's real
+      # message ("Failed to setup app: ..."). Relying on the exit code would have
+      # been relying on a path that does not run.
+      - name: smoke test the desktop shell
+        if: runner.os == 'Windows'
+        run: |
+          set -o pipefail
+          REVLOCAL_SMOKE=1 ./target/debug/revlocal-desktop.exe \
+            > artifacts/logs/desktop-smoke.out \
+            2> artifacts/logs/desktop-smoke.err &
+          pid=$!
+
+          # Poll for the ready line rather than sleeping a fixed time: a fast
+          # runner passes in a second, and a hang is caught at the bound instead
+          # of being waited out.
+          ready=""
+          for _ in $(seq 1 40); do
+            if grep -q "window ready" artifacts/logs/desktop-smoke.out 2>/dev/null; then
+              ready=yes
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+
+          if [ -n "$ready" ]; then
+            echo "the desktop shell created its window and tray"
+            exit 0
+          fi
+
+          echo "the desktop shell never reported a window in 40s" >&2
+          echo "--- stdout ---" >&2; cat artifacts/logs/desktop-smoke.out >&2
+          echo "--- stderr ---" >&2; cat artifacts/logs/desktop-smoke.err >&2
+          exit 1
+
       - name: cargo build
         run: |
           set -o pipefail

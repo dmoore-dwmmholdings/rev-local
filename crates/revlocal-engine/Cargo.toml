@@ -38,3 +38,12 @@ toml = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+# Tests that invoke a real `claude` or `codex` and spend real credits (RL-1203).
+#
+# Off by default and every test behind it is `#[ignore]`d as well, so
+# `cargo test --workspace` and `cargo test --features engine-live` both leave them
+# alone. Only `cargo test --features engine-live -- --ignored` runs them, which is
+# this item's gate and is deliberately hard to type by accident.
+engine-live = []

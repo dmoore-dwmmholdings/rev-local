@@ -254,3 +254,38 @@ fn the_desktop_lint_builds_its_front_end_first() {
         );
     }
 }
+
+/// The desktop smoke test starts the thing it just built (RL-1101).
+///
+/// REVL-87's first criterion is that the app *launches*, and compiling is nowhere
+/// near that. The smoke step is what makes the difference, and it is only
+/// meaningful in one order: build, then run.
+#[test]
+fn the_desktop_smoke_test_runs_after_the_build() {
+    let wf = workflow().expect("ci.yml exists and is valid YAML");
+    let scripts = all_run_scripts(&wf);
+
+    let Some(smoke) = scripts.find("revlocal-desktop.exe") else {
+        // Not smoke-testing at all is a different problem, and one this test
+        // deliberately does not have an opinion about.
+        return;
+    };
+
+    let build = scripts
+        .find("--bin revlocal-desktop")
+        .unwrap_or_else(|| panic!("CI runs the desktop shell but never builds it"));
+
+    assert!(
+        build < smoke,
+        "the desktop shell must be built before it is started"
+    );
+
+    // The ready line is the whole reason this proves more than "a process
+    // exists": without it, an app hung inside setup and one that started look
+    // identical from outside.
+    assert!(
+        scripts.contains("window ready"),
+        "the smoke test must wait for the app's ready line, not merely for time \
+         to pass — a hang would otherwise read as a pass"
+    );
+}

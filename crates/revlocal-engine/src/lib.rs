@@ -12,6 +12,7 @@ pub const REVIEW_TEMPLATE: &str = include_str!("../prompts/review.md.hbs");
 
 pub mod job;
 pub mod ladder;
+pub mod live;
 pub mod mock;
 pub mod runner;
 pub mod schema;
