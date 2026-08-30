@@ -437,6 +437,15 @@ pub fn gather(svn_repos: usize) -> DoctorReport {
 /// `warn`, not `ok`, when it is found. Installed is not the same as logged in,
 /// and a green line against an engine that has never been authenticated is the
 /// kind of reassurance that sends somebody looking somewhere else for a day.
+///
+/// `warn`, not `fail`, when it is **absent** — and that is the more important
+/// half. `Health::Fail` is blocking, and `doctor` is the first thing somebody
+/// runs on a machine where nothing is set up yet. The first version of this
+/// failed on a missing engine, which meant `revlocal doctor` exited non-zero on
+/// every machine without Claude Code or Codex installed: every CI runner, and
+/// every new user before their first install. RL-1205's criterion is that a user
+/// with no configuration reaches a review, and the mock engine gets them there —
+/// so an engine nobody has configured yet is news, not a blockage.
 pub fn engine_presence(engine: revlocal_core::EngineKind) -> Check {
     let name = format!("engine:{}", engine.as_str());
 
@@ -450,14 +459,15 @@ pub fn engine_presence(engine: revlocal_core::EngineKind) -> Check {
                 engine.as_str()
             )),
         ),
-        revlocal_engine::live::Readiness::Skip { reason } => Check::fail(
+        revlocal_engine::live::Readiness::Skip { reason } => Check::warn(
             &name,
             &reason,
-            &format!(
-                "install {} , or point `engines.{}.bin` at it in your config",
-                engine.as_str(),
+            Some(&format!(
+                "install {0}, or point `engines.{0}.bin` at it in your config — \
+                 rev-local works without it, reviewing with the mock engine, which \
+                 spends nothing and invents its findings",
                 engine.as_str()
-            ),
+            )),
         ),
     }
 }

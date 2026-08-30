@@ -348,6 +348,40 @@ fn doctor_reports_every_engine_it_supports() {
     }
 }
 
+/// A missing engine does not fail `doctor`.
+///
+/// `Health::Fail` is blocking, and `doctor` is the first thing somebody runs on a
+/// machine where nothing is set up. Failing on a missing engine made `revlocal
+/// doctor` exit non-zero on every machine without Claude Code or Codex — every CI
+/// runner, and every new user before their first install. RL-1205's criterion is
+/// that a user with no configuration reaches a review, and the mock gets them
+/// there.
+///
+/// Asserted on the check itself rather than on this machine's PATH, so it holds
+/// on the machine that has both engines and on the one that has neither — the
+/// difference between those two is what hid this for one commit.
+#[test]
+fn a_missing_engine_is_news_not_a_blockage() {
+    for engine in [
+        revlocal_core::EngineKind::Claude,
+        revlocal_core::EngineKind::Codex,
+    ] {
+        let check = revlocal_cli::doctor::engine_presence(engine);
+        assert!(
+            !check.health.is_blocking(),
+            "{}: a missing or unprobed engine must not fail doctor — {check:?}",
+            engine.as_str()
+        );
+        assert!(check.remediation.is_some(), "{check:?}");
+    }
+
+    // And the whole report agrees, whatever this machine happens to have.
+    assert!(
+        !revlocal_cli::doctor::gather(0).has_failures(),
+        "doctor blocks on a fresh install"
+    );
+}
+
 /// No remediation names a flag that does not exist.
 ///
 /// `engine_check`'s warning pointed at `revlocal doctor --smoke`, which was never
