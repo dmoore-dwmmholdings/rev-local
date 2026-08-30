@@ -1,6 +1,20 @@
 //! The kill switch (RL-804, SPEC §12.1).
 //!
 //! Helpers return `Result` (ADR 0003); only the `#[test]` functions panic.
+//!
+//! # Multi-threaded runtimes throughout (RL-1303)
+//!
+//! Every test here kills a real process, and a killed process can leave a child
+//! holding the pipes. Under the default current-thread runtime a blocked drain
+//! starves the timer, so `tokio::time::timeout` never fires and the test **hangs**
+//! rather than failing — which stops every test binary queued behind it and turns
+//! one bad assertion into a run that reports nothing.
+//!
+//! That is not hypothetical. It is what the Windows leg did four times before
+//! SPEC §8.5's Job Object landed: forty-five minutes per round, each producing a
+//! log whose last line was a test name.
+//!
+//! A regression here must be reportable.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -164,7 +178,7 @@ fn pending_action(run_id: RunId, key: &str) -> PublishAction {
 // It runs on Windows here for the first time, and this is the assertion that
 // decides whether the Job Object works: nothing else in the suite kills a process
 // that has a live grandchild.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_cancels_a_running_engine_within_three_seconds() {
     if std::process::Command::new("node")
         .arg("--version")
@@ -256,7 +270,7 @@ fn kill_switch_engaging_is_visible_and_releasing_makes_a_fresh_token() {
 
 // --- criterion 2: the publish queue is held, not drained -----------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_holds_pending_actions_and_sends_them_on_resume() {
     let (_dir, pool, run) = seeded().await.unwrap_or_else(|e| panic!("{e}"));
     let store = PublishActionStore::new(&pool);
@@ -326,7 +340,7 @@ async fn kill_switch_holds_pending_actions_and_sends_them_on_resume() {
 
 // --- criterion 3: paused survives a restart ------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_paused_state_survives_a_restart() {
     let dir = TempDir::new().expect("tempdir");
     let path = dir.path().join("rev-local.db");
@@ -354,7 +368,7 @@ async fn kill_switch_paused_state_survives_a_restart() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_a_fresh_database_is_not_paused() {
     let (_dir, pool, _run) = seeded().await.unwrap_or_else(|e| panic!("{e}"));
     assert!(
@@ -411,7 +425,7 @@ fn kill_switch_the_report_names_what_is_waiting_not_only_what_stopped() {
 
 // --- criterion 4: kill --hard leaves no orphan ---------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_hard_reaps_a_recorded_pid_and_leaves_nothing_behind() {
     // A real process rev-local could have started, on a run that has finished.
     // Null stdio, not inherited. RL-601 learned this the hard way: a child that
@@ -469,7 +483,7 @@ fn kill_switch_never_signals_pid_zero_or_one() {
     assert!(!reap(1), "1 is init");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_reaping_a_pid_that_is_already_gone_is_not_a_failure() {
     // A real pid that has definitely exited.
     let mut child = tokio::process::Command::new("true")
@@ -488,7 +502,7 @@ async fn kill_switch_reaping_a_pid_that_is_already_gone_is_not_a_failure() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_orphan_candidates_are_pids_on_runs_that_have_finished() {
     let (_dir, pool, run) = seeded().await.unwrap_or_else(|e| panic!("{e}"));
     let runs = RunStore::new(&pool);
@@ -519,7 +533,7 @@ async fn kill_switch_orphan_candidates_are_pids_on_runs_that_have_finished() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_switch_a_cleared_pid_is_not_a_candidate() {
     let (_dir, pool, run) = seeded().await.unwrap_or_else(|e| panic!("{e}"));
     let runs = RunStore::new(&pool);

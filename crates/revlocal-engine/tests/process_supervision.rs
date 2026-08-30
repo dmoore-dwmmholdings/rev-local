@@ -6,6 +6,20 @@
 //!
 //! Every one drives the **real subprocess fixture**. There is no way to test a
 //! process group without a process group.
+//!
+//! # Multi-threaded runtimes throughout (RL-1303)
+//!
+//! Every test here kills a real process, and a killed process can leave a child
+//! holding the pipes. Under the default current-thread runtime a blocked drain
+//! starves the timer, so `tokio::time::timeout` never fires and the test **hangs**
+//! rather than failing — which stops every test binary queued behind it and turns
+//! one bad assertion into a run that reports nothing.
+//!
+//! That is not hypothetical. It is what the Windows leg did four times before
+//! SPEC §8.5's Job Object landed: forty-five minutes per round, each producing a
+//! log whose last line was a test name.
+//!
+//! A regression here must be reportable.
 
 mod process_supervision {
     //! Why every test that *kills* an engine is `#[cfg(unix)]`.
@@ -93,7 +107,7 @@ mod process_supervision {
 
     // --- the hang ---------------------------------------------------------------
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_an_engine_that_respects_sigterm_is_gone_within_timeout_plus_two_seconds() {
         // Acceptance criterion 1, for the case it is actually about: supervisor
         // overhead. A well-behaved CLI dies on SIGTERM, so the grace period never
@@ -143,7 +157,7 @@ mod process_supervision {
     // Unix only. See this module's own docs: on Windows this hangs rather than
     // fails, which stops the whole run (REVL-106).
     #[cfg(unix)]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_an_engine_that_ignores_sigterm_still_dies_after_the_grace_period() {
         // The pathological case, and where acceptance criterion 1's "+2s" and §8.5's
         // five-second grace pull against each other: a process that ignores SIGTERM
@@ -182,7 +196,7 @@ mod process_supervision {
     // Unix only. See this module's own docs: on Windows this hangs rather than
     // fails, which stops the whole run (REVL-106).
     #[cfg(unix)]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_the_grace_period_is_actually_used_before_sigkill() {
         // §8.5 wants SIGTERM, five seconds of grace, then SIGKILL. A supervisor that
         // went straight to SIGKILL would pass the timeout test above while losing a
@@ -217,7 +231,7 @@ mod process_supervision {
     // Unix only. See this module's own docs: on Windows this hangs rather than
     // fails, which stops the whole run (REVL-106).
     #[cfg(unix)]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_no_orphan_survives_and_nor_does_a_grandchild() {
         // Acceptance criteria 2 and 3. The grandchild is the one that matters: a
         // supervisor killing only its direct child leaves the rest holding the
@@ -285,7 +299,7 @@ mod process_supervision {
     // Unix only. See this module's own docs: on Windows this hangs rather than
     // fails, which stops the whole run (REVL-106).
     #[cfg(unix)]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_the_kill_switch_stops_an_engine_mid_review() {
         // §12.1: the kill switch cancels every token. This asserts it reaches a
         // process that is not going to stop on its own, and that the reason is
@@ -351,7 +365,7 @@ mod process_supervision {
 
     // --- the ordinary path -------------------------------------------------------
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_a_well_behaved_engine_is_not_killed_and_its_output_is_captured() {
         // The guard that keeps the rest honest: if everything were killed, every
         // assertion above would pass and no review would ever complete.
@@ -382,7 +396,7 @@ mod process_supervision {
     // Unix only. See this module's own docs: on Windows this hangs rather than
     // fails, which stops the whole run (REVL-106).
     #[cfg(unix)]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_output_is_kept_even_from_a_killed_process() {
         // §8.2's ladder reads stdout, and a timed-out engine may still have emitted
         // a usable fenced block before it hung. Discarding output on a kill would
@@ -409,7 +423,7 @@ mod process_supervision {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn supervision_a_missing_binary_is_named_rather_than_failing_obscurely() {
         let invocation = Invocation {
             program: "definitely-not-a-real-engine".to_owned(),
@@ -435,4 +449,70 @@ mod process_supervision {
     // gate (`cargo test -p revlocal-engine env_denylist`) actually selects it. A
     // filter matching nothing exits 0, which is the quietest way for a gate to pass
     // while testing nothing.
+}
+
+/// No test that kills a process may run on a current-thread runtime (RL-1303).
+///
+/// A plain `#[tokio::test]` is single-threaded. That is the right default for most
+/// async tests and the wrong one for every test in these files: a blocked drain
+/// starves the only worker, the timer never fires, and the test hangs instead of
+/// failing. A hung test binary stops every binary queued behind it, so one
+/// regression becomes a run that reports nothing at all.
+///
+/// The rule is per **file**, not per test, and deliberately so. Some tests in
+/// these files only touch the store and could never block — but "does this
+/// particular test kill something" is a judgement that has to be made again on
+/// every addition, and the cost of getting it wrong is a silent hang. Two worker
+/// threads for a store test is not a cost worth that.
+///
+/// Checked as text rather than by reflection, because the attribute is the thing
+/// that matters and there is no way to ask the runtime which flavour it is from
+/// inside a test that has already started.
+#[test]
+fn every_process_killing_test_can_report_a_hang() -> Result<(), String> {
+    let root = {
+        let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.pop();
+        path.pop();
+        path
+    };
+
+    // Both files that drive real processes and kill them.
+    let files = [
+        "crates/revlocal-engine/tests/process_supervision.rs",
+        "crates/revlocal-daemon/tests/kill_switch.rs",
+    ];
+
+    let mut bare = Vec::new();
+    let mut checked = 0usize;
+    for file in files {
+        let path = root.join(file);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+
+        for (n, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.starts_with("#[tokio::test") {
+                checked += 1;
+                // A bare `#[tokio::test]` — no flavour named at all.
+                if line == "#[tokio::test]" {
+                    bare.push(format!("{file}:{}", n + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked > 10,
+        "only {checked} async tests found across {} files; the scan has stopped \
+         matching and would pass for the wrong reason",
+        files.len()
+    );
+    assert!(
+        bare.is_empty(),
+        "these tests kill processes on a single-threaded runtime, so a regression \
+         hangs the run instead of failing it: {bare:?}\n  \
+         use #[tokio::test(flavor = \"multi_thread\", worker_threads = 2)]"
+    );
+    Ok(())
 }
