@@ -16,6 +16,7 @@ pub mod normalize;
 pub mod pipeline;
 pub mod poll;
 pub mod prompt;
+pub mod run_view;
 pub mod scheduler;
 pub mod state_machine;
 pub mod trigger_receiver;
