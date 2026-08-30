@@ -504,3 +504,70 @@ fn a_failed_subscription_is_distinguished_from_a_browser() -> Result<(), String>
     );
     Ok(())
 }
+
+/// Windows needs an `.ico`, and nothing on this machine says so (RL-1101).
+///
+/// `tauri-build` generates a Windows resource file and fails the *build* when
+/// `icons/icon.ico` is absent:
+///
+/// ```text
+/// error: failed to run custom build command for `revlocal-tauri`
+///   `icons/icon.ico` not found; required for generating a Windows Resource file
+/// ```
+///
+/// It is a Windows-target requirement, so a macOS build never mentions it. The
+/// shell compiled here for weeks with only a `.png`, and the gap surfaced the
+/// first time CI compiled it on Windows — which is the whole argument for
+/// compiling it on a second platform.
+///
+/// Checked as a file rather than by building, because building it needs a Windows
+/// target and a C cross-compiler for `libsqlite3-sys`, neither of which a
+/// developer machine has to have.
+#[test]
+fn the_windows_icon_exists_and_carries_the_sizes_windows_asks_for() -> Result<(), String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons/icon.ico");
+    let bytes = std::fs::read(&path).map_err(|e| {
+        format!(
+            "reading {}: {e}\n  tauri-build fails the Windows build without it",
+            path.display()
+        )
+    })?;
+
+    // ICO header: reserved(0), type(1 = icon), then the image count.
+    assert!(
+        bytes.len() > 6,
+        "{} is too short to be an ICO",
+        path.display()
+    );
+    assert_eq!(
+        &bytes[0..2],
+        &[0, 0],
+        "not an ICO: reserved field is not zero"
+    );
+    assert_eq!(&bytes[2..4], &[1, 0], "not an ICO: type is not 1");
+
+    let count = u16::from(bytes[4]) | (u16::from(bytes[5]) << 8);
+    assert!(count > 0, "the ICO contains no images");
+
+    // Each directory entry is 16 bytes; byte 0 is the width, with 0 meaning 256.
+    let mut widths: Vec<u16> = Vec::new();
+    for n in 0..usize::from(count) {
+        let at = 6 + n * 16;
+        let Some(&raw) = bytes.get(at) else {
+            return Err(format!("the ICO directory is truncated at entry {n}"));
+        };
+        widths.push(if raw == 0 { 256 } else { u16::from(raw) });
+    }
+
+    // 16 for the title bar and tray, 32 for the taskbar, 256 for large-icon views
+    // and installers. Windows falls back to resampling whatever is nearest, so a
+    // missing size is not fatal — but it is a choice, and this is where it is made.
+    for needed in [16u16, 32, 256] {
+        assert!(
+            widths.contains(&needed),
+            "the ICO has {widths:?} and Windows wants {needed}px for the title \
+             bar, taskbar or large-icon view"
+        );
+    }
+    Ok(())
+}
