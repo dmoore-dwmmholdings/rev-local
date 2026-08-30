@@ -381,10 +381,41 @@ pub fn gather(svn_repos: usize) -> DoctorReport {
         prerequisites,
         // Engines and targets need config, which the caller supplies. Empty here
         // rather than absent, so the JSON shape does not change once they arrive.
-        engines: Vec::new(),
+        //
+        // Usage reporting is the exception: it is a property of the engine
+        // *implementation*, not of anybody's configuration, so it is known
+        // without one and belongs in the report a fresh install prints.
+        engines: usage_checks(),
         targets: Vec::new(),
         platform,
     }
+}
+
+/// One check per engine that cannot report its token usage (RL-409, §8.1).
+///
+/// A warning, never a failure: the engine works and reviews run. What does not
+/// work is the **budget**, and somebody who set a daily token ceiling has no way
+/// to discover that from anywhere else. `budget show` reports the ledger honestly
+/// — it hedges an unmeasured day rather than presenting it as a total — but by the
+/// time an operator reads that, they have already trusted a ceiling that was not
+/// holding.
+///
+/// Only unmeasured engines get a line. A check per engine saying "yes, measured"
+/// would bury the two that matter under noise, and §8.4's report earns attention
+/// by not spending it.
+fn usage_checks() -> Vec<Check> {
+    revlocal_engine::usage::unmeasured_engines()
+        .into_iter()
+        .map(|(engine, support)| {
+            Check::warn(
+                &format!("engine:{}:usage", engine.as_str()),
+                &support.summary_line(engine),
+                Some(
+                    "set `budgets.daily_runs_per_repo` too — a run count is measurable for every engine, and a token ceiling alone is not enforceable against this one",
+                ),
+            )
+        })
+        .collect()
 }
 
 /// Anything worth saying about this platform specifically.

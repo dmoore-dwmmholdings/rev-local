@@ -17,6 +17,7 @@ pub mod runner;
 pub mod schema;
 pub mod supervise;
 pub mod template;
+pub mod usage;
 
 pub use engine::{
     Engine, EngineError, EngineId, EngineOutcome, EngineProbe, EngineProblem, EngineTask,
