@@ -365,3 +365,52 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   gap: 0.4rem;
   white-space: nowrap;
 }
+
+/* --- repository (§15 screen 2) -------------------------------------------- */
+
+.repo-head { display: flex; gap: 0.6rem; align-items: baseline; margin-bottom: 0.8rem; }
+.repo-head h2 { margin: 0; font-size: 1.1rem; }
+
+.trigger-list { list-style: none; padding: 0; margin: 0; }
+
+.trigger {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.trigger strong { min-width: 5rem; }
+
+/* Each state gets its own mark. `not_applicable` is deliberately not amber:
+   "does not apply here" is not a problem, and colouring it like one would train
+   people to ignore the colour that does mean something. */
+.dot-active { background: var(--ok); }
+.dot-off { background: var(--dim); }
+.dot-broken { background: var(--bad); }
+.dot-not_applicable { background: transparent; border: 1px dashed var(--dim); }
+.trigger-broken .tag { color: var(--bad); border-color: var(--bad); }
+
+.globs { list-style: none; padding: 0; margin: 0.3rem 0; }
+.globs li { padding: 0.15rem 0; }
+
+.config-editor {
+  width: 100%;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.5rem;
+  resize: vertical;
+}
+
+.config-error {
+  color: var(--bad);
+  border-left: 2px solid var(--bad);
+  padding-left: 0.6rem;
+  margin: 0.4rem 0;
+}
+.config-saved { color: var(--ok); margin: 0.4rem 0; }
+
+.repository section { margin-bottom: 1.2rem; }
+.repository h3 { font-size: 0.9rem; color: var(--dim); margin: 0 0 0.4rem; }

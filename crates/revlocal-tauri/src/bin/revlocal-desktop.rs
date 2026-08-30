@@ -61,6 +61,39 @@ fn database_path() -> std::path::PathBuf {
     )
 }
 
+/// Where §13.1's config lives for this session.
+///
+/// Beside the database, and overridable the same way, so the app and the CLI read
+/// one file rather than each having its own idea of where settings are.
+fn config_path() -> std::path::PathBuf {
+    std::env::var_os("REVLOCAL_CONFIG").map_or_else(
+        || {
+            database_path().parent().map_or_else(
+                || std::path::PathBuf::from("config.toml"),
+                |dir| dir.join("config.toml"),
+            )
+        },
+        std::path::PathBuf::from,
+    )
+}
+
+/// Read §13.1's config, falling back to its documented defaults.
+///
+/// Absent is not an error: a fresh install has no file and the defaults *are* the
+/// document. A malformed one is not an error here either — this is used to light
+/// an indicator, and refusing to render the repository screen because a comment
+/// somewhere is unbalanced would hide the screen somebody needs in order to fix
+/// it. `revlocal config check` is where a bad file gets reported.
+fn global_config() -> revlocal_core::GlobalConfig {
+    std::fs::read_to_string(config_path())
+        .ok()
+        .and_then(|text| revlocal_core::GlobalConfig::parse(&text).ok())
+        .map_or_else(
+            revlocal_core::GlobalConfig::default,
+            |(config, _warnings)| config,
+        )
+}
+
 /// The dashboard snapshot (§15 screen 1).
 ///
 /// One line of delegation past opening the store: the composition is
@@ -259,6 +292,54 @@ async fn edit_payload(id: i64, payload_json: String) -> Result<(), String> {
     .await
 }
 
+/// One repository's screen (§15 screen 2).
+///
+/// The webhook listener port comes from §13.1's global config, because the
+/// webhook indicator is only honest if it knows whether a listener exists at all
+/// — "enabled here" and "reachable" are different facts, and a screen that showed
+/// the first as the second would be the one telling somebody their webhook works.
+#[tauri::command]
+async fn get_repository(repo_id: i64) -> Result<serde_json::Value, String> {
+    let global = global_config();
+
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let view = revlocal_daemon::repository_view::gather(
+        &pool,
+        repo_id,
+        &revlocal_core::BudgetSettings::default(),
+        global.global.webhook_port,
+        chrono::Utc::now(),
+    )
+    .await;
+    pool.close().await;
+
+    serde_json::to_value(view.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Validate and store a repository's config (§13.2, §15 screen 2).
+///
+/// The error crosses the boundary as the message the editor shows inline, line
+/// and column included. Summarising it to "invalid config" here would leave
+/// somebody re-reading thirty fields to find the one that is wrong.
+#[tauri::command]
+async fn save_repo_config(repo_id: i64, config_json: String) -> Result<String, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let saved = revlocal_daemon::repository_view::save_config(
+        &pool,
+        repo_id,
+        &config_json,
+        chrono::Utc::now(),
+    )
+    .await;
+    pool.close().await;
+
+    saved.map_err(|e| e.to_string())
+}
+
 /// Findings across every repository, filtered (§15 screen 4).
 ///
 /// The filter crosses the boundary and the daemon applies it. Filtering in the
@@ -407,6 +488,24 @@ fn initial_screen() -> String {
     std::env::var("REVLOCAL_SCREEN").unwrap_or_default()
 }
 
+/// Which repository a capture harness asked for, or 0 (RL-1102, §16.4).
+///
+/// §15's repository screen is about *a* repository, so opening it without one
+/// leaves a screen that correctly says "choose one from the dashboard" — right
+/// for a person, useless as a capture. Set by the harness and by nothing else,
+/// the same way `REVLOCAL_SCREEN` is.
+///
+/// An unparseable value is 0 rather than an error: this comes from an environment
+/// variable somebody typed, and a mistyped id should leave the chooser on screen,
+/// not a stack trace.
+#[tauri::command]
+fn initial_repo() -> i64 {
+    std::env::var("REVLOCAL_REPO")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
 /// Stop everything (SPEC §12.1).
 ///
 /// One line of delegation, like every command here.
@@ -464,10 +563,13 @@ fn run() -> tauri::Result<()> {
             approve_run,
             reject_action,
             edit_payload,
+            get_repository,
+            save_repo_config,
             list_findings,
             suppress_finding,
             file_to_andare,
-            initial_screen
+            initial_screen,
+            initial_repo
         ])
         .setup(|app| {
             let handle = app.handle().clone();

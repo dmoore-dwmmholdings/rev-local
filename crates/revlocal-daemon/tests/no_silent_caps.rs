@@ -27,6 +27,13 @@ use std::path::{Path, PathBuf};
 /// legitimate entry; a *blank* one is not, which is why the test rejects those.
 const ACCOUNTED_FOR: &[(&str, &str)] = &[
     (
+        "crates/revlocal-daemon/src/repository_view.rs",
+        "RECENT_RUNS bounds the recent-runs list on §15's repository screen. One \
+         more run than the list needs is fetched so `more_runs` is a fact rather \
+         than a guess, and the screen says \"older runs exist\" when it is set — \
+         \"the last ten\" and \"all ten there have ever been\" must not look alike.",
+    ),
+    (
         "crates/revlocal-cli/src/backfill.rs",
         "ENUMERATION_CAP bounds how much history `backfill` reads before --limit \
          is applied. This one genuinely can hide changes, so the report carries \

@@ -216,6 +216,49 @@ pub async fn global_mode(pool: &Pool) -> Result<AutonomyMode, DashboardError> {
         .unwrap_or(AutonomyMode::AutoLowAskHigh))
 }
 
+/// Today's spend for one repository, beside today's ceiling.
+///
+/// Shared, because §15 puts this bar on the dashboard *and* on the repository
+/// screen. Two computations of one number is two chances to round it differently,
+/// and the screen showing the wrong one would be the screen somebody trusts.
+pub async fn budget_bar(
+    pool: &Pool,
+    repo_id: RepoId,
+    budgets: &revlocal_core::BudgetSettings,
+    at: Timestamp,
+) -> Result<BudgetBar, DashboardError> {
+    // Local calendar day: a budget is a human-facing daily allowance and rolls
+    // over on the user's midnight, not UTC's.
+    let day = at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let today = BudgetLedgerStore::new(pool)
+        .get(repo_id, &day)
+        .await
+        .map_err(boxed)?;
+
+    Ok(today.map_or(
+        BudgetBar {
+            runs: 0,
+            runs_limit: budgets.daily_runs_per_repo,
+            tokens: 0,
+            tokens_limit: budgets.daily_tokens_per_repo,
+            // Nothing spent is exactly known. A fresh day is not an unmeasured
+            // one, and hedging it would cry wolf.
+            tokens_known: true,
+        },
+        |entry| BudgetBar {
+            runs: entry.runs,
+            runs_limit: budgets.daily_runs_per_repo,
+            tokens: entry.usage.total_tokens(),
+            tokens_limit: budgets.daily_tokens_per_repo,
+            tokens_known: entry.usage.tokens_are_known(),
+        },
+    ))
+}
+
 /// Assemble the dashboard (SPEC §15).
 pub async fn gather(
     pool: &Pool,
@@ -236,14 +279,6 @@ pub async fn gather(
         .collect();
 
     let runs = RunStore::new(pool);
-    let ledger = BudgetLedgerStore::new(pool);
-    // Local calendar day: a budget is a human-facing daily allowance and rolls
-    // over on the user's midnight, not UTC's.
-    let day = at
-        .with_timezone(&chrono::Local)
-        .format("%Y-%m-%d")
-        .to_string();
-
     let mut cards = Vec::with_capacity(views.len());
     for view in views {
         let repo_id = RepoId::new(view.id);
@@ -265,25 +300,7 @@ pub async fn gather(
             .await
             .map_err(boxed)?;
 
-        let today = ledger.get(repo_id, &day).await.map_err(boxed)?;
-        let budget = today.map_or(
-            BudgetBar {
-                runs: 0,
-                runs_limit: budgets.daily_runs_per_repo,
-                tokens: 0,
-                tokens_limit: budgets.daily_tokens_per_repo,
-                // Nothing spent is exactly known. A fresh day is not an
-                // unmeasured one, and hedging it would cry wolf.
-                tokens_known: true,
-            },
-            |entry| BudgetBar {
-                runs: entry.runs,
-                runs_limit: budgets.daily_runs_per_repo,
-                tokens: entry.usage.total_tokens(),
-                tokens_limit: budgets.daily_tokens_per_repo,
-                tokens_known: entry.usage.tokens_are_known(),
-            },
-        );
+        let budget = budget_bar(pool, repo_id, budgets, at).await?;
 
         cards.push(RepoCard {
             repo: view,

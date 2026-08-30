@@ -7,12 +7,15 @@ import {
   fetchApprovals,
   fetchDashboard,
   fetchFindings,
+  fetchInitialRepo,
   fetchInitialScreen,
+  fetchRepository,
   fetchRun,
   fetchTranscript,
   fileToAndare,
   rejectAction,
   retryTarget,
+  saveRepoConfig,
   suppressFinding,
   inTauri,
   invoke,
@@ -25,6 +28,7 @@ import {
   type FindingRow,
   type FindingsView as FindingsData,
   type QueuedAction,
+  type RepositoryView as RepositoryData,
   type RunView as RunViewData,
   type Mode,
   type UiEvent,
@@ -34,6 +38,7 @@ import { RunDetail } from './RunDetail';
 import { Nav, initialScreen, type Screen } from './Nav';
 import { Approvals } from './Approvals';
 import { Findings } from './Findings';
+import { Repository } from './Repository';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -58,6 +63,8 @@ export function App() {
   const [approvals, setApprovals] = useState<ApprovalsData | null>(null);
   const [findings, setFindings] = useState<FindingsData | null>(null);
   const [filter, setFilter] = useState<FindingFilter>({});
+  const [repository, setRepository] = useState<RepositoryData | null>(null);
+  const [repoId, setRepoId] = useState<number | null>(null);
 
   useEffect(() => {
     let seq = 0;
@@ -120,6 +127,13 @@ export function App() {
     fetchInitialScreen()
       .then((wanted) => {
         if (wanted) setScreen(initialScreen(wanted));
+      })
+      .catch(() => {});
+    // The repository screen is about *a* repository, so a capture of it needs
+    // one chosen. Only a harness sets this.
+    fetchInitialRepo()
+      .then((id) => {
+        if (id > 0) setRepoId(id);
       })
       .catch(() => {
         // Not worth a notice. Failing to read an optional capture hint should
@@ -320,6 +334,36 @@ export function App() {
     }
   }
 
+  // Read when the screen opens or the repository changes, and after a save.
+  // §15: no polling.
+  const reloadRepository = useCallback((id: number | null) => {
+    if (!inTauri() || id === null) return;
+    fetchRepository(id)
+      .then(setRepository)
+      .catch((error: unknown) => setNotice(`Could not load the repository — ${messageOf(error)}`));
+  }, []);
+
+  useEffect(() => {
+    if (screen === 'repository') reloadRepository(repoId);
+  }, [screen, repoId, reloadRepository]);
+
+  // Opening a repository clears the previous one: showing one repository's
+  // config under another's name is the kind of wrong that looks right.
+  function openRepository(id: number) {
+    setRepository(null);
+    setRepoId(id);
+    setScreen('repository');
+  }
+
+  async function saveConfig(configJson: string) {
+    if (repoId === null) throw new Error('no repository is open');
+    // Deliberately not caught here. The editor shows the validation error
+    // inline, beside the text it is about — an app-wide notice would put a line
+    // and column a paragraph away from the line and column.
+    await saveRepoConfig(repoId, configJson);
+    reloadRepository(repoId);
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -364,6 +408,7 @@ export function App() {
             dashboard={dashboard}
             onMode={changeMode}
             onOpenRun={openRun}
+            onOpenRepo={openRepository}
           />
         )}
 
@@ -376,6 +421,15 @@ export function App() {
             onEdit={editOne}
           />
         )}
+
+        {screen === 'repository' &&
+          (repoId === null ? (
+            // A screen about "a repository" with none chosen is not an error, and
+            // an empty panel would read as one. It says where to choose.
+            <p className="empty">Choose a repository from the dashboard.</p>
+          ) : (
+            <Repository view={repository} onOpenRun={openRun} onSave={saveConfig} />
+          ))}
 
         {screen === 'findings' && (
           <Findings

@@ -57,14 +57,29 @@ function Budget({ budget }: { budget: BudgetBar }) {
 }
 
 /** One repository's card: health, last run, queue depth, today's budget. */
-function Card({ card, onOpenRun }: { card: RepoCard; onOpenRun: (runId: number) => void }) {
+function Card({
+  card,
+  onOpenRun,
+  onOpenRepo,
+}: {
+  card: RepoCard;
+  onOpenRun: (runId: number) => void;
+  onOpenRepo: (repoId: number) => void;
+}) {
   const { repo, last_run: lastRun, queue_depth: queued, budget } = card;
 
   return (
     <li className="card">
       <header className="card-head">
         <span className={`dot ${repo.health.health === 'healthy' ? 'ok' : 'bad'}`} />
-        <h3>{repo.repo}</h3>
+        {/* The name is the way into §15's screen 2. A card that showed a
+            repository but could not open it would leave the only route to its
+            config and triggers being the command line. */}
+        <h3>
+          <button className="link" onClick={() => onOpenRepo(repo.id)}>
+            {repo.repo}
+          </button>
+        </h3>
         <span className="spacer" />
         {/* Autonomy is on the card because it is the setting that decides
             whether this repository writes to anybody else's systems. */}
@@ -148,10 +163,12 @@ export function Dashboard({
   dashboard,
   onMode,
   onOpenRun,
+  onOpenRepo,
 }: {
   dashboard: { repos: RepoCard[]; mode: string; paused: boolean } | null;
   onMode: (next: Mode) => void;
   onOpenRun: (runId: number) => void;
+  onOpenRepo: (repoId: number) => void;
 }) {
   if (!dashboard) {
     return <p className="empty">Loading the dashboard.</p>;
@@ -175,7 +192,12 @@ export function Dashboard({
       ) : (
         <ul className="cards">
           {dashboard.repos.map((card) => (
-            <Card key={card.repo.id} card={card} onOpenRun={onOpenRun} />
+            <Card
+              key={card.repo.id}
+              card={card}
+              onOpenRun={onOpenRun}
+              onOpenRepo={onOpenRepo}
+            />
           ))}
         </ul>
       )}
