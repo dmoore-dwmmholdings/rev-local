@@ -131,6 +131,13 @@ pub struct ReviewReport {
     pub schema_version: u32,
     /// Repository name.
     pub repo: String,
+    /// Which engine actually ran (§8.4, decision D3).
+    ///
+    /// Stated rather than assumed, because `mock` and `claude` produce documents
+    /// of the same shape and a mock result that read like a real one would be the
+    /// most convincing wrong answer this program can give. Added rather than
+    /// replacing a field, so `REPORT_SCHEMA_VERSION` stays at 1.
+    pub engine: String,
     /// The change's identity in its own system.
     pub change: String,
     /// How it ended.
@@ -214,10 +221,15 @@ pub enum PipelineError {
 }
 
 /// A skipped change, reported without spending an engine (SPEC §9.4).
-fn skipped_report(inputs: &ReviewInputs<'_>, reason: &str) -> ReviewReport {
+fn skipped_report(
+    inputs: &ReviewInputs<'_>,
+    engine_id: revlocal_engine::EngineId,
+    reason: &str,
+) -> ReviewReport {
     ReviewReport {
         schema_version: REPORT_SCHEMA_VERSION,
         repo: inputs.repo_name.to_owned(),
+        engine: engine_id.as_str().to_owned(),
         change: inputs.change.external_id.clone(),
         status: ReviewStatus::Skipped,
         skip_reason: Some(reason.to_owned()),
@@ -249,7 +261,7 @@ pub async fn review(
 ) -> Result<ReviewReport, PipelineError> {
     // --- §9.4 skip ---
     if let Some(reason) = inputs.skip {
-        return Ok(skipped_report(inputs, reason));
+        return Ok(skipped_report(inputs, engine.id(), reason));
     }
 
     // --- §9.4 ignore filtering, then truncation ---
@@ -261,6 +273,7 @@ pub async fn review(
     if reviewable.is_empty() {
         return Ok(skipped_report(
             inputs,
+            engine.id(),
             "every path matched ignore_globs, or the diff was empty",
         ));
     }
@@ -366,8 +379,31 @@ pub async fn review(
     };
 
     Ok(build_report(
-        inputs, &decision, &attempt, attempts, &cut, outcome, normalized,
+        inputs,
+        &decision,
+        &cut,
+        EngineRun {
+            engine_id: engine.id(),
+            attempt: &attempt,
+            attempts,
+            outcome,
+            normalized,
+        },
     ))
+}
+
+/// Everything one pass at the engine produced.
+///
+/// Grouped rather than passed as five parameters: they are one thing — what came
+/// back from the engine — and a signature long enough to trip clippy's limit is
+/// one where two arguments of the same type can be swapped without the compiler
+/// noticing.
+struct EngineRun<'a> {
+    engine_id: revlocal_engine::EngineId,
+    attempt: &'a Attempt,
+    attempts: u32,
+    outcome: Result<revlocal_engine::EngineOutcome, EngineError>,
+    normalized: Option<normalize::Normalized>,
 }
 
 /// Which depth an attempt ran at, and whether it was the escalated one.
@@ -391,15 +427,20 @@ fn suppressed_fingerprints(suppressions: &[Suppression]) -> Vec<String> {
 fn build_report(
     inputs: &ReviewInputs<'_>,
     decision: &depth::DepthDecision,
-    attempt: &Attempt,
-    attempts: u32,
     cut: &truncation::TruncationOutcome,
-    outcome: Result<revlocal_engine::EngineOutcome, EngineError>,
-    normalized: Option<normalize::Normalized>,
+    run: EngineRun<'_>,
 ) -> ReviewReport {
+    let EngineRun {
+        engine_id,
+        attempt,
+        attempts,
+        outcome,
+        normalized,
+    } = run;
     let mut report = ReviewReport {
         schema_version: REPORT_SCHEMA_VERSION,
         repo: inputs.repo_name.to_owned(),
+        engine: engine_id.as_str().to_owned(),
         change: inputs.change.external_id.clone(),
         status: ReviewStatus::Done,
         skip_reason: None,

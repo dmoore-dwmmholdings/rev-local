@@ -21,7 +21,6 @@ use revlocal_core::{
     Change, ChangeId, ChangeKind, DiffStat, Repo, RepoConfig, RepoId, RepoKind, Timestamp,
 };
 use revlocal_daemon::pipeline::{self, ReviewReport, ReviewStatus};
-use revlocal_engine::MockEngine;
 use revlocal_vcs::{GitAdapter, VcsAdapter};
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +42,13 @@ pub enum ReviewCommandError {
     )]
     Scratch(#[source] std::io::Error),
 
+    /// The configured engine could not be built (§8.4).
+    #[error("{detail}")]
+    Engine {
+        /// What is wrong with the configuration.
+        detail: String,
+    },
+
     /// The report could not be serialized.
     #[error("could not render the report as JSON: {0}")]
     Json(#[from] serde_json::Error),
@@ -53,7 +59,7 @@ pub enum ReviewCommandError {
 /// `revlocal review` takes a path rather than a configured repository so it can be
 /// run against anything without registering it first — which is what makes it usable
 /// as a debugging tool and as this crate's test surface.
-fn repo_for(path: &Path) -> Repo {
+fn repo_for(path: &Path, engine: revlocal_core::EngineKind) -> Repo {
     Repo {
         id: RepoId::new(0),
         // The *name*, not the path: it reaches the fingerprint (§10.3), and a
@@ -66,7 +72,7 @@ fn repo_for(path: &Path) -> Repo {
         local_path: Some(path.display().to_string()),
         remote_url: None,
         default_branch: None,
-        engine: revlocal_core::EngineKind::Claude,
+        engine,
         autonomy: revlocal_core::AutonomyMode::Off,
         enabled: true,
         config_json: "{}".to_owned(),
@@ -76,8 +82,14 @@ fn repo_for(path: &Path) -> Repo {
 }
 
 /// Run one review and print it.
-pub async fn run(repo_path: &Path, rev: &str, json: bool) -> Result<(), ReviewCommandError> {
-    let repo = repo_for(repo_path);
+pub async fn run(
+    repo_path: &Path,
+    rev: &str,
+    kind: revlocal_core::EngineKind,
+    global: &revlocal_core::GlobalConfig,
+    json: bool,
+) -> Result<(), ReviewCommandError> {
+    let repo = repo_for(repo_path, kind);
     let adapter = GitAdapter::new();
     let config = RepoConfig::default();
 
@@ -107,13 +119,24 @@ pub async fn run(repo_path: &Path, rev: &str, json: bool) -> Result<(), ReviewCo
         ..change
     };
 
-    // §1.1: no credential is ever stored, and the inner loop spends nothing. Until
-    // RL-1201 wires engine selection, this command reviews with the mock engine so it
-    // is safe to run anywhere — and says so, on stderr, where `--json` cannot see it.
-    let engine = MockEngine::new();
-    if !json {
+    // The engine is chosen, and the report says which one ran (RL-1206).
+    //
+    // `mock` is the default rather than `claude`, and that is not timidity: this
+    // command takes a *path*, not a configured repository, so there is no stored
+    // choice to honour — and a command that started spending somebody's tokens
+    // because they typed a directory name would be the wrong way for a default to
+    // be wrong. `--engine claude` is one word away.
+    let engine = revlocal_daemon::engines::for_kind(kind, global).map_err(|source| {
+        ReviewCommandError::Engine {
+            detail: source.to_string(),
+        }
+    })?;
+    if !json && revlocal_daemon::engines::is_mock(kind) {
+        // On stderr, where `--json` cannot see it — and in the report too, since
+        // stderr is exactly what a script does not read.
         eprintln!(
-            "revlocal: reviewing with the mock engine (live engine selection is not wired yet)"
+            "revlocal: reviewing with the mock engine, which spends nothing and \
+             invents its findings. Pass --engine claude or --engine codex for a real review."
         );
     }
 
@@ -133,7 +156,7 @@ pub async fn run(repo_path: &Path, rev: &str, json: bool) -> Result<(), ReviewCo
             skip: None,
             now: Timestamp::default(),
         },
-        &engine,
+        engine.as_ref(),
         scratch.path(),
         &CancellationToken::new(),
     )
