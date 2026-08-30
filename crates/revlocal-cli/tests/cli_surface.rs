@@ -1260,6 +1260,11 @@ mod watch_loop {
         chrono::Utc::now()
     }
 
+    /// §13.1's defaults — what a fresh install has, which is what these test.
+    fn watch_config() -> revlocal_core::GlobalConfig {
+        revlocal_core::GlobalConfig::default()
+    }
+
     async fn add_repo(pool: &Pool, name: &str, path: &str, enabled: bool) -> Result<(), String> {
         let at = now();
         revlocal_store::RepoStore::new(pool)
@@ -1293,7 +1298,9 @@ mod watch_loop {
             .await
             .map_err(|e| e.to_string())?;
 
-        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let report = tick(&pool, &watch_config(), _dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
 
         assert!(report.paused);
         assert!(report.passes.is_empty(), "nothing may run while paused");
@@ -1313,7 +1320,9 @@ mod watch_loop {
         let (pool, _dir) = store().await?;
         add_repo(&pool, "off", "/nonexistent", false).await?;
 
-        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let report = tick(&pool, &watch_config(), _dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
         assert_eq!(report.repos, 0);
         assert!(report.passes.is_empty());
         Ok(())
@@ -1328,7 +1337,9 @@ mod watch_loop {
         add_repo(&pool, "broken", "/definitely/not/a/repo", true).await?;
         add_repo(&pool, "also-broken", "/nor/this/one", true).await?;
 
-        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let report = tick(&pool, &watch_config(), _dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
 
         assert_eq!(report.passes.len(), 2, "both were attempted");
         assert!(
@@ -1378,7 +1389,9 @@ mod watch_loop {
         a_repo_with_a_lockfile_commit(&work)?;
         add_repo(&pool, "acme", &work.display().to_string(), true).await?;
 
-        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let report = tick(&pool, &watch_config(), dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
         let pass = report.passes.first().ok_or("one repository, one pass")?;
 
         assert_eq!(pass.discovered, 2);
@@ -1409,14 +1422,18 @@ mod watch_loop {
         a_repo_with_a_lockfile_commit(&work)?;
         add_repo(&pool, "acme", &work.display().to_string(), true).await?;
 
-        let first = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let first = tick(&pool, &watch_config(), dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
         assert_eq!(first.passes[0].discovered, 2);
         assert!(
             first.passes[0].cursor.is_some(),
             "the cursor must have moved"
         );
 
-        let second = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let second = tick(&pool, &watch_config(), dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
         assert_eq!(
             second.passes[0].discovered, 0,
             "a quiet repository must stay quiet"
@@ -1434,8 +1451,12 @@ mod watch_loop {
         a_repo_with_a_lockfile_commit(&work)?;
         add_repo(&pool, "acme", &work.display().to_string(), true).await?;
 
-        tick(&pool, now()).await.map_err(|e| e.to_string())?;
-        let second = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        tick(&pool, &watch_config(), dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+        let second = tick(&pool, &watch_config(), dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
 
         assert_eq!(second.passes[0].discovered, 0);
         assert!(
@@ -1447,23 +1468,31 @@ mod watch_loop {
     }
 
     #[tokio::test]
-    async fn a_tick_says_reviews_are_not_running_yet() -> Result<(), String> {
-        // §18. A `watch` that silently reviewed nothing would be indistinguishable
-        // from one whose repositories are quiet — which is the failure this whole
-        // project keeps documenting.
-        let (pool, _dir) = store().await?;
-        add_repo(&pool, "acme", "/nonexistent", true).await?;
+    async fn a_tick_reviews_what_it_discovers() -> Result<(), String> {
+        // This test used to assert the opposite — that a tick prints "Discovery
+        // only: reviews are not executed yet". That line was honest while it was
+        // true, and it is what kept the missing loop a gap rather than a lie. It
+        // is now false, so the test asserts what replaced it (RL-1207).
+        let (pool, dir) = store().await?;
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        a_repo_with_a_lockfile_commit(&work)?;
+        add_repo(&pool, "acme", &work.display().to_string(), true).await?;
 
-        let human = tick(&pool, now())
+        let report = tick(&pool, &watch_config(), dir.path(), now())
             .await
-            .map_err(|e| e.to_string())?
-            .render_human();
+            .map_err(|e| e.to_string())?;
 
-        assert!(human.contains("Discovery only"), "{human}");
+        // The reviewable commit was queued and reviewed without anybody naming it.
+        assert_eq!(report.queued, 1, "{report:?}");
+        assert_eq!(report.reviewed.len(), 1, "{report:?}");
+
+        let human = report.render_human();
         assert!(
-            human.contains("revlocal review"),
-            "must name what does work: {human}"
+            !human.contains("reviews are not executed yet"),
+            "the promise is kept now: {human}"
         );
+        assert!(human.contains("reviewed"), "{human}");
         Ok(())
     }
 
@@ -1472,7 +1501,9 @@ mod watch_loop {
         // Running `watch` before adding a repository is how somebody checks it
         // works. It should say what it saw, not fail.
         let (pool, _dir) = store().await?;
-        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let report = tick(&pool, &watch_config(), _dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
 
         assert_eq!(report.repos, 0);
         assert!(
@@ -1486,7 +1517,9 @@ mod watch_loop {
     #[tokio::test]
     async fn the_json_omits_what_is_absent_rather_than_nulling_it() -> Result<(), String> {
         let (pool, _dir) = store().await?;
-        let report = tick(&pool, now()).await.map_err(|e| e.to_string())?;
+        let report = tick(&pool, &watch_config(), _dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
         let json = render(&report, true).map_err(|e| e.to_string())?;
         let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
 

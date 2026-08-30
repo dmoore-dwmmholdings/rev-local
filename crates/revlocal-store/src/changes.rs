@@ -103,6 +103,41 @@ impl<'a> ChangeStore<'a> {
         self.get(ChangeId::new(id)).await
     }
 
+    /// Changes in this repository that no run has ever covered (RL-1207).
+    ///
+    /// The join discovery has been missing: `watch` records changes and, until the
+    /// executor, nothing ever asked which of them had been reviewed. Ordered by
+    /// `detected_at` then `id` so a backfill is worked through oldest-first and two
+    /// callers see the same order — §16 wants determinism, and `LIMIT` without
+    /// `ORDER BY` is a different subset every time.
+    ///
+    /// `NOT EXISTS` rather than a `LEFT JOIN ... IS NULL`: a change with three
+    /// failed runs has been covered, and a join would return it three times before
+    /// the filter and zero after, which is a harder thing to be sure about.
+    pub async fn without_runs(&self, repo_id: RepoId, limit: u32) -> Result<Vec<Change>> {
+        let raw = repo_id.get();
+        let limit = i64::from(limit);
+
+        let rows = sqlx::query!(
+            "SELECT change.id AS id
+               FROM change
+              WHERE change.repo_id = ?
+                AND NOT EXISTS (SELECT 1 FROM run WHERE run.change_id = change.id)
+              ORDER BY change.detected_at ASC, change.id ASC
+              LIMIT ?",
+            raw,
+            limit
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut changes = Vec::with_capacity(rows.len());
+        for row in rows {
+            changes.push(self.get(ChangeId::new(row.id)).await?);
+        }
+        Ok(changes)
+    }
+
     /// Fetch one change by id.
     pub async fn get(&self, id: ChangeId) -> Result<Change> {
         let raw = id.get();
@@ -435,6 +470,66 @@ impl<'a> RunStore<'a> {
     }
 
     /// Every run for one change, oldest attempt first.
+    /// Write what a finished review produced (RL-1207).
+    ///
+    /// The columns exist — RL-1004 added `verdict`, `summary`, `truncated` and
+    /// `omitted_files_json` because "neither is derivable after the fact" — and
+    /// until the executor nothing ever wrote them after `insert`. A run row that
+    /// could record a verdict at creation, when there is not one yet, and never
+    /// again, is a column that is always NULL.
+    ///
+    /// Status is **not** touched here. Moving a run between stages is
+    /// [`Self::transition`]'s job, which is a compare-and-swap so two callers
+    /// racing cannot both win; letting this write it too would be a second path
+    /// with no such guarantee.
+    pub async fn record_result(&self, run: &Run) -> Result<()> {
+        let id = run.id.get();
+        let tokens_in = i64::try_from(run.usage.tokens_in).unwrap_or(i64::MAX);
+        let tokens_out = i64::try_from(run.usage.tokens_out).unwrap_or(i64::MAX);
+        let tokens_known = i64::from(run.usage.tokens_known);
+        let cost = run.usage.cost_usd;
+        let truncated = i64::from(run.truncated);
+        let omitted =
+            serde_json::to_string(&run.omitted_files).map_err(|e| StoreError::Corrupt {
+                column: "run.omitted_files_json",
+                detail: e.to_string(),
+            })?;
+        let verdict = run.verdict.map(|v| v.as_str());
+        let summary = run.summary.as_deref();
+        let degraded = run.degraded.as_deref();
+        let error = run.error.as_deref();
+        let transcript = run.transcript_path.as_deref();
+        let started = run.started_at.map(format_time);
+        let finished = run.finished_at.map(format_time);
+
+        sqlx::query!(
+            "UPDATE run
+                SET tokens_in = ?, tokens_out = ?, tokens_known = ?, cost_usd = ?,
+                    truncated = ?, omitted_files_json = ?, verdict = ?, summary = ?,
+                    degraded = ?, error = ?, transcript_path = ?,
+                    started_at = ?, finished_at = ?
+              WHERE id = ?",
+            tokens_in,
+            tokens_out,
+            tokens_known,
+            cost,
+            truncated,
+            omitted,
+            verdict,
+            summary,
+            degraded,
+            error,
+            transcript,
+            started,
+            finished,
+            id
+        )
+        .execute(self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// Record the engine process this run spawned (SPEC §12.1).
     ///
     /// Written while the process is alive and cleared when it finishes, so a

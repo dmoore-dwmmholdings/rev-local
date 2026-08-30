@@ -33,14 +33,18 @@
 //! the cursor behind it means re-deciding it on every poll forever.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
-use revlocal_core::{Cursor, Repo, RepoConfig, RepoId, Timestamp, TriggerSource};
+use revlocal_core::{Cursor, GlobalConfig, Repo, RepoConfig, RepoId, Timestamp, TriggerSource};
 use revlocal_daemon::budgets::{check, BudgetVerdict};
+use revlocal_daemon::executor::RunOutcome;
 use revlocal_daemon::scheduler::{Decision, Idle, Scheduler, WorldState};
+use revlocal_daemon::state_machine::NullSink;
 use revlocal_daemon::triggers::{TriggerBus, TriggerEvent};
 use revlocal_store::{BudgetLedgerStore, CursorStore, Pool, RepoStore, SettingStore};
 use revlocal_vcs::{GitAdapter, VcsAdapter};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 /// Why a watch pass could not run.
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +65,17 @@ pub enum WatchError {
     Discovery {
         /// Which repository.
         repo: String,
+        /// What went wrong.
+        detail: String,
+    },
+
+    /// A review could not be executed (RL-1207).
+    ///
+    /// Distinct from `Discovery`: finding a change and reviewing it fail for
+    /// unrelated reasons, and a message that blamed the remote for an engine
+    /// failure would send somebody to check their network.
+    #[error("{detail}")]
+    Execute {
         /// What went wrong.
         detail: String,
     },
@@ -117,6 +132,12 @@ pub struct WatchReport {
     pub idle: Option<String>,
     /// Whether the kill switch is engaged.
     pub paused: bool,
+    /// Runs queued this tick, per repository.
+    pub queued: usize,
+    /// Reviews that finished this tick (RL-1207).
+    pub reviewed: Vec<revlocal_daemon::executor::RunOutcome>,
+    /// Runs that did not go ahead, and why — never dropped in silence (§18).
+    pub held: Vec<String>,
 }
 
 impl WatchReport {
@@ -151,21 +172,44 @@ impl WatchReport {
                 }
             }
         }
-        // Said every time, so nobody concludes from a quiet run that reviews are
-        // happening. RL-1201's remaining half.
-        out.push_str(
-            "\nDiscovery only: reviews are not executed yet. `revlocal review \
-             --repo <path> --rev <ref>` reviews one change today.\n",
-        );
+        if self.queued > 0 {
+            out.push_str(&format!("\n  queued {} run(s)\n", self.queued));
+        }
+        for outcome in &self.reviewed {
+            out.push_str(&format!(
+                "  reviewed {} {} — {} ({} finding(s), {} action(s), {})\n",
+                outcome.repo,
+                short(&outcome.change),
+                outcome.verdict.as_deref().unwrap_or("no verdict"),
+                outcome.findings,
+                outcome.actions,
+                outcome.status
+            ));
+        }
+        // §18: a run that did not happen is reported with its reason. "Nothing
+        // ran" and "everything was over budget" are different facts.
+        for held in &self.held {
+            out.push_str(&format!("  held: {held}\n"));
+        }
         out
     }
+}
+
+/// The first 12 characters of an identifier, for a status line.
+fn short(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
 }
 
 /// Run one tick of the daemon loop.
 ///
 /// Separate from any `loop {}` so it can be called once, from a test or from
 /// `--once`, without waiting for a real interval.
-pub async fn tick(pool: &Pool, at: Timestamp) -> Result<WatchReport, WatchError> {
+pub async fn tick(
+    pool: &Pool,
+    config: &GlobalConfig,
+    data_dir: &Path,
+    at: Timestamp,
+) -> Result<WatchReport, WatchError> {
     let paused = SettingStore::new(pool).is_paused().await.map_err(boxed)?;
     let repos: Vec<Repo> = RepoStore::new(pool)
         .list()
@@ -208,25 +252,93 @@ pub async fn tick(pool: &Pool, at: Timestamp) -> Result<WatchReport, WatchError>
 
     // One decision, from the function that owns the ordering.
     match Scheduler.tick(&world) {
-        Decision::Idle(idle) => Ok(WatchReport {
-            repos: repos.len(),
-            passes: Vec::new(),
-            idle: idle_line(&idle),
-            paused,
-        }),
+        Decision::Idle(idle) => {
+            // Even an idle discovery tick drains the queue: the scheduler's
+            // "nothing to discover" is about polling remotes, and a run queued by
+            // an earlier tick still deserves to be reviewed.
+            let (queued, reviewed, held) = execute(pool, config, data_dir, &repos, at).await?;
+            Ok(WatchReport {
+                repos: repos.len(),
+                passes: Vec::new(),
+                idle: (reviewed.is_empty() && held.is_empty())
+                    .then(|| idle_line(&idle))
+                    .flatten(),
+                paused,
+                queued,
+                reviewed,
+                held,
+            })
+        }
         Decision::Discover(_) | Decision::Backfill { .. } => {
             let mut passes = Vec::new();
             for repo in &repos {
                 passes.push(discover_one(pool, repo, at).await);
             }
+            let (queued, reviewed, held) = execute(pool, config, data_dir, &repos, at).await?;
             Ok(WatchReport {
                 repos: repos.len(),
                 passes,
                 idle: None,
                 paused,
+                queued,
+                reviewed,
+                held,
             })
         }
     }
+}
+
+/// Queue what discovery found, then review it (RL-1207).
+///
+/// Both halves in one place because they are one sentence: a change nobody has
+/// reviewed becomes a queued run, and a queued run becomes a review. The split
+/// exists so a crash between the two leaves a record, not because they happen at
+/// different times.
+async fn execute(
+    pool: &Pool,
+    config: &GlobalConfig,
+    data_dir: &Path,
+    repos: &[Repo],
+    at: Timestamp,
+) -> Result<(usize, Vec<RunOutcome>, Vec<String>), WatchError> {
+    let mut queued = 0_usize;
+    let mut held = Vec::new();
+
+    for repo in repos {
+        match revlocal_daemon::executor::enqueue(pool, repo, at).await {
+            Ok(report) => {
+                queued += report.queued.len();
+                if report.more_waiting {
+                    // §18: the batch is a cap, and a cap that says nothing looks
+                    // like a queue that has caught up.
+                    held.push(format!(
+                        "{}: more changes are waiting than one pass queues; the next tick takes the rest",
+                        repo.name
+                    ));
+                }
+            }
+            // One repository failing to queue must not stop the others being
+            // reviewed — the same rule discovery already follows.
+            Err(error) => held.push(format!("{}: {error}", repo.name)),
+        }
+    }
+
+    let report = revlocal_daemon::executor::drain(
+        pool,
+        config,
+        &NullSink,
+        data_dir,
+        revlocal_daemon::budgets::DEFAULT_MAX_CONCURRENT_RUNS,
+        at,
+        &CancellationToken::new(),
+    )
+    .await
+    .map_err(|error| WatchError::Execute {
+        detail: error.to_string(),
+    })?;
+
+    held.extend(report.held);
+    Ok((queued, report.finished, held))
 }
 
 /// The line an idle tick prints, or `None` when idling is just "nothing due".
@@ -278,7 +390,7 @@ async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
                 // Recorded either way. §9.4's rule is that a skipped change is
                 // still written down with its reason — a change that vanishes is
                 // indistinguishable from one that was never seen.
-                if let Err(error) = record(pool, repo, change, at).await {
+                if let Err(error) = record(pool, repo, change, skip.as_ref(), at).await {
                     return RepoPass {
                         repo: repo.name.clone(),
                         discovered: changes.len(),
@@ -335,18 +447,27 @@ async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
     }
 }
 
-/// Write one discovered change down.
+/// Write one discovered change down, and its skip decision if it has one.
 ///
 /// `upsert`, not `insert`: discovery can legitimately see the same change twice —
 /// a force-push, an overlapping poll — and a unique-constraint failure there would
 /// stop a pass over something harmless.
+///
+/// A skipped change gets a `skipped` **run** as well as a change row, and that is
+/// the load-bearing part. §9.4's rules need a change's parents and paths, which
+/// only discovery has: the stored `change` row carries neither. Writing the
+/// decision down here means the executor does not have to re-derive it from less
+/// information than this had — which it cannot do correctly, and which showed up
+/// immediately as a lockfile commit being materialised and sent to an engine to
+/// learn what discovery already knew.
 async fn record(
     pool: &Pool,
     repo: &Repo,
     change: &revlocal_vcs::DetectedChange,
+    skip: Option<&revlocal_vcs::Skip>,
     at: Timestamp,
 ) -> Result<(), WatchError> {
-    revlocal_store::ChangeStore::new(pool)
+    let stored = revlocal_store::ChangeStore::new(pool)
         .upsert(&revlocal_core::Change {
             id: revlocal_core::ChangeId::new(0),
             repo_id: repo.id,
@@ -365,6 +486,49 @@ async fn record(
         })
         .await
         .map_err(boxed)?;
+
+    let Some(skip) = skip else {
+        return Ok(());
+    };
+
+    // Only once. A repeat poll sees the same change again, and a second skipped
+    // run per tick would fill the run table with the decision not to review.
+    let existing = revlocal_store::RunStore::new(pool)
+        .list_for_change(stored.id)
+        .await
+        .map_err(boxed)?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
+
+    revlocal_store::RunStore::new(pool)
+        .insert(&revlocal_core::Run {
+            id: revlocal_core::RunId::new(0),
+            change_id: stored.id,
+            attempt: 1,
+            status: revlocal_core::RunStatus::Skipped,
+            engine: repo.engine,
+            depth: revlocal_core::Depth::Summary,
+            trigger: TriggerSource::Poll,
+            // §9.4: the reason is the point. "Why did rev-local ignore my commit?"
+            // has an answer only if it was written down at the moment it was
+            // decided.
+            skip_reason: Some(skip.detail.clone()),
+            error: None,
+            degraded: None,
+            usage: revlocal_core::Usage::default(),
+            started_at: None,
+            finished_at: Some(at),
+            transcript_path: None,
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
+            created_at: at,
+        })
+        .await
+        .map_err(boxed)?;
+
     Ok(())
 }
 

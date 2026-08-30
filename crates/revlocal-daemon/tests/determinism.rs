@@ -192,6 +192,7 @@ fn review_once(suppressions: &[Suppression]) -> Result<ReviewReport, String> {
             &CancellationToken::new(),
         )
         .await
+        .map(|outcome| outcome.report)
         .map_err(|e| format!("pipeline: {e}"))
     })
 }

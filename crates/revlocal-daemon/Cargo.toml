@@ -29,6 +29,8 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
+# §6.1's scratch directories, which the executor creates per run.
+tempfile = { workspace = true }
 
 # `nix` is a Unix API crate; on Windows it compiles to almost nothing.
 [target.'cfg(unix)'.dependencies]

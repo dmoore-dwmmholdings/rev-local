@@ -252,16 +252,38 @@ fn skipped_report(
     }
 }
 
+/// Everything one review produced.
+///
+/// The report is the *document* — what `--json` prints and what a consumer reads.
+/// The findings are rows, ready for the store: full bodies, confidences and
+/// suggested fixes, which the report deliberately does not carry because a
+/// summary that included every field would not be a summary.
+///
+/// Returned together because a caller that persists a review needs both, and the
+/// alternative was the pipeline dropping the rows on the floor and something
+/// downstream reconstructing them from the summary — which is exactly how two
+/// representations of one review start disagreeing.
+#[derive(Debug, Clone)]
+pub struct ReviewOutcome {
+    /// The report.
+    pub report: ReviewReport,
+    /// Every finding, publishable or not, ready to store.
+    pub findings: Vec<normalize::NormalizedFinding>,
+}
+
 /// Run one review (SPEC §9).
 pub async fn review(
     inputs: &ReviewInputs<'_>,
     engine: &dyn Engine,
     scratch: &Path,
     cancel: &CancellationToken,
-) -> Result<ReviewReport, PipelineError> {
+) -> Result<ReviewOutcome, PipelineError> {
     // --- §9.4 skip ---
     if let Some(reason) = inputs.skip {
-        return Ok(skipped_report(inputs, engine.id(), reason));
+        return Ok(ReviewOutcome {
+            report: skipped_report(inputs, engine.id(), reason),
+            findings: Vec::new(),
+        });
     }
 
     // --- §9.4 ignore filtering, then truncation ---
@@ -271,11 +293,14 @@ pub async fn review(
     // A change with nothing reviewable left is a skip, not an empty review. Sending
     // an engine an empty diff spends a budget to be told nothing is wrong.
     if reviewable.is_empty() {
-        return Ok(skipped_report(
-            inputs,
-            engine.id(),
-            "every path matched ignore_globs, or the diff was empty",
-        ));
+        return Ok(ReviewOutcome {
+            report: skipped_report(
+                inputs,
+                engine.id(),
+                "every path matched ignore_globs, or the diff was empty",
+            ),
+            findings: Vec::new(),
+        });
     }
 
     let kept: Vec<revlocal_core::FileDiff> = inputs
@@ -378,18 +403,26 @@ pub async fn review(
         };
     };
 
-    Ok(build_report(
-        inputs,
-        &decision,
-        &cut,
-        EngineRun {
-            engine_id: engine.id(),
-            attempt: &attempt,
-            attempts,
-            outcome,
-            normalized,
-        },
-    ))
+    let findings = normalized
+        .as_ref()
+        .map(|n| n.findings.clone())
+        .unwrap_or_default();
+
+    Ok(ReviewOutcome {
+        report: build_report(
+            inputs,
+            &decision,
+            &cut,
+            EngineRun {
+                engine_id: engine.id(),
+                attempt: &attempt,
+                attempts,
+                outcome,
+                normalized,
+            },
+        ),
+        findings,
+    })
 }
 
 /// Everything one pass at the engine produced.
