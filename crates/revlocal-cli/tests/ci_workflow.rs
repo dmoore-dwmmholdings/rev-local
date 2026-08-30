@@ -289,3 +289,28 @@ fn the_desktop_smoke_test_runs_after_the_build() {
          to pass — a hang would otherwise read as a pass"
     );
 }
+
+/// CI runs the front end's own tests (RL-1105, ADR 0032).
+///
+/// ADR 0032 decided capture is a local gate *and that CI runs the vitest layer*.
+/// The first half was implemented immediately and the second was not, which is
+/// the shape of gap an ADR quietly acquires: the part that stops something is
+/// easy to remember and the part that keeps something is easy to forget.
+#[test]
+fn ci_runs_the_front_end_tests() {
+    let wf = workflow().expect("ci.yml exists and is valid YAML");
+    let scripts = all_run_scripts(&wf);
+
+    let test = scripts
+        .find("ui test")
+        .unwrap_or_else(|| panic!("ADR 0032 says CI runs the vitest layer; nothing does"));
+
+    let install = scripts
+        .find("npm --prefix crates/revlocal-tauri/ui ci")
+        .unwrap_or_else(|| panic!("the front end's tests need its dependencies installed"));
+
+    assert!(
+        install < test,
+        "dependencies must be installed before the tests that need them"
+    );
+}
