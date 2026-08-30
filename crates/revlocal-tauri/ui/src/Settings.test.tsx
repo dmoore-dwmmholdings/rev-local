@@ -71,7 +71,15 @@ const noop = vi.fn();
 
 function mount(v: SettingsView | null, props: Partial<Parameters<typeof Settings>[0]> = {}) {
   return render(
-    <Settings view={v} busy={false} onRunDoctor={noop} onMap={noop} onUnmap={noop} {...props} />,
+    <Settings
+      view={v}
+      busy={false}
+      onRunDoctor={noop}
+      onMap={noop}
+      onUnmap={noop}
+      onRunOnboarding={noop}
+      {...props}
+    />,
   );
 }
 
@@ -229,5 +237,16 @@ describe('settings', () => {
     mount(null);
 
     expect(screen.getByText(/loading settings/i)).toBeTruthy();
+  });
+
+  it('offers to run onboarding again', () => {
+    // RL-1205's criterion. Onboarding that can only happen once is a thing people
+    // are afraid to leave halfway.
+    const onRunOnboarding = vi.fn();
+    mount(view(), { onRunOnboarding });
+
+    fireEvent.click(screen.getByRole('button', { name: /run setup again/i }));
+
+    expect(onRunOnboarding).toHaveBeenCalled();
   });
 });

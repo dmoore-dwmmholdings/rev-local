@@ -466,3 +466,37 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 
 .banner-warn { border-color: var(--warn); color: var(--warn); }
+
+/* --- onboarding (§15, RL-1205) -------------------------------------------- */
+
+.steps {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.step {
+  color: var(--dim);
+  padding: 0.2rem 0.5rem;
+  border-bottom: 2px solid transparent;
+}
+/* The current step is marked, and the done ones are marked differently — a
+   progress bar that only shows position cannot say what has been decided. */
+.step-current { color: var(--fg); border-bottom-color: var(--accent, var(--ok)); }
+.step-done { color: var(--ok); }
+
+.step-body { margin-bottom: 1rem; }
+.step-body .filter { margin-bottom: 0.6rem; max-width: 40rem; }
+
+.step-body input {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}

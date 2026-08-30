@@ -11,9 +11,9 @@
 //!
 //! Nothing here polls. Showing state must not be able to change it.
 
+use crate::poll::{HealthReport, PollSchedule};
+pub use crate::view::RepoView;
 use revlocal_core::{Repo, RepoConfig};
-use revlocal_daemon::poll::{HealthReport, PollSchedule};
-pub use revlocal_daemon::view::RepoView;
 use revlocal_store::{Pool, RepoStore};
 
 /// Why a `repo` command could not complete.
@@ -87,7 +87,7 @@ pub enum RepoCommandError {
 pub fn report_for(repo: &Repo) -> HealthReport {
     let configured = serde_json::from_str::<RepoConfig>(&repo.config_json)
         .map(|config| config.poll_interval_secs)
-        .unwrap_or(revlocal_daemon::poll::DEFAULT_POLL_INTERVAL_SECS);
+        .unwrap_or(crate::poll::DEFAULT_POLL_INTERVAL_SECS);
 
     // The real id, so jitter is stable for a repository across restarts — the
     // property §7.1 wants is that twenty repos on one interval do not all poll on

@@ -370,6 +370,115 @@ fn overrides_path() -> std::path::PathBuf {
     )
 }
 
+/// Whether this installation has never been set up (§15, RL-1205).
+#[tauri::command]
+async fn is_first_run() -> Result<bool, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let first = revlocal_daemon::onboarding::is_first_run(&pool).await;
+    pool.close().await;
+
+    first.map_err(|e| e.to_string())
+}
+
+/// Add the repository onboarding drafted (§14's `repo add`, through the wizard).
+#[tauri::command]
+async fn onboard_add_repo(
+    draft: revlocal_daemon::onboarding::Draft,
+) -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let added = revlocal_daemon::onboarding::add_repo(&pool, &draft, chrono::Utc::now()).await;
+    pool.close().await;
+
+    serde_json::to_value(added.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Discover and review one change, and hand back the result (§15's last step).
+///
+/// Runs through the same executor `watch` uses. A first review that worked
+/// differently from every later one would demonstrate something that does not
+/// exist, and the failure would arrive on the second day.
+#[tauri::command]
+async fn onboard_first_review(repo: String) -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+
+    // Discovery first: a repository added a moment ago has no changes recorded,
+    // and "nothing to review" would be a confusing end to a walkthrough.
+    let discovered = discover_for(&pool, &repo).await;
+    let review = match discovered {
+        Ok(()) => revlocal_daemon::onboarding::first_review(
+            &pool,
+            &global_config(),
+            &data_dir(),
+            &repo,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|e| e.to_string()),
+        Err(detail) => Err(detail),
+    };
+    pool.close().await;
+
+    serde_json::to_value(review?).map_err(|e| e.to_string())
+}
+
+/// §4.1's data directory: scratch worktrees live under it, keyed by run id.
+fn data_dir() -> std::path::PathBuf {
+    database_path().parent().map_or_else(
+        || std::path::PathBuf::from("."),
+        std::path::Path::to_path_buf,
+    )
+}
+
+/// Record what this repository has, so the first review has something to look at.
+async fn discover_for(pool: &revlocal_store::Pool, name: &str) -> Result<(), String> {
+    use revlocal_vcs::VcsAdapter as _;
+
+    let repos = revlocal_store::RepoStore::new(pool)
+        .list()
+        .await
+        .map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.name == name)
+        .ok_or_else(|| format!("no repository called {name}"))?;
+
+    let changes = revlocal_vcs::GitAdapter::new()
+        .discover(repo, None, 50)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let at = chrono::Utc::now();
+    for change in &changes {
+        revlocal_store::ChangeStore::new(pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id: repo.id,
+                kind: change.kind,
+                external_id: change.external_id.clone(),
+                title: change.title.clone(),
+                author_name: change.author_name.clone(),
+                author_email: change.author_email.clone(),
+                authored_at: change.authored_at,
+                branch: change.branch.clone(),
+                base_ref: change.base_ref.clone(),
+                head_ref: change.head_ref.clone(),
+                url: change.url.clone(),
+                diff_stat: change.diff_stat,
+                detected_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 /// The settings screen (§15 screen 6).
 ///
 /// `doctor` is **not** run here. It shells out to every configured engine, and a
@@ -652,6 +761,17 @@ fn initial_screen() -> String {
     std::env::var("REVLOCAL_SCREEN").unwrap_or_default()
 }
 
+/// Which onboarding step a capture harness asked for, or "" (RL-1102, §16.4).
+///
+/// Onboarding is a *flow*, and §16.4's single-shot harness photographs one screen
+/// at a time. Until RL-1103's scripted flow capture exists, this is how each step
+/// gets a frame — one shot per step rather than one shot of a wizard nobody
+/// clicked through.
+#[tauri::command]
+fn initial_onboarding_step() -> String {
+    std::env::var("REVLOCAL_ONBOARDING").unwrap_or_default()
+}
+
 /// Which repository a capture harness asked for, or 0 (RL-1102, §16.4).
 ///
 /// §15's repository screen is about *a* repository, so opening it without one
@@ -742,6 +862,9 @@ fn run() -> tauri::Result<()> {
             edit_payload,
             notify,
             refresh_tray,
+            is_first_run,
+            onboard_add_repo,
+            onboard_first_review,
             settings,
             run_doctor,
             set_override,
@@ -753,7 +876,8 @@ fn run() -> tauri::Result<()> {
             file_to_andare,
             initial_screen,
             initial_repo,
-            initial_run
+            initial_run,
+            initial_onboarding_step
         ])
         .setup(|app| {
             let handle = app.handle().clone();

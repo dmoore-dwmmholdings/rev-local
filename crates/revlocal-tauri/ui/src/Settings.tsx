@@ -206,12 +206,14 @@ export function Settings({
   onRunDoctor,
   onMap,
   onUnmap,
+  onRunOnboarding,
 }: {
   view: SettingsView | null;
   busy: boolean;
   onRunDoctor: () => void;
   onMap: (target: string, capability: string, tool: string) => void;
   onUnmap: (target: string, capability: string) => void;
+  onRunOnboarding: () => void;
 }) {
   if (!view) return <p className="empty">Loading settings.</p>;
 
@@ -283,6 +285,20 @@ export function Settings({
             ))}
           </ul>
         )}
+      </section>
+
+      <section>
+        <div className="section-head">
+          <h3>Setup</h3>
+          {/* §15's onboarding, re-runnable. One that can only happen once is a
+              thing people are afraid to leave — and the second repository
+              deserves the same walk as the first. */}
+          <button onClick={onRunOnboarding}>Run setup again</button>
+        </div>
+        <p className="dim">
+          Walks through the checks, adding a repository, choosing an engine and an
+          autonomy mode, and one review. Nothing already configured is changed.
+        </p>
       </section>
 
       <section>
