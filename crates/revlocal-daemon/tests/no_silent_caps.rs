@@ -27,6 +27,17 @@ use std::path::{Path, PathBuf};
 /// legitimate entry; a *blank* one is not, which is why the test rejects those.
 const ACCOUNTED_FOR: &[(&str, &str)] = &[
     (
+        "crates/revlocal-daemon/src/notify.rs",
+        "PER_WINDOW rate-limits native notifications so a backfill cannot fill \
+         somebody's screen, and KEY_MEMORY bounds the deduplication set. The rate \
+         limit is the §18 case: what it holds back is counted, and the next \
+         notification that gets through carries \"and N more\" \
+         (Decision::Summarise). A limiter that dropped the fourth notification of \
+         the hour silently would be dropping one as likely to matter as any other. \
+         KEY_MEMORY forgetting an old key means a finding nobody has seen in a \
+         very long time can notify again, which is the right way to fail.",
+    ),
+    (
         "crates/revlocal-daemon/src/repository_view.rs",
         "RECENT_RUNS bounds the recent-runs list on §15's repository screen. One \
          more run than the list needs is fetched so `more_runs` is a fact rather \

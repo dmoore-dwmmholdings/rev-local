@@ -18,6 +18,13 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WindowEvent};
 
+/// The rate limiter, shared across every call.
+///
+/// One per process because the limit is about a person's attention, not about a
+/// screen: two callers each with their own budget would show twice as many.
+static NOTIFIER: std::sync::Mutex<revlocal_daemon::notify::Notifier> =
+    std::sync::Mutex::new(revlocal_daemon::notify::Notifier::new());
+
 /// Printed once the window and tray exist, when `REVLOCAL_SMOKE` is set.
 ///
 /// The smoke test greps for exactly this, so it lives here rather than being
@@ -290,6 +297,69 @@ async fn edit_payload(id: i64, payload_json: String) -> Result<(), String> {
             .map_err(|e| e.to_string())
     })
     .await
+}
+
+/// Show a native notification, if the limiter says it is worth showing.
+///
+/// The *decision* is `revlocal_daemon::notify`, which is plain Rust and tested
+/// without a window. This is delivery, and delivery only: a rate limit
+/// implemented in the layer that draws things is one that cannot be tested and
+/// that a second caller would bypass.
+///
+/// The limiter is process-wide state, because the limit is about a *person's*
+/// attention rather than about any one screen.
+#[tauri::command]
+async fn notify(
+    app: tauri::AppHandle<tauri::Wry>,
+    reason: revlocal_daemon::notify::Reason,
+) -> Result<serde_json::Value, String> {
+    use tauri_plugin_notification::NotificationExt as _;
+
+    let decision = {
+        let mut notifier = NOTIFIER
+            .lock()
+            .map_err(|e| format!("the notifier is poisoned: {e}"))?;
+        notifier.consider(&reason, chrono::Utc::now())
+    };
+
+    if let revlocal_daemon::notify::Decision::Show { title, body }
+    | revlocal_daemon::notify::Decision::Summarise { title, body, .. } = &decision
+    {
+        // A notification that could not be shown is reported, not swallowed: the
+        // caller is telling somebody something, and "we tried" is the answer it
+        // needs when the OS refused permission.
+        app.notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|e| format!("could not show a notification: {e}"))?;
+    }
+
+    serde_json::to_value(decision).map_err(|e| e.to_string())
+}
+
+/// Update the tray to match the paused state (§12.1, §15).
+///
+/// The kill switch's effect has to be visible without opening the window. One
+/// somebody pressed that left no trace in the only part of the app still on
+/// screen is one they press again to be sure.
+#[tauri::command]
+async fn refresh_tray(app: tauri::AppHandle<tauri::Wry>) -> Result<String, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let paused = revlocal_store::SettingStore::new(&pool)
+        .is_paused()
+        .await
+        .map_err(|e| e.to_string());
+    pool.close().await;
+
+    let status = revlocal_daemon::notify::TrayStatus::of(paused?);
+    if let Some(tray) = app.tray_by_id("revlocal") {
+        let _ = tray.set_tooltip(Some(status.tooltip()));
+    }
+    Ok(status.tooltip().to_owned())
 }
 
 /// Where manual capability overrides live: beside the config (§11.2, RL-605).
@@ -600,6 +670,18 @@ fn initial_repo() -> i64 {
         .unwrap_or(0)
 }
 
+/// Which run a capture harness asked for, or 0 (RL-1102, §16.4).
+///
+/// The run-detail screen has the same shape as the repository screen: it is about
+/// *a* run, and opening it without one photographs the words "select a run".
+#[tauri::command]
+fn initial_run() -> i64 {
+    std::env::var("REVLOCAL_RUN")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
 /// Stop everything (SPEC §12.1).
 ///
 /// One line of delegation, like every command here.
@@ -645,6 +727,7 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> tauri::Result<()> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             kill_switch,
             dashboard,
@@ -657,6 +740,8 @@ fn run() -> tauri::Result<()> {
             approve_run,
             reject_action,
             edit_payload,
+            notify,
+            refresh_tray,
             settings,
             run_doctor,
             set_override,
@@ -667,7 +752,8 @@ fn run() -> tauri::Result<()> {
             suppress_finding,
             file_to_andare,
             initial_screen,
-            initial_repo
+            initial_repo,
+            initial_run
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -688,7 +774,10 @@ fn run() -> tauri::Result<()> {
                         .cloned()
                         .ok_or("the app has no window icon to use for the tray")?,
                 )
-                .tooltip("rev-local")
+                // Replaced as soon as the front end asks, but a tray that said
+                // nothing until then would be blank at exactly the moment
+                // somebody looks — startup after a kill switch.
+                .tooltip(revlocal_daemon::notify::TrayStatus::Running.tooltip())
                 .menu(&tray_menu(&handle)?)
                 .on_menu_event(|app, event| match TrayItem::from_id(event.id().as_ref()) {
                     Some(TrayItem::Show) => {
@@ -697,9 +786,19 @@ fn run() -> tauri::Result<()> {
                             let _ = window.set_focus();
                         }
                     }
-                    Some(TrayItem::KillSwitch) => {
-                        let _ = kill_switch();
+                    Some(TrayItem::KillSwitch) if kill_switch().is_ok() => {
+                        // The tray is where this was pressed, so the tray is
+                        // where the confirmation has to appear. Without it the
+                        // only feedback is that a menu closed.
+                        if let Some(tray) = app.tray_by_id("revlocal") {
+                            let _ = tray.set_tooltip(Some(
+                                revlocal_daemon::notify::TrayStatus::Paused.tooltip(),
+                            ));
+                        }
                     }
+                    // A kill switch that failed leaves the tray saying "reviewing",
+                    // which is the truth: nothing was stopped.
+                    Some(TrayItem::KillSwitch) => {}
                     // Quit is a real exit. An app that can only be hidden is one
                     // people force-kill, and a force-killed daemon leaves runs
                     // stuck mid-stage for RL-501's recovery to find.

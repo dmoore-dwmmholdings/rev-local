@@ -8,9 +8,13 @@ import {
   fetchDashboard,
   fetchFindings,
   fetchInitialRepo,
+  fetchInitialRun,
   fetchInitialScreen,
   fetchRepository,
   fetchSettings,
+  notify,
+  reasonForApproval,
+  refreshTray,
   fetchRun,
   fetchTranscript,
   fileToAndare,
@@ -142,6 +146,11 @@ export function App() {
     fetchInitialRepo()
       .then((id) => {
         if (id > 0) setRepoId(id);
+      })
+      .catch(() => {});
+    fetchInitialRun()
+      .then((id) => {
+        if (id > 0) openRun(id);
       })
       .catch(() => {
         // Not worth a notice. Failing to read an optional capture hint should
@@ -433,6 +442,34 @@ export function App() {
     }
   }
 
+  // Tell somebody when something is waiting for them, and keep the tray honest.
+  //
+  // Driven by run events, not a timer: §15 forbids polling, and a new approval
+  // can only appear because a run progressed. The daemon decides what is worth
+  // showing and rate-limits it — sending an approval it has already shown is
+  // harmless, because it is keyed by action id.
+  const announce = useCallback(() => {
+    if (!inTauri()) return;
+    refreshTray().catch(() => {
+      // A tray that could not be updated is not worth a notice in the window.
+      // The window is the place somebody would be told, and they are looking at it.
+    });
+    fetchApprovals()
+      .then((inbox) => {
+        for (const action of inbox.waiting) {
+          notify(reasonForApproval(action)).catch(() => {
+            // Notifications are best-effort by nature: the OS may have denied
+            // permission, and failing a review over that would be worse.
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (entries.length > 0) announce();
+  }, [entries.length, announce]);
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -445,6 +482,10 @@ export function App() {
 
     try {
       await invoke('kill_switch');
+      // §12.1: the tray is the only part of the app on screen when the window is
+      // hidden, so it has to say "paused" the moment this happens rather than at
+      // the next run event — which, by construction, is not coming.
+      await refreshTray().catch(() => '');
       setNotice('Kill switch engaged. Reviews stopped; pending actions held.');
     } catch (error) {
       setNotice(`Could not engage the kill switch — ${messageOf(error)}`);

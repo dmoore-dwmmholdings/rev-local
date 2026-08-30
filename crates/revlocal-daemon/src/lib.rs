@@ -16,6 +16,7 @@ pub mod hooks;
 pub mod kill_switch;
 pub mod logging;
 pub mod normalize;
+pub mod notify;
 pub mod pipeline;
 pub mod poll;
 pub mod prompt;
