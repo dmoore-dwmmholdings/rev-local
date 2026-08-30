@@ -51,7 +51,7 @@ if [[ ${#SCREENS[@]} -eq 0 ]]; then
   exit 2
 fi
 if [[ "${SCREENS[0]}" == "all" ]]; then
-  SCREENS=(dashboard repository:1 repository:3 findings approvals settings run)
+  SCREENS=(dashboard repository:1 repository:3 run:1 findings approvals settings)
 fi
 
 if ! command -v framewatch >/dev/null 2>&1; then
@@ -101,10 +101,19 @@ for screen in "${SCREENS[@]}"; do
   # both vocabularies — a git repo and an SVN one are different screens, not
   # different words, and only a second capture shows that.
   want_screen="${screen%%:*}"
-  want_repo="${screen#*:}"
-  [[ "$want_repo" == "$screen" ]] && want_repo=0
+  want_id="${screen#*:}"
+  [[ "$want_id" == "$screen" ]] && want_id=0
 
-  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" framewatch shot \
+  # One selector, routed by screen. `repository:3` and `run:1` read the same way
+  # and the app takes them on different variables, so the split happens here
+  # rather than making the caller remember which is which.
+  want_repo=0; want_run=0
+  case "$want_screen" in
+    repository) want_repo="$want_id" ;;
+    run)        want_run="$want_id" ;;
+  esac
+
+  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" REVLOCAL_RUN="$want_run" framewatch shot \
        --launch "$BIN" \
        --title "rev-local" \
        --out-file "$out" \

@@ -263,6 +263,11 @@ export function fetchInitialRepo(): Promise<number> {
   return invoke<number>('initial_repo');
 }
 
+/** Which run a capture harness asked for, or 0 (RL-1102, §16.4). */
+export function fetchInitialRun(): Promise<number> {
+  return invoke<number>('initial_run');
+}
+
 // --- findings (RL-1108, SPEC §15 screen 4) ----------------------------------
 
 /** §10.1's severities, worst first — the order the filter means by "and worse". */
@@ -504,4 +509,64 @@ export function setOverride(
 
 export function clearOverride(target: string, capability: string): Promise<void> {
   return invoke<void>('clear_override', { target, capability });
+}
+
+// --- notifications and the tray (RL-1111, SPEC §15) -------------------------
+
+/**
+ * Why rev-local wants to interrupt somebody.
+ *
+ * Sent as-is to the daemon, which decides whether to show it. Deliberately *not*
+ * filtered here: a front end that dropped medium-severity findings before asking
+ * would be a second copy of the rule, and the copy that drifts is the one nobody
+ * is testing.
+ */
+export type NotifyReason =
+  | { kind: 'finding'; severity: string; fingerprint: string; title: string; repo: string }
+  | { kind: 'approval'; action_id: number; target: string; capability: string };
+
+/**
+ * A finding, as a reason.
+ *
+ * The **fingerprint** is what makes two runs over one unfixed bug a single
+ * notification (§10.3). Sending the title instead would look identical until a
+ * finding was reworded, at which point somebody gets told twice about a thing
+ * they already fixed nothing about.
+ */
+export function reasonForFinding(
+  finding: { severity: string; fingerprint: string; title: string },
+  repo: string,
+): NotifyReason {
+  return {
+    kind: 'finding',
+    severity: finding.severity,
+    fingerprint: finding.fingerprint,
+    title: finding.title,
+    repo,
+  };
+}
+
+/** A queued action, as a reason. Identified by its id: two actions are two decisions. */
+export function reasonForApproval(action: QueuedAction): NotifyReason {
+  return {
+    kind: 'approval',
+    action_id: action.id,
+    target: action.target,
+    capability: action.capability,
+  };
+}
+
+/** What the daemon decided about one reason. */
+export type NotifyDecision =
+  | { decision: 'show'; title: string; body: string }
+  | { decision: 'summarise'; title: string; body: string; suppressed: number }
+  | { decision: 'suppressed'; reason: string };
+
+export function notify(reason: NotifyReason): Promise<NotifyDecision> {
+  return invoke<NotifyDecision>('notify', { reason });
+}
+
+/** Bring the tray tooltip in line with the paused state. Returns the tooltip. */
+export function refreshTray(): Promise<string> {
+  return invoke<string>('refresh_tray');
 }

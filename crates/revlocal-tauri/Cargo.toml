@@ -26,13 +26,16 @@ thiserror = { workspace = true }
 # mean every leg of the matrix installs a browser engine to run tests that do not
 # use one.
 tauri = { workspace = true, optional = true }
+# Native notifications (§15, RL-1111). Optional with Tauri, for the same reason:
+# the decision about *what* to notify is plain Rust and testable without one.
+tauri-plugin-notification = { workspace = true, optional = true }
 # The window binary owns the runtime (§4.2: the daemon runs in-process).
 tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 
 [features]
 default = []
 # The actual desktop application. Enabled by the bundler, not by CI.
-desktop = ["dep:tauri", "dep:tauri-build", "dep:tokio"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tokio", "dep:tauri-plugin-notification"]
 
 # The window binary only exists with a webview to put in it.
 [[bin]]
