@@ -249,6 +249,37 @@ pub async fn supervise(
 
     let pid = child.id();
 
+    // §8.5's Job Object. Created after the spawn and assigned immediately, which
+    // leaves a race the `job` module documents: a process that spawns a
+    // grandchild in its first microseconds could have it escape. Closing that
+    // window properly means not using `tokio::process` at all.
+    //
+    // A failure to create or assign is a warning, not an error. The engine is
+    // already running and its review is worth more than the cleanup guarantee;
+    // what must not happen is proceeding as if the guarantee held.
+    #[cfg(windows)]
+    let job = match crate::job::JobObject::new() {
+        Ok(job) => match job.assign(&child) {
+            Ok(()) => Some(job),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "could not put the engine in a job object; a kill may leave \
+                     grandchildren running (SPEC §8.5)"
+                );
+                None
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "could not create a job object; a kill may leave grandchildren \
+                 running (SPEC §8.5)"
+            );
+            None
+        }
+    };
+
     if let Some(input) = invocation.stdin.clone() {
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt as _;
@@ -279,6 +310,9 @@ pub async fn supervise(
         KillReason::Timeout => GRACE,
         KillReason::Cancelled => CANCEL_GRACE,
     };
+    #[cfg(windows)]
+    terminate(&mut child, pid, grace, job.as_ref()).await;
+    #[cfg(not(windows))]
     terminate(&mut child, pid, grace).await;
 
     finish(
@@ -297,7 +331,12 @@ pub async fn supervise(
 /// The grace period is not politeness for its own sake: a CLI given no chance to
 /// flush `result.json` loses a review whose tokens were already spent. How much
 /// of it a kill gets depends on why: see [`GRACE`] and [`CANCEL_GRACE`].
-async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>, grace: Duration) {
+async fn terminate(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+    grace: Duration,
+    #[cfg(windows)] job: Option<&crate::job::JobObject>,
+) {
     #[cfg(unix)]
     if let Some(pid) = pid {
         signal_group(pid, nix::sys::signal::Signal::SIGTERM);
@@ -315,6 +354,38 @@ async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>, grace: D
         signal_group(pid, nix::sys::signal::Signal::SIGKILL);
     }
 
+    // Windows: the job goes first, before the wait below.
+    //
+    // Ordering is the whole fix. `child.wait()` returns when the direct child
+    // exits, but the drains in `finish` do not end until every write handle on
+    // the pipes is closed — and a surviving grandchild holds one. Killing the
+    // child first and the tree second leaves a window where rev-local is waiting
+    // on output from a process it has already decided to kill, which is exactly
+    // the hang this was written to remove.
+    #[cfg(windows)]
+    {
+        let _ = pid;
+        match job {
+            // This reaches grandchildren, which killing the direct child cannot.
+            // Terminating a `.cmd` shim kills `cmd.exe` and leaves `node` holding
+            // the pipes — which reads as a hang, not a failure.
+            Some(job) => {
+                if let Err(error) = job.terminate() {
+                    tracing::warn!(
+                        %error,
+                        "terminating the job object failed; grandchildren of the \
+                         engine may still be running"
+                    );
+                }
+            }
+            None => tracing::warn!(
+                "no job object was attached to this engine, so only the direct \
+                 child was killed; anything it spawned may still be running \
+                 (SPEC §8.5)"
+            ),
+        }
+    }
+
     // On every platform, and as the last word on Unix: kill the direct child.
     // `kill_on_drop` would do it eventually, but "eventually" is not a guarantee a
     // timeout can be built on.
@@ -329,15 +400,9 @@ async fn terminate(child: &mut tokio::process::Child, pid: Option<u32>, grace: D
         // TerminateProcess — immediate by definition, with no window in which the
         // child could have chosen to flush. That is a real difference from the Unix
         // path, not an oversight: a Windows engine gets no chance to write
-        // `result.json` on the way out.
+        // `result.json` on the way out, and §8.5's grace period is Unix-only in
+        // practice because Windows offers nothing to spend it on.
         let _ = grace;
-        tracing::warn!(
-            ?grace,
-            "process-group kill is not implemented on this platform; a timed-out \
-             engine may leave grandchildren running, and it is terminated without \
-             the grace period Unix gives it. SPEC §8.5 requires a Job Object here \
-             — see RL-1303."
-        );
     }
 }
 

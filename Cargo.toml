@@ -39,6 +39,14 @@ globset = "0.4"
 handlebars = "6"
 tar = "0.4"
 nix = { version = "0.29", default-features = false, features = ["signal"] }
+# SPEC §8.5's Job Object. Windows has no process-group kill, so this is the only
+# way to reap what an engine spawned; see `revlocal-engine`'s `job` module.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 # rustls, not native-tls: no OpenSSL to find at build time on three platforms, and
 # no system trust store to differ between them. Trama is a remote server, so TLS is
 # not optional.
@@ -96,4 +104,13 @@ todo = "warn"
 
 [workspace.lints.rust]
 missing_docs = "warn"
-unsafe_code = "forbid"
+# `deny`, not `forbid`, for exactly one reason: SPEC §8.5's Job Object. Windows
+# has no process-group kill, so reaping an engine's grandchildren means five Win32
+# calls with no safe equivalent, and `forbid` cannot be relaxed anywhere.
+#
+# The property `forbid` was buying is not lost, it is moved somewhere checkable:
+# `unsafe_is_confined_to_the_job_object` fails if `allow(unsafe_code)` appears in
+# any file other than `revlocal-engine/src/job.rs`. That is a stronger statement
+# than the lint made, because it is about the whole workspace at once and it names
+# the file.
+unsafe_code = "deny"
