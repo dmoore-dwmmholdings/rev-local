@@ -133,7 +133,11 @@ impl Check {
 }
 
 /// What `doctor` found.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Default` is an empty report — no checks run — rather than a passing one. A
+/// report that defaulted to healthy would let a caller that forgot to run
+/// anything look like a caller that ran everything and found it fine.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DoctorReport {
     /// Tools rev-local shells out to.
     pub prerequisites: Vec<Check>,
