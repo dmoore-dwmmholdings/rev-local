@@ -243,3 +243,28 @@ tr.bad td.kind { color: var(--bad); }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* --- navigation (SPEC §15) ---------------------------------------------- */
+
+.nav {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.nav-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+}
+.nav-tab:hover:not(:disabled) { color: var(--text); }
+.nav-current { color: var(--text); border-bottom-color: var(--accent); }
+/* Specified but not built. Visible so the six screens §15 names are all
+   accounted for, dimmed so nobody mistakes one for a dead link. */
+.nav-tab:disabled { opacity: 0.35; cursor: not-allowed; }

@@ -2,16 +2,22 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   describe,
   fetchDashboard,
+  fetchRun,
+  fetchTranscript,
+  retryTarget,
   inTauri,
   invoke,
   onRunEvent,
   setMode,
   severityOf,
   type Dashboard as DashboardData,
+  type RunView as RunViewData,
   type Mode,
   type UiEvent,
 } from './ipc';
 import { Dashboard } from './Dashboard';
+import { RunDetail } from './RunDetail';
+import { Nav, type Screen } from './Nav';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -30,6 +36,9 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [screen, setScreen] = useState<Screen>('dashboard');
+  const [run, setRun] = useState<RunViewData | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(null);
 
   useEffect(() => {
     let seq = 0;
@@ -100,6 +109,42 @@ export function App() {
     }
   }
 
+  // Opening a run switches screens and clears the previous transcript: showing
+  // one run's log under another run's heading is the kind of wrong that looks
+  // right.
+  function openRun(runId: number) {
+    setTranscript(null);
+    setRun(null);
+    setScreen('run');
+    fetchRun(runId)
+      .then(setRun)
+      .catch((error: unknown) => setNotice(`Could not load run ${runId} — ${messageOf(error)}`));
+  }
+
+  function loadTranscript() {
+    if (!run) return;
+    fetchTranscript(run.run_id)
+      .then(setTranscript)
+      .catch((error: unknown) => setNotice(`Could not read the transcript — ${messageOf(error)}`));
+  }
+
+  async function retry(target: string) {
+    if (!run) return;
+    // §15: an outbound action names its target explicitly.
+    const ok = window.confirm(
+      `Re-queue this run's failed actions for ${target}?\n\n` +
+        'Only failed actions are affected. Anything already delivered stays delivered.',
+    );
+    if (!ok) return;
+
+    try {
+      await retryTarget(run.run_id, target);
+      openRun(run.run_id);
+    } catch (error: unknown) {
+      setNotice(`Could not retry ${target} — ${messageOf(error)}`);
+    }
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -136,8 +181,25 @@ export function App() {
         </div>
       )}
 
+      <Nav screen={screen} onSelect={setScreen} />
+
       <main>
-        <Dashboard dashboard={dashboard} onMode={changeMode} />
+        {screen === 'dashboard' && (
+          <Dashboard
+            dashboard={dashboard}
+            onMode={changeMode}
+            onOpenRun={openRun}
+          />
+        )}
+
+        {screen === 'run' && (
+          <RunDetail
+            run={run}
+            transcript={transcript}
+            onExpandTranscript={loadTranscript}
+            onRetry={retry}
+          />
+        )}
 
         <p className="note">
           Live activity. Events arrive over <code>revlocal://run-event</code> — this
