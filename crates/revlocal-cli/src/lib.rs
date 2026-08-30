@@ -13,6 +13,7 @@ pub mod control;
 pub mod decide;
 pub mod doctor;
 pub mod exit;
+pub mod export;
 pub mod hooks;
 pub mod inspect;
 pub mod repo;

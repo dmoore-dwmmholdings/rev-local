@@ -67,6 +67,32 @@ fi
 # 0002 shipped once describing the private backlog import, because the first guard
 # only looked at filenames. This one reads the tree's contents.
 MARKERS='BUILD_LOOP|BUILD_PROMPT|AGENTS\.md is|docs/STATE|docs/backlog|gen_backlog|build loop|autonomous agent|implementing agent'
+
+# Path exclusion and marker-grepping still missed a third thing: published content
+# that *references* a private path. SPEC §16.4 told readers to run
+# `scripts/gui-verify.sh`, a file that is excluded from every publish and does not
+# exist — so the public specification instructed people to run a command absent
+# from the repository they were reading.
+#
+# Anything under a PRIVATE directory is a path no reader can follow, whether or not
+# the file exists here.
+PRIVATE_REFS='scripts/[A-Za-z0-9_.-]+|docs/backlog/|docs/STATE\.md|AGENTS\.md|BUILD_PROMPT\.md'
+REFERENCES=""
+while read -r file; do
+  case "$file" in
+    Cargo.lock|*/node_modules/*) continue ;;
+  esac
+  hit="$(git show "$TREE:$file" 2>/dev/null | grep -nE "$PRIVATE_REFS" || true)"
+  if [[ -n "$hit" ]]; then
+    REFERENCES="$REFERENCES
+$file: $hit"
+  fi
+done < <(git ls-tree -r --name-only "$TREE")
+if [[ -n "$REFERENCES" ]]; then
+  echo "publish: refusing — published files reference paths that are never published:" >&2
+  echo "$REFERENCES" >&2
+  exit 1
+fi
 MENTIONS=""
 while read -r file; do
   case "$file" in

@@ -107,9 +107,9 @@ rev-local/
 │   ├── revlocal-mcp/           # MCP client (stdio + streamable HTTP), tool discovery
 │   ├── revlocal-publish/       # PublishTarget trait + github, andare, trama, generic
 │   ├── revlocal-daemon/        # scheduler, trigger sources, run orchestrator, budgets
-│   └── revlocal-cli/           # `revlocal` binary — full headless surface
-├── src-tauri/                  # Tauri v2 shell; thin — commands delegate to daemon
-├── ui/                         # React + TS + Vite
+│   ├── revlocal-cli/           # `revlocal` binary — full headless surface
+│   └── revlocal-tauri/         # Tauri v2 shell; thin — commands delegate to daemon
+│       └── ui/                 # React + TS + Vite
 ├── fixtures/                   # offline git & svn fixture generators (§16.2)
 ├── docs/
 │   └── adr/                    # one ADR per non-obvious decision made during build
@@ -728,7 +728,7 @@ in full.
 |---|---|---|
 | `critical` | Data loss, RCE, auth bypass, corruption. | Issue + PR review `REQUEST_CHANGES` + failing check |
 | `high` | Wrong behaviour a user will hit; serious vuln. | Issue + inline PR comment + review `REQUEST_CHANGES` |
-| `medium` | Real defect, narrower blast radius. | Inline PR comment; issue only if `file_medium_issues` |
+| `medium` | Real defect, narrower blast radius. | Inline PR comment; issue only if `andare_min_severity` is `medium` or lower |
 | `low` | Minor correctness/convention issue. | Inline PR comment only |
 | `info` | Observation, no action implied. | Summary body only |
 
@@ -1019,7 +1019,8 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
   "block_on_findings": false,
   "allow_approve": false,
   "merge_detect_regex": "(?i)\\b(merge|reintegrat\\w+)\\b.*\\b(branches?/[\\w./-]+)",
-  "pseudo_pr_min_files": 5              // §6.4 heuristic 3
+  "pseudo_pr_min_files": 5,             // §6.4 heuristic 3
+  "andare_transition_on": {}            // §11.4; empty = never move a ticket
 }
 ```
 
@@ -1112,7 +1113,7 @@ Non-negotiable UI behaviours:
   invokes `claude` and `codex` against a fixture with a planted bug and asserts a
   finding is produced. Run manually or at a periodic checkpoint, never in the fast
   inner loop.
-- **UI** (`vitest` + Testing Library) for component logic, and **Framewatch visual
+- **UI** (`vitest` + Testing Library) for component logic, and **visual
   verification** (§16.4) against the built Tauri binary for the launch → add repo →
   dry-run review path.
 
@@ -1146,38 +1147,32 @@ acceptance: path handling (`\` vs `/` in diff paths and globs), process-group ki
 via Job Objects, hook scripts written with the right line endings and a `.cmd`
 shim, and SQLite file locking under WAL on a non-NTFS-mounted path.
 
-### 16.4 GUI verification with Framewatch
+### 16.4 GUI verification by capture
 
-The desktop UI is verified visually, not by assertion alone. `framewatch` (0.8.x) is
-an event-driven window capture tool: it waits for a window to *settle* and writes a
-deterministic PNG. That is what makes it possible to confirm the UI actually
-renders, instead of assuming it does.
+The desktop UI is verified visually, not by assertion alone. A window capture tool
+waits for a window to *settle* and writes a deterministic PNG, which is what makes
+it possible to confirm the UI actually renders instead of assuming it does. The
+tool is an implementation detail of the developer's environment; what this section
+specifies is the two capture modes and what each must guarantee.
 
-Two harnesses, both committed as scripts so CI and a developer use the identical
-command:
+**Single-screen capture.** Launch the app on one route with fixture data, wait for
+the window to settle, and write `artifacts/gui/<screen>.png` clipped to the app's
+own chrome so captures are comparable between machines.
 
-**Single-screen capture** — `scripts/gui-verify.sh <screen>`:
+It must exit **non-zero when the window never appears**. A missing or blank UI has
+to fail the gate — a screen that silently captures nothing is worse than no
+capture, because it looks like a pass. Best-effort settling is for debugging and
+must never be used in a gate.
 
-```bash
-framewatch shot \
-  --launch "$APP_BIN --route /$SCREEN --fixture-data" \
-  --title "rev-local" \
-  --out-file "artifacts/gui/$SCREEN.png" \
-  --roi "$ROI"          `# clip host chrome so captures are comparable` \
-  --settle-ms 600 \
-  --timeout 30
-```
+**Scripted flow capture.** Drive a sequence of steps and capture one settled frame
+per step, with each frame captioned by the step that produced it. The caption must
+come from the driver rather than be written afterwards, so captions cannot drift
+from actions. Flows to cover: `onboarding`, `add-repo-to-review`,
+`approve-queued-action`.
 
-It must exit non-zero when the window never appears. A missing or blank UI has to
-fail the gate — a screen that silently captures nothing is worse than no capture.
-`--settle-best-effort` is deliberately **not** used in gates; it is available for
-debugging only.
-
-**Scripted flow capture** — `scripts/gui-flow.sh <flow>`: runs
-`framewatch watch --labels-file <fifo> --until-settled`-style capture alongside a
-driver that writes a label per step, so every settled frame is captioned with the
-step that produced it and captions cannot drift from actions. Flows to cover:
-`onboarding`, `add-repo-to-review`, `approve-queued-action`.
+**Where the gate runs.** Capture is a local developer gate, not a CI gate — see
+ADR 0032. CI runs the `vitest` layer, compiles the shell, and smoke-tests that it
+starts; visual verification stays where a real desktop session exists.
 
 **How the capture is used.** Capture is only half the gate. The PNG is then *read*
 and checked against the screen's stated checklist (§15). Perceptual pixel diffing
@@ -1212,7 +1207,7 @@ begin milestone N+1 until N's gate passes. Record any deviation as an ADR.
 | **M10** | Autonomy | modes, risk classification wiring, approvals inbox, kill switch, budgets | tests: `dry_run` performs zero MCP writes; `auto_low_ask_high` sends a comment but queues an issue; **first-use of a capability is always queued**; kill switch cancels a running mock engine within 3s and leaves the publish queue intact; budget exhaustion pauses and later resumes without losing changes |
 | **M11** | SVN adapter | per-revision discovery/materialize, pseudo-PR synthesis (§6.4) | integration test on `svn-basic`: N revisions discovered in order; the reintegration revision produces **both** a `svn_rev` and a `svn_pseudo_pr` change; the pseudo-PR diff equals the branch-vs-trunk diff, not the merge revision's; per-revision branch findings are demoted in the pseudo-PR's publish plan |
 | **M12** | Triggers | poll loop w/ backoff+jitter, loopback hook receiver + hook installer, webhook listener + signature verification + tunnel adapters, coalescing | tests: hook script exits 0 in < 2s with the receiver **down**; an existing user hook survives install/uninstall byte-identically; four simultaneous triggers for one repo produce exactly one discovery pass; a bad webhook signature is rejected |
-| **M13** | Desktop UI | six screens (§15), Tauri commands, live events, tray + kill switch, **Framewatch verification harness** (§16.4) | `vitest` green; `scripts/gui-verify.sh all` writes a non-empty settled PNG per screen and exits 0; each PNG is read and confirmed against the screen's §15 checklist; `scripts/gui-flow.sh add-repo-to-review` produces one captioned frame per step; kill switch visible in all six captures |
+| **M13** | Desktop UI | six screens (§15), Tauri commands, live events, tray + kill switch, **visual verification harness** (§16.4) | `vitest` green; single-screen capture writes a non-empty settled PNG per screen and exits 0; each PNG is read and confirmed against the screen's §15 checklist; the `add-repo-to-review` flow produces one captioned frame per step; kill switch visible in all six captures |
 | **M14** | Live engines | `--features engine-live` suite, `revlocal doctor` polish, packaging for 3 OSes | `cargo test --features engine-live -- --ignored` finds the planted SQL-injection with **both** `claude` and `codex`; `revlocal doctor --json` reports every prerequisite with actionable remediation text; installers build on all three platforms |
 
 ---

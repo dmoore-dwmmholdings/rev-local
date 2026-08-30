@@ -90,6 +90,17 @@ pub struct RepoConfig {
     /// Default `false`. SPEC §10.2: an AI approving code is a stronger claim than
     /// the product makes unattended.
     pub allow_approve: bool,
+    /// Verdict to Andare state name (SPEC §11.4).
+    ///
+    /// Empty by default, which means **no transition** — the run still comments
+    /// on the work item, because §11.4 makes the comment unconditional and the
+    /// transition conditional. Moving somebody's ticket is a write into their
+    /// workflow, and defaulting to doing it would be the wrong way round.
+    ///
+    /// A map rather than three fields so a project with states rev-local has
+    /// never heard of is expressible without a schema change; `BTreeMap` rather
+    /// than `HashMap` so config round-trips deterministically (ADR 0024).
+    pub andare_transition_on: std::collections::BTreeMap<String, String>,
     /// Pattern for detecting an SVN branch reintegration (decision D6).
     pub merge_detect_regex: String,
     /// How many files a revision must touch for §6.4's third heuristic to fire.
@@ -106,6 +117,20 @@ pub struct RepoConfig {
     /// Keys present in the document that this version does not know.
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+impl RepoConfig {
+    /// The Andare state a verdict should move a work item to, if any (§11.4).
+    ///
+    /// `None` means leave it alone, and that is the default for every verdict:
+    /// the map starts empty. §11.4 makes the comment unconditional and the
+    /// transition conditional, and this is that condition — an unmapped verdict
+    /// is not an error, it is a project that does not want its tickets moved.
+    pub fn transition_for(&self, verdict: crate::Verdict) -> Option<&str> {
+        self.andare_transition_on
+            .get(verdict.as_str())
+            .map(String::as_str)
+    }
 }
 
 impl Default for RepoConfig {
@@ -166,6 +191,7 @@ impl Default for RepoConfig {
             webhook_secret_ref: None,
             block_on_findings: false,
             allow_approve: false,
+            andare_transition_on: std::collections::BTreeMap::new(),
             merge_detect_regex: r"(?i)\b(merge|reintegrat\w+)\b.*\b(branches?/[\w./-]+)".to_owned(),
             pseudo_pr_min_files: 5,
             extra: Extra::default(),
@@ -199,5 +225,63 @@ impl RepoConfig {
     /// Whether `target` is enabled for this repo.
     pub fn targets_include(&self, target: &str) -> bool {
         self.targets.iter().any(|t| t == target)
+    }
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::RepoConfig;
+    use crate::Verdict;
+
+    #[test]
+    fn repo_config_an_unmapped_verdict_moves_nothing() {
+        // §11.4 makes the comment unconditional and the transition conditional.
+        // Defaulting to moving somebody's ticket would be the wrong way round:
+        // it is a write into their workflow, not into ours.
+        let config = RepoConfig::default();
+
+        for verdict in [Verdict::Approve, Verdict::Comment, Verdict::RequestChanges] {
+            assert_eq!(
+                config.transition_for(verdict),
+                None,
+                "{verdict:?} must not move a ticket by default"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_config_a_mapped_verdict_names_its_state() {
+        let mut config = RepoConfig::default();
+        config.andare_transition_on.insert(
+            Verdict::RequestChanges.as_str().to_owned(),
+            "In Review".to_owned(),
+        );
+
+        assert_eq!(
+            config.transition_for(Verdict::RequestChanges),
+            Some("In Review")
+        );
+        // And only that one. A map with one entry must not move everything.
+        assert_eq!(config.transition_for(Verdict::Approve), None);
+    }
+
+    #[test]
+    fn repo_config_the_transition_map_round_trips() {
+        // A project's state names are its own — "Ready for QA", "Merged", names
+        // rev-local has never heard of. A map rather than an enum is what makes
+        // that expressible, and it has to survive the config document.
+        let mut config = RepoConfig::default();
+        config
+            .andare_transition_on
+            .insert("approve".to_owned(), "Ready for QA".to_owned());
+
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let (parsed, warnings) = RepoConfig::parse_json(&json).unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            parsed.transition_for(Verdict::Approve),
+            Some("Ready for QA")
+        );
     }
 }
