@@ -3978,6 +3978,7 @@ dependencies = [
  "revlocal-core",
  "revlocal-daemon",
  "revlocal-store",
+ "revlocal-vcs",
  "serde",
  "serde_json",
  "tauri",
