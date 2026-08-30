@@ -30,14 +30,19 @@ for name in acme widgets; do
 done
 
 "$CLI" db migrate --database "$DB" >/dev/null
-"$CLI" repo add "$work/acme"    --kind git --name acme    --database "$DB" >/dev/null
-"$CLI" repo add "$work/widgets" --kind git --name widgets --autonomy auto --database "$DB" >/dev/null
+# `--engine mock` on both, and it is load-bearing now rather than cosmetic.
+# `watch --once` used to discover and stop; since RL-1207 it also *reviews* what
+# it finds, so a fixture whose repos defaulted to `claude` would invoke Claude
+# Code for real — spending tokens to build a screenshot, and failing outright on
+# a machine without it.
+"$CLI" repo add "$work/acme"    --kind git --name acme    --engine mock --database "$DB" >/dev/null
+"$CLI" repo add "$work/widgets" --kind git --name widgets --autonomy auto --engine mock --database "$DB" >/dev/null
 # An SVN repository, because §15's repository screen has to be captured in both
 # vocabularies (REVL-92) — a git-only fixture cannot show that "watched paths"
 # and "watched branches" are different screens rather than different words.
 # A URL, not a working copy: nothing here invokes svn, and a capture must not
 # depend on a binary that is absent on most machines.
-"$CLI" repo add "svn://svn.example.invalid/legacy" --kind svn --name legacy --database "$DB" >/dev/null
+"$CLI" repo add "svn://svn.example.invalid/legacy" --kind svn --name legacy --engine mock --database "$DB" >/dev/null
 # Hooks installed on one repository so the trigger indicators are not all off in
 # the capture. The indicator reads the disk, so this has to be a real install.
 "$CLI" hooks install --repo "$work/acme" --name acme >/dev/null 2>&1 || true
@@ -46,7 +51,22 @@ done
 
 # One measured repository and one that is not, so every capture exercises §18's
 # distinction between a total and a lower bound.
+# Everything the watch pass produced is cleared before the fixed rows go in.
+#
+# Not tidiness: `watch --once` now reviews what it discovers, so it writes runs of
+# its own — and the first of them takes `(change_id 1, attempt 1)`, which is
+# exactly the row below. The build failed with a UNIQUE violation the moment the
+# executor landed.
+#
+# The fixed rows stay hand-written rather than being whatever the mock produced,
+# because a capture is only comparable to the last one if the data behind it is
+# identical, and a real run brings a fresh timestamp and fingerprint with it.
 sqlite3 "$DB" "
+DELETE FROM publish_action;
+DELETE FROM finding;
+DELETE FROM run;
+DELETE FROM budget_ledger;
+
 INSERT INTO run (change_id,attempt,status,engine,depth,trigger,created_at,finished_at,verdict,tokens_in,tokens_out,tokens_known)
   VALUES (1,1,'done','claude','standard','poll','2026-01-01T01:00:00Z','2026-01-01T01:04:00Z','request_changes',180000,9000,1);
 INSERT INTO run (change_id,attempt,status,engine,depth,trigger,created_at)
@@ -80,14 +100,15 @@ INSERT INTO publish_action
 "
 
 # §13.1's config, beside the database where the app looks for it. The MCP server
-# is the repo's own mock (fixtures/mock-mcp) running the `andare-renamed` profile:
-# it exposes `create_work_item` and `transition_issue`, so two of Andare's four
+# is the repo's own mock (fixtures/mock-mcp) on its default profile: it exposes
+# `create_issue`, `set_issue_status` and three page tools, so two of Andare's four
 # capabilities bind and two genuinely do not. REVL-96 wants a capture showing an
 # unmapped capability, and a fixture that mapped everything could not produce one.
 #
-# The profile is chosen by an environment variable and `[mcpServers.*]` has no env
-# map, so the command is `env` — what a person would type, and no product change
-# to accommodate a fixture.
+# Plain `node`, not `env VAR=... node`. The first version selected a profile with
+# an environment variable, which meant a command that does not exist on Windows —
+# caught by the Windows CI leg on the equivalent test fixture. The default profile
+# answers the same question without it.
 #
 # The Authorization header is a keychain *reference*. A literal would put a fake
 # secret in a committed file, and the screen exists to discourage exactly that.
@@ -103,8 +124,8 @@ on_exhausted = "pause"
 
 [mcpServers.andare]
 type = "stdio"
-command = "env"
-args = ["MOCK_MCP_PROFILE=$ROOT/fixtures/mock-mcp/profiles/andare-renamed.json", "node", "$ROOT/fixtures/mock-mcp/server.js"]
+command = "node"
+args = ["$ROOT/fixtures/mock-mcp/server.js"]
 
 [mcpServers.trama]
 type = "http"
