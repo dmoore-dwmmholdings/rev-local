@@ -78,10 +78,20 @@ mod doctor {
             !unverified.health.is_blocking(),
             "a warning must not fail doctor"
         );
-        assert!(unverified
-            .remediation
-            .unwrap_or_default()
-            .contains("--smoke"));
+        // This used to assert the remediation named `revlocal doctor --smoke`.
+        // That flag was never implemented, so the test was pinning a suggestion
+        // nobody could follow — and a remediation somebody cannot type is worse
+        // than none, because they try it, it fails, and they conclude their
+        // install is broken rather than that the advice was.
+        //
+        // It now has to name a command that exists, which is the property the
+        // original was reaching for.
+        let remediation = unverified.remediation.unwrap_or_default();
+        assert!(
+            remediation.contains("revlocal review"),
+            "the remediation must name a command that exists: {remediation}"
+        );
+        assert!(!remediation.contains("--smoke"), "{remediation}");
     }
 
     #[test]
@@ -301,4 +311,66 @@ fn doctor_would_name_the_run_ceiling_for_an_unmeasured_engine() -> Result<(), St
         "and where the counts would come from: {line}"
     );
     Ok(())
+}
+
+/// Every engine rev-local ships support for appears in the report (§8.4).
+///
+/// §8.4 says doctor "tells the user exactly which engine is usable and why not",
+/// and that its output "is the first thing the UI shows on a fresh install". Both
+/// were false: `engines` held only the usage warnings, so a machine with Claude
+/// Code and Codex both installed and both measured got an **empty** engine list —
+/// and onboarding's first screen, which renders this report, listed no engines at
+/// all. A gap that looks exactly like "no engines are supported".
+#[test]
+fn doctor_reports_every_engine_it_supports() {
+    let report = revlocal_cli::doctor::gather(0);
+
+    for engine in ["engine:claude", "engine:codex"] {
+        let check = report
+            .engines
+            .iter()
+            .find(|c| c.name == engine)
+            .unwrap_or_else(|| panic!("{engine} is missing from the report: {:?}", report.engines));
+
+        // Whatever it found, it says what to do about it — present-but-unprobed
+        // and absent are both actionable, and neither is `ok`.
+        assert_ne!(
+            check.health,
+            revlocal_cli::doctor::Health::Ok,
+            "{engine} reports ok, but presence alone was checked — installed is \
+             not logged in, and a green line there sends somebody looking \
+             somewhere else for a day"
+        );
+        assert!(
+            check.remediation.is_some(),
+            "{engine} has no remediation: {check:?}"
+        );
+    }
+}
+
+/// No remediation names a flag that does not exist.
+///
+/// `engine_check`'s warning pointed at `revlocal doctor --smoke`, which was never
+/// implemented. A remediation somebody cannot type is worse than none: they try
+/// it, it fails, and they conclude their install is broken rather than that the
+/// advice was.
+#[test]
+fn doctor_remediations_do_not_name_flags_that_do_not_exist() {
+    let report = revlocal_cli::doctor::gather(0);
+
+    // The full probe is not reachable from `gather` yet, so it is checked
+    // directly — an unreachable lie is still a lie, and this is the one that was
+    // there.
+    let probed = revlocal_cli::doctor::engine_check("claude", true, Some("1.0.0"), true, None, &[]);
+
+    for check in report.all().chain(std::iter::once(&probed)) {
+        let Some(remediation) = &check.remediation else {
+            continue;
+        };
+        assert!(
+            !remediation.contains("--smoke"),
+            "{}: names `--smoke`, which `revlocal doctor` does not accept",
+            check.name
+        );
+    }
 }
