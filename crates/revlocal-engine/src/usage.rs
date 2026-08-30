@@ -23,7 +23,7 @@
 //! decision here rather than defaulting to "supported", which is the direction that
 //! would quietly overstate what is known.
 
-use revlocal_core::EngineKind;
+use revlocal_core::{EngineKind, Usage};
 
 /// Whether rev-local can read token counts out of an engine's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,9 +77,8 @@ pub const fn support(engine: EngineKind) -> UsageSupport {
         // honest than the thing they stand in for.
         EngineKind::Mock => UsageSupport::Measured,
 
-        EngineKind::Claude => UsageSupport::Unmeasured {
-            source: "`claude --output-format json`",
-        },
+        // RL-409: `from_claude_json` reads it, against a captured real payload.
+        EngineKind::Claude => UsageSupport::Measured,
         EngineKind::Codex => UsageSupport::Unmeasured {
             source: "`codex exec --json`",
         },
@@ -95,16 +94,98 @@ pub fn unmeasured_engines() -> Vec<(EngineKind, UsageSupport)> {
         .collect()
 }
 
+/// Why a payload could not be read for usage.
+#[derive(Debug, thiserror::Error)]
+pub enum UsageError {
+    /// The output was not JSON.
+    #[error("engine output is not JSON: {source}")]
+    NotJson {
+        /// Why.
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// The JSON carried no `usage` object.
+    ///
+    /// Distinct from a parse failure: one means the engine printed something else
+    /// entirely, the other that it printed a shape this build does not know. The
+    /// remedies differ, so the errors do.
+    #[error("engine output has no `usage` object; the run was not measured")]
+    NoUsage,
+}
+
+/// Read token usage out of `claude --output-format json` (RL-409, SPEC §8.1).
+///
+/// # Cache tokens are input tokens
+///
+/// This is why the function is more than three lines. A real captured payload,
+/// from a one-sentence prompt:
+///
+/// ```json
+/// "input_tokens": 2,
+/// "cache_creation_input_tokens": 8453,
+/// "cache_read_input_tokens": 10143,
+/// "output_tokens": 4
+/// ```
+///
+/// Reading `input_tokens` alone records **2** for a call that processed **18,598**
+/// — a 99.99% undercount, and a daily token ceiling that would never fire however
+/// much work was done. Cached tokens are billed differently, not for free, and a
+/// token budget is about how much the model was asked to process.
+///
+/// Price is carried separately and exactly by `total_cost_usd`, so nothing is lost
+/// by summing them: the number that varies by rate is reported by its own field
+/// rather than smuggled into a token count.
+pub fn from_claude_json(stdout: &str) -> Result<Usage, UsageError> {
+    let document: serde_json::Value =
+        serde_json::from_str(stdout).map_err(|source| UsageError::NotJson { source })?;
+
+    let usage = document.get("usage").ok_or(UsageError::NoUsage)?;
+    let field = |name: &str| {
+        usage
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+
+    // An absent sub-field is zero *here* and only here: the `usage` object was
+    // present, so this run was counted, and a token kind that is not listed was
+    // genuinely not used. An absent `usage` object means nobody counted, which is
+    // the error above — collapsing the two is how an unmeasured run reads as a
+    // free one (ADR 0010).
+    let tokens_in = field("input_tokens")
+        + field("cache_creation_input_tokens")
+        + field("cache_read_input_tokens");
+
+    Ok(Usage {
+        tokens_in,
+        tokens_out: field("output_tokens"),
+        tokens_known: true,
+        // The engine's own figure, which beats arithmetic over rates this crate
+        // would have to hard-code and that would go stale silently.
+        cost_usd: document
+            .get("total_cost_usd")
+            .and_then(serde_json::Value::as_f64),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn usage_a_real_engine_is_not_claimed_to_be_measured() {
-        // The whole point. Claiming measurement rev-local does not have is how a
-        // budget silently stops being a ceiling.
-        assert!(!support(EngineKind::Claude).is_measured());
+    fn usage_codex_is_not_claimed_to_be_measured() {
+        // Claiming measurement rev-local does not have is how a budget silently
+        // stops being a ceiling. Codex has no extractor yet — RL-408 has to
+        // establish what `codex exec --json` emits first.
         assert!(!support(EngineKind::Codex).is_measured());
+    }
+
+    #[test]
+    fn usage_claude_is_measured_because_its_payload_was_read() {
+        // Not an assumption: `from_claude_json` is tested against a captured
+        // `--output-format json` response in tests/fixtures.
+        assert!(support(EngineKind::Claude).is_measured());
     }
 
     #[test]
@@ -116,20 +197,18 @@ mod tests {
     fn usage_an_unmeasured_engine_says_what_it_means_for_a_budget() {
         // §18: a limitation nobody can act on is not reported. "Advisory" is the
         // word that tells an operator their ceiling is not holding anything.
-        let line = support(EngineKind::Claude).summary_line(EngineKind::Claude);
+        let line = support(EngineKind::Codex).summary_line(EngineKind::Codex);
         assert!(line.contains("advisory"), "{line}");
         assert!(
-            line.contains("output-format json"),
+            line.contains("codex exec --json"),
             "and where it would come from: {line}"
         );
     }
 
     #[test]
-    fn usage_the_unmeasured_list_covers_both_real_engines() {
+    fn usage_only_codex_remains_unmeasured() {
         let unmeasured = unmeasured_engines();
-        assert_eq!(unmeasured.len(), 2, "{unmeasured:?}");
-        assert!(unmeasured
-            .iter()
-            .all(|(engine, _)| *engine != EngineKind::Mock));
+        assert_eq!(unmeasured.len(), 1, "{unmeasured:?}");
+        assert_eq!(unmeasured[0].0, EngineKind::Codex);
     }
 }

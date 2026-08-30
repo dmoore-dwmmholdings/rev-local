@@ -271,11 +271,20 @@ fn doctor_names_the_engines_whose_token_budgets_are_advisory() -> Result<(), Str
         .filter(|check| check.name.ends_with(":usage"))
         .collect();
 
+    // One, not two. Claude became measured when RL-409's extractor landed —
+    // `from_claude_json`, tested against a captured payload — so warning about it
+    // would now be false. Codex has no extractor until RL-408 establishes what
+    // `codex exec --json` emits.
     assert_eq!(
         usage.len(),
-        2,
-        "both real engines should be named: {:?}",
+        1,
+        "only unmeasured engines should be named: {:?}",
         report.engines.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    assert!(
+        usage[0].name.contains("codex"),
+        "and it is codex that is unmeasured: {}",
+        usage[0].name
     );
 
     for check in &usage {
@@ -304,12 +313,14 @@ fn doctor_names_the_engines_whose_token_budgets_are_advisory() -> Result<(), Str
         );
     }
 
-    // The mock is not listed. It reports counts, and a line per measured engine
-    // would bury the two that matter.
-    assert!(
-        !report.engines.iter().any(|c| c.name.contains("mock")),
-        "the fixture engine does not need a warning"
-    );
+    // Neither the mock nor claude is listed: both are measured, and a line per
+    // measured engine would bury the one that is not.
+    for measured in ["mock", "claude"] {
+        assert!(
+            !report.engines.iter().any(|c| c.name.contains(measured)),
+            "{measured} reports usage; warning about it would be false"
+        );
+    }
     Ok(())
 }
 
