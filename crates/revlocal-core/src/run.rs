@@ -181,8 +181,28 @@ impl Usage {
     /// run makes its cost incomplete — a total that quietly excluded it would be a
     /// budget that stops enforcing the moment an engine stops reporting.
     pub fn add(&mut self, other: &Self) {
+        // `default()` is an empty accumulator, not an unmeasured measurement, and
+        // an identity element must not poison what is folded into it.
+        //
+        // Without this, the rule below turns the first real measurement into an
+        // unmeasured one: `Usage::default()` has `tokens_known: false`, so
+        // `false && true` is false and a run that reported its tokens exactly is
+        // recorded as one nobody counted. The live-engine suite caught it — every
+        // other test folds into a mock's already-measured usage, so the empty case
+        // never arose.
+        //
+        // "Nothing has been recorded" is the *only* case this covers. An
+        // unmeasured usage that carries tokens is a real lower bound and keeps the
+        // conservative rule.
+        if !self.tokens_known && self.total_tokens() == 0 && self.cost_usd.is_none() {
+            *self = *other;
+            return;
+        }
+
         self.tokens_in += other.tokens_in;
         self.tokens_out += other.tokens_out;
+        // A total is known only if every part is. One unmeasured component makes
+        // the sum a lower bound, and §18 forbids a lower bound reading as a total.
         self.tokens_known = self.tokens_known && other.tokens_known;
         self.cost_usd = match (self.cost_usd, other.cost_usd) {
             (None, None) => None,
@@ -394,5 +414,84 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod usage_folding {
+    use super::Usage;
+
+    fn measured(tokens_in: u64, tokens_out: u64) -> Usage {
+        Usage {
+            tokens_in,
+            tokens_out,
+            tokens_known: true,
+            cost_usd: Some(0.5),
+        }
+    }
+
+    #[test]
+    fn usage_folding_an_empty_accumulator_adopts_the_first_measurement() {
+        // The bug the live-engine suite caught. `default()` is "nothing recorded",
+        // not "somebody looked and could not tell" — and folding a real
+        // measurement into it must not turn the measurement unmeasured.
+        let mut total = Usage::default();
+        total.add(&measured(100, 10));
+
+        assert!(
+            total.tokens_are_known(),
+            "an exactly-counted run recorded as uncounted"
+        );
+        assert_eq!(total.total_tokens(), 110);
+        assert_eq!(total.cost_usd, Some(0.5));
+    }
+
+    #[test]
+    fn usage_folding_two_measurements_add() {
+        // The repair case: the original invocation spent tokens and so did the
+        // repair, and charging only one understates the run.
+        let mut total = measured(100, 10);
+        total.add(&measured(20, 2));
+
+        assert_eq!(total.tokens_in, 120);
+        assert_eq!(total.tokens_out, 12);
+        assert!(total.tokens_are_known());
+        assert_eq!(total.cost_usd, Some(1.0));
+    }
+
+    #[test]
+    fn usage_folding_one_unmeasured_part_makes_the_total_a_lower_bound() {
+        // The conservative rule, which the identity case must not weaken. §18: a
+        // lower bound must not read as a total.
+        let mut total = measured(100, 10);
+        total.add(&Usage {
+            tokens_in: 5,
+            tokens_out: 1,
+            tokens_known: false,
+            cost_usd: None,
+        });
+
+        assert!(
+            !total.tokens_are_known(),
+            "one uncounted component makes the sum a lower bound"
+        );
+        assert_eq!(total.total_tokens(), 116);
+    }
+
+    #[test]
+    fn usage_folding_an_unmeasured_part_with_tokens_is_not_the_identity() {
+        // The distinction the identity case turns on: a usage that carries tokens
+        // but was not fully counted is a real lower bound, and adopting the other
+        // side wholesale would discard tokens somebody did observe.
+        let mut partial = Usage {
+            tokens_in: 7,
+            tokens_out: 0,
+            tokens_known: false,
+            cost_usd: None,
+        };
+        partial.add(&measured(100, 10));
+
+        assert_eq!(partial.total_tokens(), 117, "the 7 must not be dropped");
+        assert!(!partial.tokens_are_known());
     }
 }

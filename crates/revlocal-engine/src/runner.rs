@@ -206,6 +206,30 @@ impl CliEngine {
         let climbed = ladder::resolve(self.id, &task.out_dir, &supervised.stdout, repair).await?;
 
         let mut outcome = climbed.outcome;
+
+        // What the run actually spent (RL-409, SPEC §8.1). §8.3's `result.json`
+        // schema carries no usage field, so the counts are not in what the ladder
+        // parsed — they are in the CLI's own envelope, and reading them is
+        // per-engine because the two CLIs report them in opposite directions
+        // (ADR 0033).
+        //
+        // Added rather than assigned: `climbed` may already carry a repair's
+        // tokens, and replacing would charge the run for the repair alone.
+        //
+        // A failure to read is a warning, not an error. The review succeeded and
+        // is worth more than its accounting — but `Usage::default()` leaves
+        // `tokens_known` false, so the run is recorded as *unmeasured* rather than
+        // as free, which is the distinction ADR 0010 exists for.
+        match crate::usage::for_engine(self.id, &supervised.stdout) {
+            Ok(usage) => outcome.usage.add(&usage),
+            Err(error) => tracing::warn!(
+                %error,
+                engine = self.id.as_str(),
+                "could not read token usage from the engine's output; this run is \
+                 recorded as unmeasured rather than free"
+            ),
+        }
+
         // The transcript is attached here rather than in the ladder, because the
         // ladder does not run the process and has nothing else to say about it.
         outcome.transcript = supervised.stdout;

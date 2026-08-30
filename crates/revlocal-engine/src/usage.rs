@@ -258,6 +258,23 @@ pub fn from_codex_jsonl(stdout: &str) -> Result<Usage, UsageError> {
     }
 }
 
+/// Read usage from whichever engine produced this output (RL-409, ADR 0033).
+///
+/// The dispatch is the point. Claude and Codex report cache tokens with opposite
+/// meanings — additive buckets against an inclusive total — so a shared parser
+/// would undercount one by 99.99% or double-count the other, silently. Routing on
+/// the engine id is what keeps each extractor reading only the format it was
+/// written against.
+pub fn for_engine(engine: EngineKind, stdout: &str) -> Result<Usage, UsageError> {
+    match engine {
+        EngineKind::Claude => from_claude_json(stdout),
+        EngineKind::Codex => from_codex_jsonl(stdout),
+        // The fixture engine reports counts inside its `result.json`, which the
+        // ladder has already parsed by the time this is asked. Nothing to add.
+        EngineKind::Mock => Ok(Usage::default()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

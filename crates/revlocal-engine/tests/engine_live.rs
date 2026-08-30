@@ -77,51 +77,145 @@ fn fixture_or_skip(test: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "invokes a real engine and spends credits; run with --ignored"]
-async fn live_claude_finds_the_planted_sql_injection() {
-    let test = "live_claude_finds_the_planted_sql_injection";
-    let Some(_binary) = ready_or_skip(EngineKind::Claude, test) else {
-        return;
-    };
-    let Some(dir) = fixture_or_skip(test) else {
-        return;
+/// The prompt both engines get.
+///
+/// **Inlines `RESULT_SCHEMA_V1`**, which is the whole difference between this
+/// working and not. The first version of this test described the shape in prose
+/// and omitted `schema_version` — a required field — so both engines produced a
+/// well-formed review that failed validation, and the ladder reported "no
+/// parseable output" for a run that had found the bug.
+///
+/// That was a defect in the test, not the product: §9.2's assembly inlines the
+/// same schema and there is a test asserting it does. Which is the point of using
+/// the real constant here rather than a description of it — a prompt written from
+/// memory tests the memory.
+fn review_prompt(out_dir: &std::path::Path) -> String {
+    format!(
+        "Review the Rust code in this repository for defects.\n\n\
+         Write your findings as JSON to {}, conforming exactly to this schema:\n\n\
+         {}\n\n\
+         Report every real defect you find. Write only that file; do not modify \
+         any source.",
+        out_dir.join("result.json").display(),
+        revlocal_engine::RESULT_SCHEMA_V1
+    )
+}
+
+/// Run one engine over the fixture and hand back what it said.
+async fn review_the_fixture(
+    engine: revlocal_engine::CliEngine,
+    dir: &std::path::Path,
+    out: &std::path::Path,
+) -> Result<revlocal_engine::EngineOutcome, String> {
+    use revlocal_engine::Engine as _;
+
+    let task = revlocal_engine::EngineTask {
+        cwd: dir.to_path_buf(),
+        out_dir: out.to_path_buf(),
+        prompt: review_prompt(out),
+        attachments: Vec::new(),
+        // Generous: a real review of a real tree is not a probe, and a timeout
+        // that fired would look like the engine failing rather than being slow.
+        timeout: std::time::Duration::from_secs(300),
+        depth: revlocal_core::Depth::Standard,
     };
 
-    let _ = dir;
-    // Deliberately unfinished. Writing the invocation without ever running it
-    // would be writing a string match against a tool's output without reading
-    // what the tool says — ADR 0023, which this project has been bitten by.
-    //
-    // What is settled: the double gate, the skip messages, the fixture check and
-    // the assertion this must eventually make (a finding whose file is
-    // `src/db.rs` and whose category is injection-shaped). What is not settled is
-    // the exact shape `claude --output-format json` returns, and that needs one
-    // real invocation to read before anything is asserted about it.
-    //
-    // Tracked on REVL-100 alongside REVL-115, which needs the same payload.
-    panic!(
-        "not implemented: this test needs one captured `claude --output-format \
-         json` payload to assert against — see REVL-100"
-    );
+    engine
+        .run(task, tokio_util::sync::CancellationToken::new())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether any finding points at the planted SQL injection.
+///
+/// Matched on the **file**, not on wording. Asserting that a model used the phrase
+/// "SQL injection" would be testing its vocabulary; what matters is that it looked
+/// at `src/db.rs` and called something there a defect.
+fn found_the_planted_bug(outcome: &revlocal_engine::EngineOutcome) -> bool {
+    outcome.findings.iter().any(|finding| {
+        finding
+            .file
+            .as_deref()
+            .is_some_and(|file| file.ends_with("db.rs"))
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "invokes a real engine and spends credits; run with --ignored"]
-async fn live_codex_finds_the_planted_sql_injection() {
-    let test = "live_codex_finds_the_planted_sql_injection";
-    let Some(_binary) = ready_or_skip(EngineKind::Codex, test) else {
-        return;
+async fn live_claude_finds_the_planted_sql_injection() -> Result<(), String> {
+    let test = "live_claude_finds_the_planted_sql_injection";
+    let Some(_binary) = ready_or_skip(EngineKind::Claude, test) else {
+        return Ok(());
     };
     let Some(dir) = fixture_or_skip(test) else {
-        return;
+        return Ok(());
     };
 
-    let _ = dir;
-    panic!(
-        "not implemented: this test needs one captured `codex exec --json` \
-         payload to assert against — see REVL-100 and REVL-45"
+    let out = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let outcome =
+        review_the_fixture(revlocal_engine::CliEngine::claude(), &dir, out.path()).await?;
+
+    assert!(
+        found_the_planted_bug(&outcome),
+        "claude reviewed the fixture and did not flag src/db.rs, where the SQL \
+         injection is planted. Findings: {:?}",
+        outcome.findings
     );
+
+    // RL-409: a real run must report what it spent. This is the assertion that
+    // would have caught the 99.99% undercount had it been written first.
+    assert!(
+        outcome.usage.tokens_are_known(),
+        "a live run must report its usage"
+    );
+    assert!(
+        outcome.usage.total_tokens() > 0,
+        "a review that spent nothing did not happen"
+    );
+
+    println!(
+        "claude: {} finding(s), {} tokens, {}",
+        outcome.findings.len(),
+        outcome.usage.total_tokens(),
+        outcome
+            .usage
+            .cost_usd
+            .map_or_else(|| "unpriced".to_owned(), |c| format!("${c:.4}"))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "invokes a real engine and spends credits; run with --ignored"]
+async fn live_codex_finds_the_planted_sql_injection() -> Result<(), String> {
+    let test = "live_codex_finds_the_planted_sql_injection";
+    let Some(_binary) = ready_or_skip(EngineKind::Codex, test) else {
+        return Ok(());
+    };
+    let Some(dir) = fixture_or_skip(test) else {
+        return Ok(());
+    };
+
+    let out = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let outcome = review_the_fixture(revlocal_engine::CliEngine::codex(), &dir, out.path()).await?;
+
+    assert!(
+        found_the_planted_bug(&outcome),
+        "codex reviewed the fixture and did not flag src/db.rs, where the SQL \
+         injection is planted. Findings: {:?}",
+        outcome.findings
+    );
+    assert!(
+        outcome.usage.tokens_are_known(),
+        "a live run must report its usage"
+    );
+
+    println!(
+        "codex: {} finding(s), {} tokens",
+        outcome.findings.len(),
+        outcome.usage.total_tokens()
+    );
+    Ok(())
 }
 
 /// The suite says what it would cost before anybody runs it.
