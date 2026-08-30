@@ -442,8 +442,15 @@ async fn execute_one(
 
     // The run's own record, before the terminal transition: a run that says `done`
     // and carries no usage would make §13's budget ledger disagree with itself.
+    //
+    // The pipeline's own status decides the run's. The first version of this wrote
+    // `Done` unconditionally, and a review whose engine could not run at all was
+    // recorded as a clean run with no findings — the exact "looks successful and
+    // found nothing" failure §18 exists to prevent. A test caught it, which is the
+    // only reason it is not still here.
     let mut finished = run.clone();
-    finished.status = RunStatus::Done;
+    finished.error = outcome.report.failure.clone();
+    finished.skip_reason = outcome.report.skip_reason.clone();
     finished.usage = outcome.report.usage;
     finished.verdict = outcome
         .report
@@ -468,10 +475,14 @@ async fn execute_one(
         .map_err(boxed)?;
 
     let awaiting = actions.contains(&revlocal_core::PublishActionStatus::AwaitingApproval);
-    let terminal = if awaiting {
-        RunStatus::AwaitingApproval
-    } else {
-        RunStatus::Done
+    let terminal = match outcome.report.status {
+        // §8.2: an engine that could not produce a usable review is a failed run,
+        // not an empty one. The two look identical in a findings count and mean
+        // opposite things.
+        pipeline::ReviewStatus::Failed => RunStatus::Failed,
+        pipeline::ReviewStatus::Skipped => RunStatus::Skipped,
+        pipeline::ReviewStatus::Done if awaiting => RunStatus::AwaitingApproval,
+        pipeline::ReviewStatus::Done => RunStatus::Done,
     };
     transition(pool, sink, run.id, RunStatus::Publishing, terminal)
         .await
@@ -486,7 +497,13 @@ async fn execute_one(
         verdict: outcome.report.verdict.clone(),
         findings: stored.len(),
         actions: actions.len(),
-        detail: outcome.report.degraded.clone(),
+        // The failure first: a run that failed and a run that was salvaged are
+        // both worth a line, and only one of them produced a review.
+        detail: outcome
+            .report
+            .failure
+            .clone()
+            .or_else(|| outcome.report.degraded.clone()),
     }))
 }
 

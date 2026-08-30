@@ -418,6 +418,65 @@ async fn a_disabled_repository_is_not_reviewed() {
 }
 
 #[tokio::test]
+async fn the_repository_engine_is_the_one_that_runs() {
+    // REVL-125's remaining criterion, which needed this loop to exist before it
+    // could be true of anything: decision D3 puts the engine on the repository,
+    // and until now no code path started a review *from* a repository row.
+    //
+    // Asserted through a template pointed at a binary that does not exist, so it
+    // costs nothing: the run fails naming the engine rather than quietly
+    // producing a mock review, which is the property that matters.
+    let fixture = discovered(AutonomyMode::DryRun).await.expect("fixture");
+
+    let mut claude = fixture.repo.clone();
+    claude.engine = EngineKind::Claude;
+    RepoStore::new(&fixture.pool)
+        .update(&claude)
+        .await
+        .expect("set the engine");
+
+    executor::enqueue(&fixture.pool, &claude, at(2))
+        .await
+        .expect("enqueue");
+
+    let mut config = config(AutonomyMode::AutoLowAskHigh);
+    config.engines.insert(
+        "claude".to_owned(),
+        toml::from_str::<toml::Value>("bin = \"revlocal-no-such-engine-9f3a\"").expect("table"),
+    );
+
+    let report = executor::drain(
+        &fixture.pool,
+        &config,
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    // It went ahead — so it is `finished`, not `held` — and it failed, rather
+    // than succeeding with the mock standing in.
+    assert_eq!(report.finished.len(), 1, "{report:?}");
+    let outcome = &report.finished[0];
+    assert_eq!(outcome.engine, "claude");
+    assert_eq!(outcome.status, "failed");
+    assert_eq!(outcome.findings, 0);
+    // §18: the failure says what went wrong. A failed run with no reason is
+    // indistinguishable from a clean one, which is the whole point.
+    assert!(outcome.detail.is_some(), "a failed run must say why");
+
+    let runs = RunStore::new(&fixture.pool)
+        .list_recent(Some(fixture.repo.id), None, 10)
+        .await
+        .expect("runs");
+    assert_eq!(runs[0].status, RunStatus::Failed);
+    assert!(runs[0].error.is_some(), "a failed run must say why");
+}
+
+#[tokio::test]
 async fn the_workspace_root_fixture_is_reachable() {
     // Guards the helper above rather than the executor: a test suite whose fixture
     // path is wrong fails in a way that looks like the product is broken.
