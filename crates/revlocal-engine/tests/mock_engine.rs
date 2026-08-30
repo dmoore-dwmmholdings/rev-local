@@ -398,3 +398,109 @@ mod mock_engine {
         assert!(cmd.contains("%*"), "run.cmd must forward its arguments");
     }
 }
+
+/// A grandchild that outlives its parent must not hang the drain (RL-1303, §18).
+///
+/// The drain was unbounded whenever the process exited on its own, on the
+/// reasoning that an exited process has closed its pipes. That is true of the
+/// process and false of anything it spawned — and the gap between those two is an
+/// unbounded await with no timeout around it, on a path where the Windows job
+/// object that would reap the grandchild is not closed until after the await
+/// returns.
+///
+/// This is the shape that deadlocks: a parent that spawns a child holding stdout,
+/// then exits successfully.
+/// Multi-threaded on purpose. Under the default current-thread runtime a blocked
+/// drain starves the timer, so `tokio::time::timeout` never fires and the test
+/// hangs instead of failing — which is precisely how this class of bug ate four
+/// CI rounds. A regression here must be reportable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_grandchild_holding_the_pipe_does_not_hang_a_successful_exit() {
+    if std::process::Command::new("sh")
+        .arg("-c")
+        .arg("true")
+        .status()
+        .is_err()
+    {
+        println!("SKIPPED (no sh, nothing verified): a_grandchild_holding_the_pipe...");
+        return;
+    }
+
+    let dir = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            println!("SKIPPED (no temp dir, nothing verified): {error}");
+            return;
+        }
+    };
+
+    // The parent writes a line, backgrounds a child that keeps stdout open for
+    // well past the drain bound, and exits 0 immediately.
+    let script = dir.path().join("leak.sh");
+    if std::fs::write(
+        &script,
+        "#!/bin/sh\necho parent-said-this\n( sleep 60 ) &\nexit 0\n",
+    )
+    .is_err()
+    {
+        println!("SKIPPED (could not write the fixture, nothing verified)");
+        return;
+    }
+
+    let invocation = revlocal_engine::Invocation {
+        program: "sh".to_owned(),
+        args: vec![script.display().to_string()],
+        stdin: None,
+    };
+
+    // Generously more than the drain bound and far less than `sleep 60`. If the
+    // drain were unbounded this would sit here until the harness gave up.
+    let supervised = tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        revlocal_engine::supervise::supervise(
+            revlocal_engine::EngineId::Mock,
+            &invocation,
+            dir.path(),
+            &std::collections::BTreeMap::new(),
+            std::time::Duration::from_secs(30),
+            &tokio_util::sync::CancellationToken::new(),
+        ),
+    )
+    .await;
+
+    let supervised = match supervised {
+        Ok(Ok(supervised)) => supervised,
+        Ok(Err(error)) => {
+            println!("SKIPPED (the fixture would not run, nothing verified): {error}");
+            return;
+        }
+        Err(_) => panic!(
+            "the drain never returned: a grandchild holding stdout hung a process \
+             that had already exited"
+        ),
+    };
+
+    assert!(
+        supervised.completed(),
+        "the parent exited on its own; it was not killed"
+    );
+    assert!(
+        supervised.stdout.contains("parent-said-this"),
+        "what the parent wrote before exiting must still be captured: {:?}",
+        supervised.stdout
+    );
+
+    // §18: the run may not claim output it did not finish reading. The grandchild
+    // holds the pipe for a minute against a ten-second bound, so this reliably
+    // truncates — and if it ever stops doing so, that is a change worth failing
+    // on rather than a condition to tiptoe around.
+    assert!(
+        supervised.output_truncated,
+        "the grandchild held the pipe past the bound; the run must say the output \
+         is not necessarily all of it"
+    );
+    assert!(
+        !supervised.output_is_complete(),
+        "and it must be visible through the accessor, not only the field"
+    );
+}
