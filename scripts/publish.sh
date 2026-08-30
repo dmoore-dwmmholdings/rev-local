@@ -76,7 +76,14 @@ MARKERS='BUILD_LOOP|BUILD_PROMPT|AGENTS\.md is|docs/STATE|docs/backlog|gen_backl
 #
 # Anything under a PRIVATE directory is a path no reader can follow, whether or not
 # the file exists here.
-PRIVATE_REFS='scripts/[A-Za-z0-9_.-]+|docs/backlog/|docs/STATE\.md|AGENTS\.md|BUILD_PROMPT\.md'
+# Narrow on purpose. The first version flagged `"AGENTS.md"` in
+# `convention_files` and `scripts/deploy` in a depth test — both legitimate: the
+# product reads a *reviewed repository's* AGENTS.md, and that test path is inside
+# somebody else's tree, not ours.
+#
+# What is actually unfollowable is a reference to one of **our** scripts, which is
+# always a real file with an extension, and to the private docs directories.
+PRIVATE_REFS='scripts/[A-Za-z0-9_.-]+\.(sh|py)|docs/backlog/|docs/STATE\.md'
 REFERENCES=""
 while read -r file; do
   case "$file" in
