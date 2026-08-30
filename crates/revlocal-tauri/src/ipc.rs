@@ -58,6 +58,23 @@ pub enum IpcRequest {
         /// Which run.
         run_id: i64,
     },
+    /// One run's raw transcript (§15 screen 3).
+    ///
+    /// Separate from [`GetRun`](Self::GetRun) on purpose. A transcript is
+    /// routinely megabytes; carrying it on the detail snapshot would make the
+    /// screen wait for the largest thing on it before drawing the smallest. This
+    /// is asked for only when somebody expands the section.
+    GetTranscript {
+        /// Which run.
+        run_id: i64,
+    },
+    /// Put one failed publish action back in the queue (§15's retry buttons).
+    RetryTarget {
+        /// Which run.
+        run_id: i64,
+        /// Which target's failed actions to re-queue.
+        target: String,
+    },
     /// Findings across repositories (§15 screen 4).
     ListFindings {
         /// Optional repository filter.
@@ -95,6 +112,8 @@ impl IpcRequest {
             Self::GetRepo { .. } => "get_repo",
             Self::ListRuns { .. } => "list_runs",
             Self::GetRun { .. } => "get_run",
+            Self::GetTranscript { .. } => "get_transcript",
+            Self::RetryTarget { .. } => "retry_target",
             Self::ListFindings { .. } => "list_findings",
             Self::ListApprovals => "list_approvals",
             Self::KillSwitch => "kill_switch",
@@ -110,7 +129,10 @@ impl IpcRequest {
     /// apart from a read, so the classification lives with the command rather than
     /// in the screen that happens to call it.
     pub const fn mutates(&self) -> bool {
-        matches!(self, Self::KillSwitch | Self::SetMode { .. })
+        matches!(
+            self,
+            Self::KillSwitch | Self::SetMode { .. } | Self::RetryTarget { .. }
+        )
     }
 }
 
