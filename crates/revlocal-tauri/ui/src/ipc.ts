@@ -263,6 +263,16 @@ export function fetchInitialRepo(): Promise<number> {
   return invoke<number>('initial_repo');
 }
 
+/**
+ * The step a scripted flow capture is on, or "" (RL-1103, §16.4).
+ *
+ * Read from the driver's own labels file, so the caption on a frame and the state
+ * the app was in when it was taken come from one write.
+ */
+export function fetchFlowStep(): Promise<string> {
+  return invoke<string>('flow_step');
+}
+
 /** Which onboarding step a capture harness asked for, or "" (RL-1102, §16.4). */
 export function fetchInitialOnboardingStep(): Promise<string> {
   return invoke<string>('initial_onboarding_step');
