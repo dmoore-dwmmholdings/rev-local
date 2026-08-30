@@ -1,5 +1,17 @@
-import { useEffect, useState } from 'react';
-import { describe, inTauri, invoke, onRunEvent, severityOf, type UiEvent } from './ipc';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  describe,
+  fetchDashboard,
+  inTauri,
+  invoke,
+  onRunEvent,
+  setMode,
+  severityOf,
+  type Dashboard as DashboardData,
+  type Mode,
+  type UiEvent,
+} from './ipc';
+import { Dashboard } from './Dashboard';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -17,6 +29,7 @@ export function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [connected, setConnected] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
 
   useEffect(() => {
     let seq = 0;
@@ -63,6 +76,30 @@ export function App() {
     };
   }, []);
 
+  // §15: live updates come from events, not polling. There is no interval here —
+  // the dashboard is re-read when an event says something changed, which is the
+  // only thing that can change it.
+  const reload = useCallback(() => {
+    if (!inTauri()) return;
+    fetchDashboard()
+      .then(setDashboard)
+      .catch((error: unknown) => setNotice(`Could not load the dashboard — ${messageOf(error)}`));
+  }, []);
+
+  useEffect(reload, [reload]);
+  useEffect(() => {
+    if (entries.length > 0) reload();
+  }, [entries.length, reload]);
+
+  async function changeMode(next: Mode) {
+    try {
+      await setMode(next);
+      reload();
+    } catch (error: unknown) {
+      setNotice(`Could not change the mode — ${messageOf(error)}`);
+    }
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -100,6 +137,8 @@ export function App() {
       )}
 
       <main>
+        <Dashboard dashboard={dashboard} onMode={changeMode} />
+
         <p className="note">
           Live activity. Events arrive over <code>revlocal://run-event</code> — this
           screen never polls the database.

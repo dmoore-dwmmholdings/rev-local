@@ -6,6 +6,7 @@ pub mod approvals;
 pub mod autonomy;
 pub mod backfill;
 pub mod budgets;
+pub mod dashboard;
 pub mod depth;
 pub mod gating;
 pub mod hooks;
@@ -21,6 +22,7 @@ pub mod trigger_receiver;
 pub mod triggers;
 pub mod truncation;
 pub mod tunnel;
+pub mod view;
 pub mod webhook;
 
 pub use approvals::{

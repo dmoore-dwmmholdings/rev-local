@@ -571,3 +571,62 @@ fn the_windows_icon_exists_and_carries_the_sizes_windows_asks_for() -> Result<()
     }
     Ok(())
 }
+
+/// The dashboard is one command, not four (RL-1105, §15).
+///
+/// Its four regions — cards, mode, kill switch, feed — are one view of one
+/// moment. Fetched separately they can disagree: a budget bar from before a run
+/// finished, beside a card from after it. An operations console showing two
+/// moments at once is worse than one that is a second stale.
+#[test]
+fn the_dashboard_is_fetched_as_one_snapshot() -> Result<(), String> {
+    let request = revlocal_tauri::ipc::IpcRequest::Dashboard;
+
+    assert_eq!(request.name(), "dashboard");
+    assert!(!request.mutates(), "reading a dashboard changes nothing");
+    Ok(())
+}
+
+/// Widening autonomy is a mutation, and says so (RL-1105, §12.2, §15).
+///
+/// §15 requires every destructive or outbound action to name its target. The mode
+/// is the setting that decides whether anything is written to somebody else's
+/// systems at all, so a screen must be able to tell it apart from a read — and it
+/// cannot, for a command that does not declare itself.
+#[test]
+fn setting_the_mode_declares_itself_a_mutation() -> Result<(), String> {
+    let request = revlocal_tauri::ipc::IpcRequest::SetMode {
+        mode: "auto".to_owned(),
+    };
+
+    assert_eq!(request.name(), "set_mode");
+    assert!(
+        request.mutates(),
+        "a screen cannot confirm what it cannot tell apart from a read"
+    );
+    Ok(())
+}
+
+/// Every request still round-trips as tagged JSON.
+///
+/// The front end is written against this wire format, so a variant added without
+/// a tag is a variant the UI cannot send.
+#[test]
+fn the_new_requests_round_trip() -> Result<(), String> {
+    for request in [
+        revlocal_tauri::ipc::IpcRequest::Dashboard,
+        revlocal_tauri::ipc::IpcRequest::SetMode {
+            mode: "dry_run".to_owned(),
+        },
+    ] {
+        let json = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+        let back: revlocal_tauri::ipc::IpcRequest =
+            serde_json::from_str(&json).map_err(|e| format!("{e}: {json}"))?;
+        assert_eq!(back, request, "{json}");
+        assert!(
+            json.contains(request.name()),
+            "the tag must be the name: {json}"
+        );
+    }
+    Ok(())
+}

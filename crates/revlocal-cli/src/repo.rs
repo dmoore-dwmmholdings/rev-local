@@ -13,8 +13,8 @@
 
 use revlocal_core::{Repo, RepoConfig};
 use revlocal_daemon::poll::{HealthReport, PollSchedule};
+pub use revlocal_daemon::view::RepoView;
 use revlocal_store::{Pool, RepoStore};
-use serde::{Deserialize, Serialize};
 
 /// Why a `repo` command could not complete.
 #[derive(Debug, thiserror::Error)]
@@ -94,47 +94,6 @@ pub fn report_for(repo: &Repo) -> HealthReport {
     // the same second, and an index would renumber them when one is deleted.
     let schedule = PollSchedule::new(repo.id, configured);
     schedule.health_report(&repo.name)
-}
-
-/// A repository's settings, beside its polling health.
-///
-/// `repo show` reported health and nothing else, so there was no way to ask what
-/// autonomy a repository was on — the single setting that decides whether it
-/// writes to somebody else's systems. "Is this repo going to publish?" had no
-/// answer from the command line, which is a poor property for the command named
-/// `show`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RepoView {
-    /// The repository's name.
-    pub repo: String,
-    /// Which VCS backs it.
-    pub kind: String,
-    /// Which engine reviews it (decision D3 — per repo, not global).
-    pub engine: String,
-    /// What it is allowed to do without asking (§12.2).
-    pub autonomy: String,
-    /// Whether triggers fire for it at all.
-    pub enabled: bool,
-    /// Where it is on disk.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub local_path: Option<String>,
-    /// Its polling health.
-    pub health: HealthReport,
-}
-
-impl RepoView {
-    /// Build the view for one stored repository.
-    pub fn of(repo: &Repo) -> Self {
-        Self {
-            repo: repo.name.clone(),
-            kind: repo.kind.as_str().to_owned(),
-            engine: repo.engine.as_str().to_owned(),
-            autonomy: repo.autonomy.as_str().to_owned(),
-            enabled: repo.enabled,
-            local_path: repo.local_path.clone(),
-            health: report_for(repo),
-        }
-    }
 }
 
 /// Run `revlocal repo show`.
