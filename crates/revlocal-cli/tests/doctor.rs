@@ -254,3 +254,81 @@ mod doctor {
         assert!(!Health::NotNeeded.is_blocking());
     }
 }
+
+/// Doctor says which engines cannot report token usage (RL-409, §8.1, §18).
+///
+/// A budget against an engine whose usage nobody can read is advisory. `budget
+/// show` already reports the ledger honestly — it hedges an unmeasured day rather
+/// than presenting it as a total — but by then the operator has already trusted a
+/// ceiling that was not holding anything. Doctor is where they find out first.
+#[test]
+fn doctor_names_the_engines_whose_token_budgets_are_advisory() -> Result<(), String> {
+    let report = revlocal_cli::doctor::gather(0);
+
+    let usage: Vec<&revlocal_cli::doctor::Check> = report
+        .engines
+        .iter()
+        .filter(|check| check.name.ends_with(":usage"))
+        .collect();
+
+    assert_eq!(
+        usage.len(),
+        2,
+        "both real engines should be named: {:?}",
+        report.engines.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+
+    for check in &usage {
+        // A warning, not a failure: reviews work, the budget is what does not.
+        assert_eq!(
+            check.health,
+            revlocal_cli::doctor::Health::Warn,
+            "{}: an engine that reviews fine must not fail doctor",
+            check.name
+        );
+        assert!(
+            check.detail.contains("advisory"),
+            "{}: must say what it means for a budget, not just that a feature is \
+             missing: {}",
+            check.name,
+            check.detail
+        );
+        // §8.4's rule: every non-ok check carries something to type next.
+        let remediation = check
+            .remediation
+            .as_deref()
+            .ok_or_else(|| format!("{} has no remediation", check.name))?;
+        assert!(
+            remediation.contains("daily_runs_per_repo"),
+            "the remedy is the ceiling that *is* enforceable: {remediation}"
+        );
+    }
+
+    // The mock is not listed. It reports counts, and a line per measured engine
+    // would bury the two that matter.
+    assert!(
+        !report.engines.iter().any(|c| c.name.contains("mock")),
+        "the fixture engine does not need a warning"
+    );
+    Ok(())
+}
+
+/// The warning does not block a review.
+#[test]
+fn doctor_still_exits_zero_when_only_usage_is_unmeasured() {
+    let report = revlocal_cli::doctor::gather(0);
+
+    // Whatever else is true of this machine, an unmeasured engine must not be
+    // the thing that stops somebody reviewing code.
+    let blocking: Vec<&str> = report
+        .all()
+        .filter(|check| check.health == revlocal_cli::doctor::Health::Fail)
+        .map(|check| check.name.as_str())
+        .filter(|name| name.ends_with(":usage"))
+        .collect();
+
+    assert!(
+        blocking.is_empty(),
+        "usage checks must never block: {blocking:?}"
+    );
+}
