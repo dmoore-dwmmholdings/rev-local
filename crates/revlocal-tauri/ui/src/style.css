@@ -85,3 +85,98 @@ td.kind { color: var(--accent); }
    announce themselves. */
 tr.warn td.kind { color: var(--warn); }
 tr.bad td.kind { color: var(--bad); }
+
+/* --- dashboard (SPEC §15 screen 1) ------------------------------------- */
+
+.dashboard { margin-bottom: 1.5rem; }
+
+.dashboard-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.mode { display: flex; align-items: center; gap: 0.5rem; }
+.mode span { color: var(--dim); }
+.mode select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.2rem 0.4rem;
+  font: inherit;
+}
+
+.banner {
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--bad);
+  border-radius: 3px;
+  color: var(--bad);
+}
+
+/* Dense on purpose: this is an operations console, not a marketing surface. */
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));
+  gap: 0.75rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.6rem 0.75rem;
+  background: var(--panel);
+}
+
+.card-head { display: flex; align-items: center; gap: 0.5rem; }
+.card-head h3 { margin: 0; font-size: 1rem; }
+
+.tag {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 0.35rem;
+  color: var(--dim);
+  font-size: 0.8rem;
+}
+.tag-off { color: var(--bad); border-color: var(--bad); }
+
+.card-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.1rem 0.75rem;
+  margin: 0.5rem 0;
+}
+.card-facts dt { color: var(--dim); }
+.card-facts dd { margin: 0; }
+
+.budget { margin-top: 0.5rem; }
+.budget-row {
+  display: grid;
+  grid-template-columns: 4rem 1fr max-content;
+  align-items: center;
+  gap: 0.5rem;
+}
+.budget-label { color: var(--dim); font-size: 0.85rem; }
+.budget-figure { font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+.meter {
+  height: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  display: block;
+}
+.meter-fill { display: block; height: 100%; background: var(--ok); }
+
+/* A lower bound is drawn differently from a total. §18: the distinction must
+   survive into the pixels, because a bar is the easiest place in a UI to lose
+   it. */
+.meter-partial { border-style: dashed; }
+.meter-partial .meter-fill { background: var(--warn); }
+
+.hedge { margin: 0.2rem 0 0; color: var(--warn); font-size: 0.8rem; }

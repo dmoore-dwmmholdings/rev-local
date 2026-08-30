@@ -43,6 +43,69 @@ impl UiEventSink for WindowSink {
     }
 }
 
+/// Where the store lives for this session.
+///
+/// A single database beside the config, which is what §4.2's in-process daemon
+/// reads. Absent, the dashboard reports the error rather than inventing an empty
+/// one — "no repositories" and "no database" look the same on screen and have
+/// different remedies.
+fn database_path() -> std::path::PathBuf {
+    std::env::var_os("REVLOCAL_DB").map_or_else(
+        || {
+            std::env::var_os("HOME").map_or_else(
+                || std::path::PathBuf::from("rev-local.db"),
+                |home| std::path::PathBuf::from(home).join(".local/share/rev-local/rev-local.db"),
+            )
+        },
+        std::path::PathBuf::from,
+    )
+}
+
+/// The dashboard snapshot (§15 screen 1).
+///
+/// One line of delegation past opening the store: the composition is
+/// `revlocal_daemon::dashboard`, which `revlocal dashboard` calls too. A number
+/// computed here is a number the CLI would eventually disagree with.
+#[tauri::command]
+async fn dashboard() -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let snapshot = revlocal_daemon::dashboard::gather(
+        &pool,
+        &revlocal_core::BudgetSettings::default(),
+        chrono::Utc::now(),
+    )
+    .await;
+    pool.close().await;
+
+    serde_json::to_value(snapshot.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Set the global autonomy ceiling (§12.2, §15's mode selector).
+#[tauri::command]
+async fn set_mode(mode: String) -> Result<(), String> {
+    // Rejected here rather than stored and puzzled over later: an unknown mode
+    // would read back as the default, which is a silent widening or narrowing.
+    let parsed: revlocal_core::AutonomyMode = mode.parse().map_err(|_| {
+        format!("unknown mode {mode:?}; try off, dry_run, auto_low_ask_high or auto")
+    })?;
+
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let result = revlocal_store::SettingStore::new(&pool)
+        .set(
+            revlocal_daemon::dashboard::SETTING_MODE,
+            parsed.as_str(),
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|e| e.to_string());
+    pool.close().await;
+    result
+}
+
 /// Stop everything (SPEC §12.1).
 ///
 /// One line of delegation, like every command here.
@@ -88,7 +151,7 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> tauri::Result<()> {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![kill_switch])
+        .invoke_handler(tauri::generate_handler![kill_switch, dashboard, set_mode])
         .setup(|app| {
             let handle = app.handle().clone();
 

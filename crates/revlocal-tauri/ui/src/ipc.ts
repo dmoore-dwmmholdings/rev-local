@@ -78,3 +78,82 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
   if (!api) throw { error: 'daemon_unavailable', remediation: 'open this in the rev-local app' } satisfies IpcError;
   return api.invoke(command, args) as Promise<T>;
 }
+
+// --- dashboard (RL-1105, SPEC §15 screen 1) ---------------------------------
+
+/** One repository's polling health, as `revlocal repo show` reports it. */
+export type HealthReport = {
+  repo: string;
+  health: string;
+  poll_interval_secs: number;
+  next_poll_in_secs: number;
+  consecutive_failures: number;
+  last_error: string | null;
+  notes: string[];
+};
+
+export type RepoView = {
+  id: number;
+  repo: string;
+  kind: string;
+  engine: string;
+  autonomy: string;
+  enabled: boolean;
+  local_path?: string;
+  health: HealthReport;
+};
+
+export type LastRun = {
+  run_id: number;
+  status: string;
+  verdict?: string;
+  finished_at?: string;
+};
+
+/**
+ * Today's spend beside today's ceiling.
+ *
+ * Both numbers, never a percentage: a bar that knows only "62%" cannot say 62%
+ * *of what*, and somebody deciding whether to widen a budget needs both.
+ */
+export type BudgetBar = {
+  runs: number;
+  runs_limit: number;
+  tokens: number;
+  tokens_limit: number;
+  /** When false the token figure is a lower bound, not a total (§18, RL-409). */
+  tokens_known: boolean;
+};
+
+export type RepoCard = {
+  repo: RepoView;
+  last_run?: LastRun;
+  queue_depth: number;
+  budget: BudgetBar;
+};
+
+export type Dashboard = {
+  repos: RepoCard[];
+  mode: string;
+  paused: boolean;
+};
+
+/** §12.2's four autonomy levels, widest last. */
+export const MODES = ['off', 'dry_run', 'auto_low_ask_high', 'auto'] as const;
+export type Mode = (typeof MODES)[number];
+
+/** How each mode reads to somebody choosing one. */
+export const MODE_LABELS: Record<string, string> = {
+  off: 'Off — nothing runs',
+  dry_run: 'Dry run — review, publish nothing',
+  auto_low_ask_high: 'Auto (low risk) — ask before anything high-risk',
+  auto: 'Auto — publish without asking',
+};
+
+export function fetchDashboard(): Promise<Dashboard> {
+  return invoke<Dashboard>('dashboard');
+}
+
+export function setMode(mode: Mode): Promise<void> {
+  return invoke<void>('set_mode', { mode });
+}

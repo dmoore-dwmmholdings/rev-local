@@ -123,6 +123,19 @@ enum Command {
         command: HooksCommand,
     },
 
+    /// The operations dashboard: repositories, health, budgets (SPEC §15).
+    ///
+    /// The same snapshot the desktop dashboard renders, so a headless operator
+    /// and one looking at the app see the same numbers.
+    Dashboard {
+        /// The database to read.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Control the GitHub webhook listener and its tunnel (SPEC §7.3).
     Webhook {
         #[command(subcommand)]
@@ -835,6 +848,10 @@ enum CliError {
     #[error(transparent)]
     Decide(#[from] decide::DecideError),
 
+    /// The dashboard could not be assembled.
+    #[error(transparent)]
+    Dashboard(#[from] revlocal_daemon::dashboard::DashboardError),
+
     /// A report could not be serialised.
     #[error("could not render the report: {0}")]
     Json(#[from] serde_json::Error),
@@ -1162,6 +1179,21 @@ async fn run(command: Command) -> Result<(), CliError> {
                 Ok(())
             }
         },
+
+        Command::Dashboard { database, json } => {
+            let pool = revlocal_store::open(&database).await?;
+            let snapshot = revlocal_daemon::dashboard::gather(
+                &pool,
+                // The ceilings the ledger is measured against. Defaults until the
+                // caller supplies a config; the numbers are §13.1's document.
+                &revlocal_core::BudgetSettings::default(),
+                chrono::Utc::now(),
+            )
+            .await;
+            pool.close().await;
+            println!("{}", revlocal_daemon::dashboard::render(&snapshot?, json)?);
+            Ok(())
+        }
 
         Command::Webhook { command } => {
             let (config, database, json) = match &command {

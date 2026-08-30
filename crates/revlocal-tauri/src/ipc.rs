@@ -31,7 +31,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum IpcRequest {
-    /// Every configured repository and its polling health (§15's dashboard).
+    /// The dashboard's whole snapshot (§15 screen 1).
+    ///
+    /// One command rather than four, because the dashboard's four regions are one
+    /// view of one moment: fetched separately they can disagree — a budget bar
+    /// from before a run finished beside a card from after it — and an operations
+    /// console that shows two moments at once is worse than one that is a second
+    /// stale.
+    Dashboard,
+    /// Every configured repository and its polling health.
     ListRepos,
     /// One repository's detail (§15 screen 2).
     GetRepo {
@@ -67,12 +75,22 @@ pub enum IpcRequest {
     KillSwitch,
     /// Whether the kill switch is engaged.
     KillSwitchState,
+    /// Set the global autonomy ceiling (§12.2, §15's mode selector).
+    ///
+    /// Mutating, and named as such: §15 requires every destructive or outbound
+    /// action to name its target, and widening autonomy is the setting that
+    /// decides whether anything is written to somebody else's systems at all.
+    SetMode {
+        /// `off` | `dry_run` | `auto_low_ask_high` | `auto`.
+        mode: String,
+    },
 }
 
 impl IpcRequest {
     /// The command's name on the wire.
     pub const fn name(&self) -> &'static str {
         match self {
+            Self::Dashboard => "dashboard",
             Self::ListRepos => "list_repos",
             Self::GetRepo { .. } => "get_repo",
             Self::ListRuns { .. } => "list_runs",
@@ -81,6 +99,7 @@ impl IpcRequest {
             Self::ListApprovals => "list_approvals",
             Self::KillSwitch => "kill_switch",
             Self::KillSwitchState => "kill_switch_state",
+            Self::SetMode { .. } => "set_mode",
         }
     }
 
@@ -91,7 +110,7 @@ impl IpcRequest {
     /// apart from a read, so the classification lives with the command rather than
     /// in the screen that happens to call it.
     pub const fn mutates(&self) -> bool {
-        matches!(self, Self::KillSwitch)
+        matches!(self, Self::KillSwitch | Self::SetMode { .. })
     }
 }
 

@@ -10,6 +10,7 @@ publish = false
 chrono = { workspace = true }
 revlocal-core = { workspace = true }
 revlocal-daemon = { workspace = true }
+revlocal-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -25,11 +26,13 @@ thiserror = { workspace = true }
 # mean every leg of the matrix installs a browser engine to run tests that do not
 # use one.
 tauri = { workspace = true, optional = true }
+# The window binary owns the runtime (§4.2: the daemon runs in-process).
+tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 
 [features]
 default = []
 # The actual desktop application. Enabled by the bundler, not by CI.
-desktop = ["dep:tauri", "dep:tauri-build"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tokio"]
 
 # The window binary only exists with a webview to put in it.
 [[bin]]
