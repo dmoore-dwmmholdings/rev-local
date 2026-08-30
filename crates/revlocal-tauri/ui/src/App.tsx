@@ -6,11 +6,14 @@ import {
   editPayload,
   fetchApprovals,
   fetchDashboard,
+  fetchFindings,
   fetchInitialScreen,
   fetchRun,
   fetchTranscript,
+  fileToAndare,
   rejectAction,
   retryTarget,
+  suppressFinding,
   inTauri,
   invoke,
   onRunEvent,
@@ -18,6 +21,9 @@ import {
   severityOf,
   type Dashboard as DashboardData,
   type ApprovalsView as ApprovalsData,
+  type FindingFilter,
+  type FindingRow,
+  type FindingsView as FindingsData,
   type QueuedAction,
   type RunView as RunViewData,
   type Mode,
@@ -27,6 +33,7 @@ import { Dashboard } from './Dashboard';
 import { RunDetail } from './RunDetail';
 import { Nav, initialScreen, type Screen } from './Nav';
 import { Approvals } from './Approvals';
+import { Findings } from './Findings';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -49,6 +56,8 @@ export function App() {
   const [run, setRun] = useState<RunViewData | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<ApprovalsData | null>(null);
+  const [findings, setFindings] = useState<FindingsData | null>(null);
+  const [filter, setFilter] = useState<FindingFilter>({});
 
   useEffect(() => {
     let seq = 0;
@@ -253,6 +262,64 @@ export function App() {
     }
   }
 
+  // Re-read whenever the filter changes, because the daemon does the filtering.
+  // §15: no polling — this fires on a filter change and on nothing else.
+  const reloadFindings = useCallback(
+    (next: FindingFilter) => {
+      if (!inTauri()) return;
+      fetchFindings(next)
+        .then(setFindings)
+        .catch((error: unknown) => setNotice(`Could not load findings — ${messageOf(error)}`));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (screen === 'findings') reloadFindings(filter);
+  }, [screen, filter, reloadFindings]);
+
+  async function suppressOne(row: FindingRow) {
+    // §15: a destructive action names its scope. Suppressing from here is scoped
+    // to this repository — saying so is the difference between somebody agreeing
+    // to silence a rule here and silencing it everywhere.
+    const ok = window.confirm(
+      `Stop proposing "${row.title}" in ${row.repo}?\n\n` +
+        'It will not be raised again for this repository. Other repositories are ' +
+        'unaffected — use `revlocal findings suppress` for a global suppression.',
+    );
+    if (!ok) return;
+    try {
+      await suppressFinding(row.id);
+      reloadFindings(filter);
+    } catch (error: unknown) {
+      setNotice(`Could not suppress #${row.id} — ${messageOf(error)}`);
+    }
+  }
+
+  async function fileOne(row: FindingRow) {
+    const ok = window.confirm(
+      `File "${row.title}" to Andare?\n\n` +
+        'Creating an issue is high risk, so this obeys the repository\u2019s autonomy ' +
+        'mode like any other publish — it may wait for approval rather than being sent.',
+    );
+    if (!ok) return;
+    try {
+      const status = await fileToAndare(row.id);
+      // Reporting the status rather than "filed". Under the default mode it is
+      // queued, and telling somebody it was sent would be a lie they act on.
+      setNotice(
+        status === 'awaiting_approval'
+          ? 'Queued for approval — see the Approvals screen.'
+          : status === 'skipped_dry_run'
+            ? 'Recorded and not sent: this repository is in dry run.'
+            : `Queued to send (${status}).`,
+      );
+      reloadFindings(filter);
+    } catch (error: unknown) {
+      setNotice(`Could not file #${row.id} — ${messageOf(error)}`);
+    }
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -310,6 +377,17 @@ export function App() {
           />
         )}
 
+        {screen === 'findings' && (
+          <Findings
+            view={findings}
+            filter={filter}
+            onFilter={setFilter}
+            onOpenRun={openRun}
+            onSuppress={suppressOne}
+            onFile={fileOne}
+          />
+        )}
+
         {screen === 'run' && (
           <RunDetail
             run={run}
@@ -319,38 +397,46 @@ export function App() {
           />
         )}
 
-        <p className="note">
-          Live activity. Events arrive over <code>revlocal://run-event</code> — this
-          screen never polls the database.
-        </p>
-
-        {entries.length === 0 ? (
-          <p className="empty">
-            {connected
-              ? 'Waiting for the daemon. Nothing has run yet.'
-              : 'Not receiving events. See the message above.'}
+        {/* §15 puts live activity on the dashboard. It used to render under every
+            screen, which put "Nothing has run yet" directly beneath a table of
+            findings from run #1 — two true-sounding statements contradicting each
+            other, which is worse than either alone. Found by reading a capture. */}
+        {screen === 'dashboard' && (
+          <>
+          <p className="note">
+            Live activity. Events arrive over <code>revlocal://run-event</code> — this
+            screen never polls the database.
           </p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Run</th>
-                <th>Event</th>
-                <th>Detail</th>
-                <th>At</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry) => (
-                <tr key={entry.seq} className={severityOf(entry.event)}>
-                  <td className="num">{entry.event.run_id}</td>
-                  <td className="kind">{entry.event.kind.replace(/_/g, ' ')}</td>
-                  <td>{describe(entry.event)}</td>
-                  <td className="num">{entry.at.toLocaleTimeString()}</td>
+
+          {entries.length === 0 ? (
+            <p className="empty">
+              {connected
+                ? 'Waiting for the daemon. Nothing has run yet.'
+                : 'Not receiving events. See the message above.'}
+            </p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Event</th>
+                  <th>Detail</th>
+                  <th>At</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {entries.map((entry) => (
+                  <tr key={entry.seq} className={severityOf(entry.event)}>
+                    <td className="num">{entry.event.run_id}</td>
+                    <td className="kind">{entry.event.kind.replace(/_/g, ' ')}</td>
+                    <td>{describe(entry.event)}</td>
+                    <td className="num">{entry.at.toLocaleTimeString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          </>
         )}
       </main>
     </>

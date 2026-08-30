@@ -45,4 +45,28 @@ INSERT INTO budget_ledger (repo_id,day,runs,tokens_in,tokens_out,cost_usd,cost_c
   VALUES (1,date('now','localtime'),37,180000,9000,4.2,1,1),
          (2,date('now','localtime'),12,640000,31000,9.9,1,0);
 "
+# Findings and one queued action, so the findings and approvals screens have
+# something to render. A capture of an empty table proves the window opened and
+# nothing else — and "no findings" is exactly what a broken query looks like.
+sqlite3 "$DB" "
+INSERT INTO finding
+  (run_id,fingerprint,severity,category,confidence,file,line_start,line_end,title,body,state,created_at)
+  VALUES
+  (1,'fp-sql','critical','security',0.9,'src/db.rs',41,44,'SQL injection in find_user',
+   'The name parameter is interpolated straight into the query.','open','2026-01-01T01:03:00Z'),
+  (1,'fp-panic','high','correctness',0.8,'src/engine.rs',88,88,'unwrap on a parsed header',
+   'A malformed header aborts the run rather than failing it.','open','2026-01-01T01:03:01Z'),
+  (1,'fp-alloc','medium','perf',0.6,'src/scan.rs',12,30,'allocates per line in the hot loop',
+   'The buffer is rebuilt for every line of the diff.','open','2026-01-01T01:03:02Z'),
+  (1,'fp-cover','low','tests',0.7,'src/retry.rs',5,5,'the retry path is untested',
+   'Nothing exercises the branch that gives up.','suppressed','2026-01-01T01:03:03Z');
+
+INSERT INTO publish_action
+  (run_id,finding_id,target,capability,risk,idempotency_key,payload_json,status,attempts,created_at)
+  VALUES
+  (1,1,'andare','create_issue','high','fixture-andare-fp-sql',
+   '{\"title\":\"SQL injection in find_user\",\"body\":\"The name parameter is interpolated straight into the query.\"}',
+   'awaiting_approval',0,'2026-01-01T01:05:00Z');
+"
+
 echo "gui-fixture: $DB"

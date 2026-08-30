@@ -51,7 +51,7 @@ if [[ ${#SCREENS[@]} -eq 0 ]]; then
   exit 2
 fi
 if [[ "${SCREENS[0]}" == "all" ]]; then
-  SCREENS=(dashboard)
+  SCREENS=(dashboard run findings approvals)
 fi
 
 if ! command -v framewatch >/dev/null 2>&1; then
@@ -92,7 +92,11 @@ for screen in "${SCREENS[@]}"; do
   roi_args=(--settle-ms "$SETTLE_MS")
   [[ -n "$ROI" ]] && roi_args+=(--roi "$ROI")
 
-  if REVLOCAL_DB="$FIXTURE_DB" framewatch shot \
+  # The screen name has to reach the app, not just name the output file. Without
+  # this every capture was the dashboard under a different filename — which looks
+  # exactly like a working gate until somebody opens two PNGs and finds the same
+  # picture. `initial_screen` reads this on mount.
+  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$screen" framewatch shot \
        --launch "$BIN" \
        --title "rev-local" \
        --out-file "$out" \

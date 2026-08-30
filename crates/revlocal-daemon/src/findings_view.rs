@@ -24,7 +24,7 @@
 
 use revlocal_core::{
     AutonomyMode, Capability, FindingState, PublishAction, PublishActionId, RepoId, RiskClass,
-    RunId, Severity, Timestamp,
+    Severity, Timestamp,
 };
 use revlocal_store::{FindingStore, Pool, PublishActionStore, RepoStore, RunStore};
 use serde::{Deserialize, Serialize};
@@ -303,8 +303,58 @@ pub async fn file_to_andare(
     Ok(status)
 }
 
-/// Unused, kept so the import list reads as the module's dependencies.
-const _: fn(RunId) = |_| {};
+/// Suppress a finding from the table (§14 `findings suppress`, §15 screen 4).
+///
+/// Two writes, because a suppression and a finding's state answer different
+/// questions. The suppression stops §10.3 raising the same fingerprint on a
+/// *future* run; the state is what this row says *now*. Doing only the first
+/// leaves somebody looking at an unchanged table wondering whether the click
+/// registered, which is the acceptance criterion's "the row updates immediately".
+///
+/// Scoped to the finding's own repository, never globally. The row names one
+/// repository and that is the scope somebody reading it has in mind — the wider
+/// choice exists, on the command line, where it has to be typed rather than
+/// implied. Narrowing wrongly costs a second suppression; widening wrongly
+/// silences a rule everywhere and says nothing.
+pub async fn suppress(
+    pool: &Pool,
+    finding_id: i64,
+    at: Timestamp,
+) -> Result<FindingState, FindingsError> {
+    let findings = FindingStore::new(pool);
+    let finding = findings
+        .get(revlocal_core::FindingId::new(finding_id))
+        .await
+        .map_err(boxed)?;
+
+    let run = RunStore::new(pool)
+        .get(finding.run_id)
+        .await
+        .map_err(boxed)?;
+    let change = revlocal_store::ChangeStore::new(pool)
+        .get(run.change_id)
+        .await
+        .map_err(boxed)?;
+
+    revlocal_store::SuppressionStore::new(pool)
+        .insert(&revlocal_core::Suppression {
+            id: revlocal_core::SuppressionId::new(0),
+            repo_id: Some(change.repo_id),
+            fingerprint: Some(finding.fingerprint.clone()),
+            glob: None,
+            reason: Some("suppressed from the findings screen".to_owned()),
+            created_at: at,
+        })
+        .await
+        .map_err(boxed)?;
+
+    findings
+        .set_state(finding.id, FindingState::Suppressed)
+        .await
+        .map_err(boxed)?;
+
+    Ok(FindingState::Suppressed)
+}
 
 #[cfg(test)]
 mod tests {
