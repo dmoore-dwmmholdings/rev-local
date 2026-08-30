@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Nav, SCREENS, UNBUILT } from './Nav';
+import { Nav, SCREENS, UNBUILT, initialScreen } from './Nav';
 
 describe('nav', () => {
   it('lists all six screens §15 names', () => {
@@ -49,5 +49,20 @@ describe('nav', () => {
 
     expect(screen.getByText('Run detail').getAttribute('aria-current')).toBe('page');
     expect(screen.getByText('Dashboard').getAttribute('aria-current')).toBeNull();
+  });
+});
+
+describe('initial screen', () => {
+  it('opens the screen a capture harness asked for', () => {
+    // §16.4 photographs one screen at a time, and clicking into a webview from
+    // the OS is not available — its DOM is not an accessibility tree.
+    expect(initialScreen('approvals')).toBe('approvals');
+    expect(initialScreen('run')).toBe('run');
+  });
+
+  it('falls back to the dashboard rather than showing nothing', () => {
+    // A mistyped screen name should not produce a blank window.
+    expect(initialScreen('nonsense')).toBe('dashboard');
+    expect(initialScreen('')).toBe('dashboard');
   });
 });

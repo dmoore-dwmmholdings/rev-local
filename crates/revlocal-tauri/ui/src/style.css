@@ -230,7 +230,7 @@ tr.bad td.kind { color: var(--bad); }
 }
 .targets td { padding: 0.25rem 0.5rem 0.25rem 0; border-bottom: 1px solid var(--line); }
 .targets td.bad { color: var(--bad); }
-.targets button:disabled { opacity: 0.4; cursor: not-allowed; }
+
 
 .transcript {
   max-height: 24rem;
@@ -268,3 +268,46 @@ tr.bad td.kind { color: var(--bad); }
 /* Specified but not built. Visible so the six screens §15 names are all
    accounted for, dimmed so nobody mistakes one for a dead link. */
 .nav-tab:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* --- approvals (SPEC §12.4, §15 screen 5) -------------------------------- */
+
+/* Every disabled control, everywhere.
+   Scoping this to one screen is how a disabled button ends up looking enabled
+   somewhere else — which is worse than hiding it, because somebody presses it
+   and concludes the app is broken. Found by reading a capture of the approvals
+   inbox where "Reject & suppress" was correctly disabled and looked live. */
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.run-group { border: 1px solid var(--line); border-radius: 4px; margin-bottom: 1rem; }
+.run-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.run-group-head h3 { margin: 0; font-size: 1rem; }
+
+.queued-list { list-style: none; margin: 0; padding: 0; }
+.queued { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); }
+.queued:last-child { border-bottom: none; }
+.queued-head { display: flex; align-items: center; gap: 0.5rem; }
+
+.preview { margin: 0.5rem 0; }
+.preview-title { margin: 0 0 0.25rem; font-weight: 600; }
+.preview-body { margin: 0; white-space: pre-wrap; }
+
+.payload {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 16rem;
+  overflow: auto;
+}
+
+.queued-actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; }

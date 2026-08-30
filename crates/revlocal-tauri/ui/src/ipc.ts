@@ -221,3 +221,39 @@ export function fetchTranscript(runId: number): Promise<string> {
 export function retryTarget(runId: number, target: string): Promise<void> {
   return invoke<void>('retry_target', { runId, target });
 }
+
+// --- approvals (RL-1109, SPEC §12.4, §15 screen 5) --------------------------
+
+export type QueuedAction = {
+  id: number;
+  run_id: number;
+  target: string;
+  capability: string;
+  risk: string;
+  /** The payload that would be sent, verbatim. Not a rendering of it. */
+  payload_json: string;
+  has_finding: boolean;
+};
+
+export type ApprovalsView = { waiting: QueuedAction[] };
+
+export function fetchApprovals(): Promise<ApprovalsView> {
+  return invoke<ApprovalsView>('list_approvals');
+}
+export function approveAction(id: number): Promise<void> {
+  return invoke<void>('approve_action', { id });
+}
+export function approveRun(runId: number): Promise<void> {
+  return invoke<void>('approve_run', { runId });
+}
+export function rejectAction(id: number, suppress: boolean): Promise<void> {
+  return invoke<void>('reject_action', { id, suppress });
+}
+export function editPayload(id: number, payloadJson: string): Promise<void> {
+  return invoke<void>('edit_payload', { id, payloadJson });
+}
+
+/** Which screen a capture harness asked for, or "" (RL-1102, §16.4). */
+export function fetchInitialScreen(): Promise<string> {
+  return invoke<string>('initial_screen');
+}
