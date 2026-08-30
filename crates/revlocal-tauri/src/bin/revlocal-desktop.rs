@@ -172,6 +172,182 @@ async fn retry_target(run_id: i64, target: String) -> Result<(), String> {
     result
 }
 
+/// The approvals inbox (§12.4, §15 screen 5).
+#[tauri::command]
+async fn list_approvals() -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let view = revlocal_daemon::approvals_view::gather(&pool).await;
+    pool.close().await;
+
+    serde_json::to_value(view.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Approve one queued action (§12.4).
+///
+/// The digest is computed over the payload as it stands *now* — after any edit —
+/// and the queue re-checks it at dispatch. That is what makes "an edit after
+/// approval is impossible" a mechanism rather than a promise.
+#[tauri::command]
+async fn approve_action(id: i64) -> Result<(), String> {
+    with_store(|pool| async move {
+        let store = revlocal_store::PublishActionStore::new(&pool);
+        let waiting = store
+            .list_awaiting_approval()
+            .await
+            .map_err(|e| e.to_string())?;
+        let action = waiting
+            .iter()
+            .find(|a| a.id.get() == id)
+            .ok_or_else(|| format!("action #{id} is not waiting for approval"))?;
+
+        let digest = revlocal_core::payload_digest(&action.payload_json);
+        store
+            .approve(revlocal_core::PublishActionId::new(id), &digest)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Approve everything queued for one run (§12.4's "approve all for this run").
+#[tauri::command]
+async fn approve_run(run_id: i64) -> Result<(), String> {
+    with_store(|pool| async move {
+        let ids =
+            revlocal_daemon::approvals_view::for_run(&pool, revlocal_core::RunId::new(run_id))
+                .await
+                .map_err(|e| e.to_string())?;
+        let store = revlocal_store::PublishActionStore::new(&pool);
+        let waiting = store
+            .list_awaiting_approval()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for id in ids {
+            // Each digest is over that action's own payload. One digest for the
+            // batch would let an edit to any member ride in on another's approval.
+            if let Some(action) = waiting.iter().find(|a| a.id.get() == id) {
+                let digest = revlocal_core::payload_digest(&action.payload_json);
+                store
+                    .approve(revlocal_core::PublishActionId::new(id), &digest)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Reject one action, optionally suppressing its finding (§12.4).
+#[tauri::command]
+async fn reject_action(id: i64, suppress: bool) -> Result<(), String> {
+    with_store(|pool| async move { revlocal_cli_reject(&pool, id, suppress).await }).await
+}
+
+/// Replace a payload before approving it (§12.4's "edit body then approve").
+#[tauri::command]
+async fn edit_payload(id: i64, payload_json: String) -> Result<(), String> {
+    with_store(|pool| async move {
+        revlocal_store::PublishActionStore::new(&pool)
+            .edit_payload(revlocal_core::PublishActionId::new(id), &payload_json)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Open the store, run one thing, close it.
+///
+/// Every command here is short-lived and owns its connection: §4.2 runs the
+/// daemon in-process, and a pool held across an idle window is a lock held for no
+/// reason.
+async fn with_store<F, Fut>(work: F) -> Result<(), String>
+where
+    F: FnOnce(revlocal_store::Pool) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let result = work(pool.clone()).await;
+    pool.close().await;
+    result
+}
+
+/// Reject, and suppress the finding when asked.
+async fn revlocal_cli_reject(
+    pool: &revlocal_store::Pool,
+    id: i64,
+    suppress: bool,
+) -> Result<(), String> {
+    let store = revlocal_store::PublishActionStore::new(pool);
+    let waiting = store
+        .list_awaiting_approval()
+        .await
+        .map_err(|e| e.to_string())?;
+    let action = waiting
+        .iter()
+        .find(|a| a.id.get() == id)
+        .ok_or_else(|| format!("action #{id} is not waiting for approval"))?;
+
+    // §12.4 keeps `expired` for a timeout distinct from a person saying no: one
+    // is a decision, the other is that nobody looked.
+    store
+        .reject(
+            revlocal_core::PublishActionId::new(id),
+            "rejected by operator",
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !suppress {
+        return Ok(());
+    }
+    let Some(finding_id) = action.finding_id else {
+        // Nothing to suppress. Not an error — the button is disabled for this
+        // case, and a race that gets here should not fail the rejection that
+        // already succeeded.
+        return Ok(());
+    };
+    let finding = revlocal_store::FindingStore::new(pool)
+        .get(finding_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    revlocal_store::SuppressionStore::new(pool)
+        .insert(&revlocal_core::Suppression {
+            id: revlocal_core::SuppressionId::new(0),
+            repo_id: None,
+            fingerprint: Some(finding.fingerprint),
+            glob: None,
+            reason: Some("rejected with suppress from the approvals inbox".to_owned()),
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Which screen to open on launch (§16.4).
+///
+/// A capture harness photographs one screen at a time and cannot click its way
+/// there — a webview's DOM is not an OS accessibility tree, which is an afternoon
+/// I spent finding out.
+///
+/// An IPC command rather than a query parameter set by `eval`: the eval runs after
+/// the page has mounted, so the front end would already have read an empty URL and
+/// any success would be a race that happened to go the right way.
+///
+/// Environment rather than a flag, so somebody launching the app normally never
+/// meets it and the harness sets it the way it already sets `REVLOCAL_DB`.
+#[tauri::command]
+fn initial_screen() -> String {
+    std::env::var("REVLOCAL_SCREEN").unwrap_or_default()
+}
+
 /// Stop everything (SPEC §12.1).
 ///
 /// One line of delegation, like every command here.
@@ -223,7 +399,13 @@ fn run() -> tauri::Result<()> {
             set_mode,
             get_run,
             get_transcript,
-            retry_target
+            retry_target,
+            list_approvals,
+            approve_action,
+            approve_run,
+            reject_action,
+            edit_payload,
+            initial_screen
         ])
         .setup(|app| {
             let handle = app.handle().clone();

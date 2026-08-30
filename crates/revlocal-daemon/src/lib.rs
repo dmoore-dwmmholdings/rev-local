@@ -3,6 +3,7 @@
 //! Scaffolded by `RL-101`; implementation lands in later work items.
 
 pub mod approvals;
+pub mod approvals_view;
 pub mod autonomy;
 pub mod backfill;
 pub mod budgets;

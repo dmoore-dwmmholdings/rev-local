@@ -327,6 +327,41 @@ impl<'a> PublishActionStore<'a> {
         Ok(())
     }
 
+    /// Replace an action's payload before it is approved (SPEC §12.4).
+    ///
+    /// §12.4 lists "edit body then approve" among the five actions, and the edit
+    /// has to happen *before* the approval rather than alongside it. The digest
+    /// recorded at approval is computed over the payload as it then stands, and
+    /// the queue re-computes it at dispatch — so editing after approving would
+    /// invalidate the approval, which is exactly the protection working.
+    ///
+    /// Only an `awaiting_approval` row can be edited. Editing something already
+    /// approved would slip past the digest that was recorded for it; editing
+    /// something sent would rewrite history. The row count says so rather than
+    /// silently changing a settled action.
+    pub async fn edit_payload(&self, id: PublishActionId, payload_json: &str) -> Result<()> {
+        let raw = id.get();
+        let awaiting = PublishActionStatus::AwaitingApproval.as_str();
+
+        let affected = sqlx::query!(
+            "UPDATE publish_action SET payload_json = ? WHERE id = ? AND status = ?",
+            payload_json,
+            raw,
+            awaiting
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "publish_action awaiting approval",
+                key: format!("id={raw}"),
+            });
+        }
+        Ok(())
+    }
+
     /// Record a rejection and why.
     ///
     /// `reason` carries `expired` for a timeout, which §12.4 names explicitly and

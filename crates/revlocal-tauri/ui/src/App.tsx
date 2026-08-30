@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   describe,
+  approveAction,
+  approveRun,
+  editPayload,
+  fetchApprovals,
   fetchDashboard,
+  fetchInitialScreen,
   fetchRun,
   fetchTranscript,
+  rejectAction,
   retryTarget,
   inTauri,
   invoke,
@@ -11,13 +17,16 @@ import {
   setMode,
   severityOf,
   type Dashboard as DashboardData,
+  type ApprovalsView as ApprovalsData,
+  type QueuedAction,
   type RunView as RunViewData,
   type Mode,
   type UiEvent,
 } from './ipc';
 import { Dashboard } from './Dashboard';
 import { RunDetail } from './RunDetail';
-import { Nav, type Screen } from './Nav';
+import { Nav, initialScreen, type Screen } from './Nav';
+import { Approvals } from './Approvals';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -39,6 +48,7 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('dashboard');
   const [run, setRun] = useState<RunViewData | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
+  const [approvals, setApprovals] = useState<ApprovalsData | null>(null);
 
   useEffect(() => {
     let seq = 0;
@@ -95,6 +105,19 @@ export function App() {
       .catch((error: unknown) => setNotice(`Could not load the dashboard — ${messageOf(error)}`));
   }, []);
 
+  // Asked once, on mount. Only a capture harness ever sets it.
+  useEffect(() => {
+    if (!inTauri()) return;
+    fetchInitialScreen()
+      .then((wanted) => {
+        if (wanted) setScreen(initialScreen(wanted));
+      })
+      .catch(() => {
+        // Not worth a notice. Failing to read an optional capture hint should
+        // leave somebody on the dashboard, not staring at an error.
+      });
+  }, []);
+
   useEffect(reload, [reload]);
   useEffect(() => {
     if (entries.length > 0) reload();
@@ -145,6 +168,91 @@ export function App() {
     }
   }
 
+  const reloadApprovals = useCallback(() => {
+    if (!inTauri()) return;
+    fetchApprovals()
+      .then(setApprovals)
+      .catch((error: unknown) => setNotice(`Could not load the inbox — ${messageOf(error)}`));
+  }, []);
+
+  // The inbox is read when its screen is opened, not on a timer. §15: live
+  // updates come from events, and an inbox nobody is looking at does not need
+  // refreshing.
+  useEffect(() => {
+    if (screen === 'approvals') reloadApprovals();
+  }, [screen, reloadApprovals]);
+
+  // §12.4's five actions. Every one that sends something names where it goes:
+  // "are you sure?" tells nobody anything, and the target is the fact that
+  // decides whether somebody should say yes.
+  async function approveOne(action: QueuedAction) {
+    const ok = window.confirm(
+      `Send this ${action.capability} to ${action.target}?\n\n` +
+        'It is dispatched as shown. An edit after approving is refused — the ' +
+        'payload is fingerprinted now and checked again when it is sent.',
+    );
+    if (!ok) return;
+    try {
+      await approveAction(action.id);
+      reloadApprovals();
+    } catch (error: unknown) {
+      setNotice(`Could not approve #${action.id} — ${messageOf(error)}`);
+    }
+  }
+
+  async function approveWholeRun(runId: number, count: number) {
+    // The count is in the confirmation because it is the blast radius, and a
+    // number nobody saw is a number nobody agreed to.
+    const ok = window.confirm(
+      `Approve all ${count} queued action(s) for run #${runId}?\n\n` +
+        'Each is dispatched as it stands. This does not affect other runs.',
+    );
+    if (!ok) return;
+    try {
+      await approveRun(runId);
+      reloadApprovals();
+    } catch (error: unknown) {
+      setNotice(`Could not approve run #${runId} — ${messageOf(error)}`);
+    }
+  }
+
+  async function rejectOne(action: QueuedAction, suppress: boolean) {
+    const ok = window.confirm(
+      suppress
+        ? `Reject this ${action.capability} to ${action.target}, and stop proposing this finding?\n\n` +
+            'Suppressing is the wider choice: the finding will not be raised again ' +
+            'for any future run, not just this one.'
+        : `Reject this ${action.capability} to ${action.target}?\n\n` +
+            'Nothing is sent. The finding may be proposed again on a later run.',
+    );
+    if (!ok) return;
+    try {
+      await rejectAction(action.id, suppress);
+      reloadApprovals();
+    } catch (error: unknown) {
+      setNotice(`Could not reject #${action.id} — ${messageOf(error)}`);
+    }
+  }
+
+  async function editOne(action: QueuedAction) {
+    const edited = window.prompt(
+      `Edit the payload sent to ${action.target}. It is dispatched exactly as left here.`,
+      action.payload_json,
+    );
+    if (edited === null || edited === action.payload_json) return;
+    try {
+      // Edit first, approve second — never together. §12.4's protection is that
+      // the digest recorded at approval is re-checked at dispatch, so editing
+      // after approving would invalidate the approval. That is the protection
+      // working, and the order here is what keeps it from firing on our own edit.
+      await editPayload(action.id, edited);
+      reloadApprovals();
+      setNotice('Payload edited. Approve it when you are ready — it is still queued.');
+    } catch (error: unknown) {
+      setNotice(`Could not edit #${action.id} — ${messageOf(error)}`);
+    }
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -189,6 +297,16 @@ export function App() {
             dashboard={dashboard}
             onMode={changeMode}
             onOpenRun={openRun}
+          />
+        )}
+
+        {screen === 'approvals' && (
+          <Approvals
+            view={approvals}
+            onApprove={approveOne}
+            onApproveRun={approveWholeRun}
+            onReject={rejectOne}
+            onEdit={editOne}
           />
         )}
 

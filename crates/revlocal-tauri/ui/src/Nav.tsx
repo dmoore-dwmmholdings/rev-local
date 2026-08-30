@@ -35,7 +35,6 @@ export const SCREEN_LABELS: Record<Screen, string> = {
 export const UNBUILT: ReadonlySet<Screen> = new Set<Screen>([
   'repository',
   'findings',
-  'approvals',
   'settings',
 ]);
 
@@ -68,4 +67,21 @@ export function Nav({
       })}
     </nav>
   );
+}
+
+/**
+ * The screen to open on launch (RL-1102, SPEC §16.4).
+ *
+ * §16.4's own example launches the app "--route /$SCREEN" so a capture harness
+ * can photograph one screen at a time. Without something like it, capturing the
+ * approvals inbox means driving a click into a webview — and a webview's DOM is
+ * not exposed to the OS accessibility APIs that scripted clicking uses, which is
+ * an afternoon nobody gets back.
+ *
+ * Validates whatever the app was told to open. An unknown value falls back to the
+ * dashboard rather than failing: a mistyped screen name should not produce a blank
+ * window, and this string comes from an environment variable somebody typed.
+ */
+export function initialScreen(wanted: string): Screen {
+  return SCREENS.includes(wanted as Screen) ? (wanted as Screen) : 'dashboard';
 }
