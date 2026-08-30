@@ -193,11 +193,14 @@ mod cli_surface {
     /// tested — the same shape the rest of §14's surface turned out to be. They are
     /// listed rather than silently absent because a specified command that nobody
     /// is tracking is how a surface stays two-thirds built.
-    pub const SUBCOMMANDS_NOT_YET: &[(&str, &str, &str)] = &[(
-        "db",
-        "export",
-        "no export format is settled, and one shipped now is one to support forever",
-    )];
+    /// Subcommands §14 names that do not exist yet, and what each waits on.
+    ///
+    /// Empty, and that is the point: every command in §14 now exists. The list
+    /// stays because the guard that reads it is what keeps it empty — a
+    /// subcommand added to §14 and not to the binary fails
+    /// `every_subcommand_in_spec_14_exists_or_is_listed` rather than being
+    /// noticed three milestones later.
+    pub const SUBCOMMANDS_NOT_YET: &[(&str, &str, &str)] = &[];
 
     /// Command groups that exist today.
     const IMPLEMENTED: &[&str] = &[
@@ -2747,5 +2750,156 @@ mod decisions {
             .await
             .map_err(|e| e.to_string())?;
         Ok(inserted.id)
+    }
+}
+
+// --- db export (RL-1201, §14) -----------------------------------------------
+
+mod export_command {
+    use revlocal_cli::export::{export, EXCLUDED, SCHEMA_VERSION};
+    use revlocal_store::Pool;
+
+    async fn store() -> Result<(Pool, tempfile::TempDir), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok((pool, dir))
+    }
+
+    fn now() -> revlocal_core::Timestamp {
+        chrono::Utc::now()
+    }
+
+    #[tokio::test]
+    async fn an_export_says_what_it_left_out() -> Result<(), String> {
+        // §18, and the reason `excluded` is a field rather than a doc comment: an
+        // export that silently omits tables is indistinguishable from one where
+        // those tables were empty.
+        let (pool, _dir) = store().await?;
+
+        let document = export(&pool, "json", now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(document.excluded.len(), EXCLUDED.len());
+        assert!(
+            document.excluded.iter().all(|e| !e.reason.is_empty()),
+            "a table listed without a reason is a list nobody revisits"
+        );
+        // The one free-form column in the schema must be among them.
+        assert!(
+            document.excluded.iter().any(|e| e.table == "audit"),
+            "{:?}",
+            document.excluded
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_empty_install_exports_a_valid_document() -> Result<(), String> {
+        // Not an error and not empty output: a consumer written today must parse
+        // tomorrow's export, and arrays are present even when nothing is in them.
+        let (pool, _dir) = store().await?;
+
+        let document = export(&pool, "json", now())
+            .await
+            .map_err(|e| e.to_string())?;
+        let rendered = revlocal_cli::export::render(&document).map_err(|e| e.to_string())?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).map_err(|e| e.to_string())?;
+
+        assert_eq!(parsed["schema_version"], SCHEMA_VERSION);
+        for array in ["repos", "runs", "findings", "excluded"] {
+            assert!(
+                parsed[array].is_array(),
+                "{array} must be present as an array"
+            );
+        }
+        assert_eq!(parsed["truncated"], false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_unknown_format_is_refused_rather_than_quietly_json() -> Result<(), String> {
+        // Writing JSON for `--format yaml` would be the worst of both: the caller
+        // believes one thing and gets another, and nothing says so.
+        let (pool, _dir) = store().await?;
+
+        let error = export(&pool, "yaml", now())
+            .await
+            .err()
+            .ok_or("must refuse")?
+            .to_string();
+
+        assert!(error.contains("unknown export format"), "{error}");
+        assert!(
+            error.contains("--format json"),
+            "and say what works: {error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_exports_of_an_unchanged_database_are_identical() -> Result<(), String> {
+        // ADR 0024. Ordered by id throughout, so a diff between two exports means
+        // something changed rather than that a query returned rows in a different
+        // order.
+        let (pool, dir) = store().await?;
+        let at = now();
+        let work = dir.path().join("acme");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+
+        let first = export(&pool, "json", at).await.map_err(|e| e.to_string())?;
+        let second = export(&pool, "json", at).await.map_err(|e| e.to_string())?;
+
+        assert_eq!(
+            revlocal_cli::export::render(&first).map_err(|e| e.to_string())?,
+            revlocal_cli::export::render(&second).map_err(|e| e.to_string())?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_export_carries_no_local_path() -> Result<(), String> {
+        // Where this machine keeps a repository says nothing to a reader
+        // elsewhere, and is the closest thing in the schema to personal
+        // information. Asserted on the rendered document rather than the struct,
+        // because a field added later would show up here.
+        let (pool, dir) = store().await?;
+        let at = now();
+        let secret_looking = dir.path().join("home/someone/private-work");
+        revlocal_store::RepoStore::new(&pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: "acme".to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                local_path: Some(secret_looking.display().to_string()),
+                remote_url: Some("https://example.invalid/acme.git".to_owned()),
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: at,
+                updated_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let rendered = revlocal_cli::export::render(
+            &export(&pool, "json", at).await.map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+
+        assert!(
+            !rendered.contains("private-work"),
+            "the export carries a local path:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("example.invalid"),
+            "but the remote, which does mean something elsewhere, must be there"
+        );
+        Ok(())
     }
 }

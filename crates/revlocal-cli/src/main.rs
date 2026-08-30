@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use revlocal_cli::{backfill, control, decide, doctor, exit, hooks, inspect, repo, watch, webhook};
+use revlocal_cli::{
+    backfill, control, decide, doctor, exit, export, hooks, inspect, repo, watch, webhook,
+};
 
 mod publish;
 mod review;
@@ -211,6 +213,27 @@ enum DbCommand {
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
         /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Write the review record as one JSON document on stdout.
+    ///
+    /// Repositories, runs and findings. Not a backup — the store is one SQLite
+    /// file, so `cp` is a better backup than any format could be — and not a
+    /// debug dump, which `runs show` and the audit log already cover.
+    Export {
+        /// The output format. `json` is the only one §14 names.
+        #[arg(long, value_name = "FORMAT", default_value = "json")]
+        format: String,
+        /// Database file.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Accepted and ignored: the document *is* the output.
+        ///
+        /// Present so `--json` is true of every command, as `revlocal --help`
+        /// claims. A flag that silently did something different would be worse
+        /// than one that says it changes nothing.
         #[arg(long)]
         json: bool,
     },
@@ -804,6 +827,10 @@ enum CliError {
     #[error(transparent)]
     Webhook(#[from] webhook::WebhookError),
 
+    /// An export could not be produced.
+    #[error(transparent)]
+    Export(#[from] export::ExportError),
+
     /// A decision could not be recorded.
     #[error(transparent)]
     Decide(#[from] decide::DecideError),
@@ -840,6 +867,23 @@ async fn run(command: Command) -> Result<(), CliError> {
                 } else {
                     println!("revlocal: schema is up to date at {path}");
                 }
+                Ok(())
+            }
+
+            DbCommand::Export {
+                format,
+                database,
+                json,
+            } => {
+                let _ = json;
+                let pool = revlocal_store::open(&database).await?;
+                let document = export::export(&pool, &format, chrono::Utc::now()).await;
+                pool.close().await;
+                let document = document?;
+                // Exactly one document on stdout; the summary goes to stderr, so
+                // the output stays safe to pipe.
+                eprintln!("revlocal: {}", document.summary_line());
+                println!("{}", export::render(&document)?);
                 Ok(())
             }
 

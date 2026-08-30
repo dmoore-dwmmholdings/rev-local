@@ -36,6 +36,14 @@ const ACCOUNTED_FOR: &[(&str, &str)] = &[
          itself the one that exists to report a cap.",
     ),
     (
+        "crates/revlocal-cli/src/export.rs",
+        "EXPORT_RUN_CAP bounds how many runs `db export` reads. It genuinely can \
+         hide history, so the document carries `truncated` and the summary line \
+         says \"stopped at N runs, so this is not the whole history\" — an export \
+         that quietly ended early would present a partial record as a complete \
+         one, which is the same failure as a partial review looking whole.",
+    ),
+    (
         "crates/revlocal-core/src/finding.rs",
         "TITLE_MAX_CHARS is enforced at the schema boundary (result.v1.json, \
          maxLength 80), not by truncating here — an over-long title is a rejected \

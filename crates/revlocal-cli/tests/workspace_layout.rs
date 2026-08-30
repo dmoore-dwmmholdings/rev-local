@@ -51,13 +51,40 @@ fn every_spec_crate_exists_and_is_a_workspace_member() {
     }
 }
 
+/// The desktop shell is a workspace crate, and §4.1 says so (REVL-124).
+///
+/// It was not always. RL-101 scaffolded `src-tauri/` and `ui/` at the root, as
+/// Tauri's own convention has it, and RL-1101 then built the shell at
+/// `crates/revlocal-tauri/` instead — leaving two directories containing nothing
+/// but a README saying the real thing was built elsewhere. A stranger cloning the
+/// public repository was told twice that the app lived somewhere it did not.
+///
+/// Resolved toward the crate. `src-tauri/` at the root is the convention for a
+/// single-app project whose front end is also at the root; this is a workspace of
+/// ten crates where the shell is one consumer of the library, and one crate
+/// outside `crates/` would be the anomaly. So §4.1's diagram was what needed
+/// changing, and the code stayed.
+///
+/// Both halves are asserted, because only asserting the new location would let
+/// the placeholders quietly come back.
 #[test]
-fn placeholder_directories_for_the_tauri_shell_and_ui_exist() {
+fn the_desktop_shell_is_a_crate_and_not_a_root_directory() {
     let root = workspace_root();
-    for dir in ["src-tauri", "ui", "fixtures"] {
+
+    for dir in [
+        "crates/revlocal-tauri",
+        "crates/revlocal-tauri/ui",
+        "fixtures",
+    ] {
+        assert!(root.join(dir).is_dir(), "SPEC §4.1 requires {dir}/");
+    }
+
+    for stale in ["src-tauri", "ui"] {
         assert!(
-            root.join(dir).is_dir(),
-            "SPEC §4.1 requires a {dir}/ directory at the workspace root"
+            !root.join(stale).exists(),
+            "{stale}/ is back at the workspace root. The shell lives at \
+             crates/revlocal-tauri/ and §4.1 says so; a directory here claims to \
+             hold code that is somewhere else"
         );
     }
 }

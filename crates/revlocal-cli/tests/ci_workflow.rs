@@ -169,7 +169,7 @@ fn failure_uploads_logs_and_gui_captures() {
     );
     assert!(
         paths.contains("artifacts/gui/*.png"),
-        "failure upload must include Framewatch captures (§16.4); got {paths:?}"
+        "failure upload must include GUI captures (§16.4); got {paths:?}"
     );
 }
 

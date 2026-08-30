@@ -125,8 +125,27 @@ jobs:
       # input, not a runtime one. `ui/dist` is generated and gitignored, so it
       # exists on a developer's machine and never on a fresh checkout. That is
       # exactly how the step below passed locally and failed here on its first run.
+      # Tauri needs webkit2gtk and its friends on Linux, and nowhere else. This is
+      # the standing cost of REVL-87's "launches on all three platforms": ~30s of
+      # apt on every Linux run, forever.
+      #
+      # Paid because the alternative is a desktop app whose Linux build is never
+      # exercised until somebody tries to package one (REVL-101), and because a
+      # third renderer — WebKitGTK, against WKWebView and WebView2 — is exactly
+      # the kind of difference that only shows up when compiled.
+      #
+      # Capture is still not run here; ADR 0032 keeps that a local gate.
+      - name: install the Linux webview toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev xvfb
+
       - name: build the desktop front end
-        if: runner.os == 'macOS' || runner.os == 'Windows'
+        # Every platform now compiles the shell, so every platform needs `ui/dist`.
+        if: always()
         run: npm --prefix crates/revlocal-tauri/ui ci && npm --prefix crates/revlocal-tauri/ui run build
 
       - name: cargo clippy (desktop shell)
@@ -149,7 +168,7 @@ jobs:
       # `build`, not `clippy`: the lint runs on macOS and lints the same source.
       # What this adds is whether it links on a second platform.
       - name: cargo build (desktop shell)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' || runner.os == 'Linux'
         run: |
           set -o pipefail
           cargo build -p revlocal-tauri --features desktop --bin revlocal-desktop 2>&1 \
@@ -177,6 +196,43 @@ jobs:
       # diagnosis comes from captured stderr — which does carry Tauri's real
       # message ("Failed to setup app: ..."). Relying on the exit code would have
       # been relying on a path that does not run.
+      # Xvfb, because a runner has no display and Tauri will not create a window
+      # without one. This is not capture — ADR 0032 — it is the same "did it start
+      # and make a window" check Windows runs, on the third renderer.
+      - name: smoke test the desktop shell (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -o pipefail
+          REVLOCAL_SMOKE=1 xvfb-run -a ./target/debug/revlocal-desktop \
+            > artifacts/logs/desktop-smoke.out \
+            2> artifacts/logs/desktop-smoke.err &
+          pid=$!
+
+          ready=""
+          for _ in $(seq 1 40); do
+            if grep -q "window ready" artifacts/logs/desktop-smoke.out 2>/dev/null; then
+              ready=yes
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+
+          if [ -n "$ready" ]; then
+            echo "the desktop shell created its window and tray"
+            exit 0
+          fi
+
+          echo "the desktop shell never reported a window in 40s" >&2
+          echo "--- stdout ---" >&2; cat artifacts/logs/desktop-smoke.out >&2
+          echo "--- stderr ---" >&2; cat artifacts/logs/desktop-smoke.err >&2
+          exit 1
+
       - name: smoke test the desktop shell
         if: runner.os == 'Windows'
         run: |
