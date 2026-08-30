@@ -30,24 +30,34 @@ fn have_node() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// A config pointing at the mock server, running one named profile.
+/// A config pointing at the mock server on its default profile.
 ///
-/// The profile is chosen by an environment variable, and `McpServerSettings` has
-/// no env map — so the command is `env`, which is what a person would type. No
-/// product change to accommodate a fixture.
-fn config_for(profile: &str) -> String {
-    let root = workspace_root();
-    let script = root.join("fixtures/mock-mcp/server.js");
-    let profile_path = root.join("fixtures/mock-mcp/profiles").join(profile);
+/// The default profile exposes `create_issue`, `set_issue_status`, `get_page`,
+/// `update_page` and `create_page` — so of Andare's four capabilities, two bind
+/// and two genuinely do not. That partial mapping is what these tests are about.
+///
+/// Two things this deliberately does *not* do, both learned from a red Windows
+/// leg:
+///
+/// The command is plain `node`, not `env VAR=... node`. `env` does not exist on
+/// Windows, so the first version could not start the server there at all — and
+/// picking a profile is not worth a fixture that only runs on two platforms when
+/// the default profile answers the same question.
+///
+/// The path goes in a TOML **literal** string. A Windows path is full of
+/// backslashes and TOML treats those as escapes inside a basic string, so
+/// `C:\Users\...` is a parse error and the config silently became empty —
+/// which surfaced three layers away as "no MCP server `andare` is configured".
+fn config_for() -> String {
+    let script = workspace_root().join("fixtures/mock-mcp/server.js");
 
     format!(
         r#"
 [mcpServers.andare]
 type = "stdio"
-command = "env"
-args = ["MOCK_MCP_PROFILE={}", "node", "{}"]
+command = "node"
+args = ['{}']
 "#,
-        profile_path.display(),
         script.display()
     )
 }
@@ -81,7 +91,7 @@ async fn a_partially_mapped_target_reports_exactly_what_did_not_bind() {
 
     let dir = TempDir::new().expect("tempdir");
     let overrides = dir.path().join("target-overrides.json");
-    let config = parsed(&config_for("andare-renamed.json")).expect("fixture config");
+    let config = parsed(&config_for()).expect("fixture config");
 
     let view = settings_view::gather(
         &config,
@@ -99,9 +109,9 @@ async fn a_partially_mapped_target_reports_exactly_what_did_not_bind() {
 
     assert!(andare.server_contacted, "the mock server did not answer");
 
-    // `create_issue` binds to `create_work_item` and `set_status` to
-    // `transition_issue` — both via non-primary candidates, which is §11.2's
-    // whole claim: tool names are discovered, not assumed.
+    // `create_issue` and `set_status` both bind — the latter to
+    // `set_issue_status`, a non-primary candidate, which is §11.2's whole claim:
+    // tool names are discovered rather than assumed.
     let bound: Vec<&str> = andare.bound.iter().map(|b| b.capability.as_str()).collect();
     assert!(bound.contains(&"create_issue"), "bound: {bound:?}");
     assert!(bound.contains(&"set_status"), "bound: {bound:?}");
@@ -123,7 +133,7 @@ async fn a_partially_mapped_target_reports_exactly_what_did_not_bind() {
         .find(|u| u.capability == "comment")
         .expect("comment is unmapped");
     assert!(comment.candidates.contains(&"comment_on_issue".to_owned()));
-    assert!(comment.available.contains(&"create_work_item".to_owned()));
+    assert!(comment.available.contains(&"create_issue".to_owned()));
 
     // And the screen can lead with a number rather than making somebody count.
     assert_eq!(view.unmapped_count(), 2);
@@ -139,7 +149,7 @@ async fn a_manual_override_binds_a_capability_and_says_a_person_did_it() {
     let dir = TempDir::new().expect("tempdir");
     let overrides = dir.path().join("target-overrides.json");
     let overrides_path = overrides.display().to_string();
-    let config = parsed(&config_for("andare-renamed.json")).expect("fixture config");
+    let config = parsed(&config_for()).expect("fixture config");
 
     // The fix affordance, exercised: bind `comment` to a tool the server does
     // have. `transition_issue` is not what a comment means, and that is the
@@ -150,11 +160,11 @@ async fn a_manual_override_binds_a_capability_and_says_a_person_did_it() {
         &overrides_path,
         "andare",
         "comment",
-        "transition_issue",
+        "set_issue_status",
         // The server's own required fields, which `check_against` insists on:
-        // `transition_issue` wants `issueKey` and `targetStatus`. Getting this
-        // wrong here is what the check is for.
-        serde_json::json!({ "issueKey": "{issue_ref}", "targetStatus": "commented" }),
+        // this tool wants `key` and `status`. Getting them wrong here is what
+        // the check is for, and it caught me doing exactly that.
+        serde_json::json!({ "key": "{issue_ref}", "status": "commented" }),
     )
     .await
     .expect("the override is accepted");
@@ -178,7 +188,7 @@ async fn a_manual_override_binds_a_capability_and_says_a_person_did_it() {
         .iter()
         .find(|b| b.capability == "comment")
         .expect("comment is now bound");
-    assert_eq!(comment.tool, "transition_issue");
+    assert_eq!(comment.tool, "set_issue_status");
     // ADR 0015: a table that showed "you told us to" and "we worked it out"
     // alike would make an override impossible to find again.
     assert!(comment.from_override);
@@ -211,7 +221,7 @@ async fn an_override_naming_a_tool_the_server_lacks_is_refused_at_the_point_of_w
     let dir = TempDir::new().expect("tempdir");
     let overrides = dir.path().join("target-overrides.json");
     let overrides_path = overrides.display().to_string();
-    let config = parsed(&config_for("andare-renamed.json")).expect("fixture config");
+    let config = parsed(&config_for()).expect("fixture config");
 
     // RL-605's rule. A typo discovered at dispatch time is a review that
     // silently did not publish, hours after the person who typed it left.
