@@ -57,7 +57,7 @@ function Budget({ budget }: { budget: BudgetBar }) {
 }
 
 /** One repository's card: health, last run, queue depth, today's budget. */
-function Card({ card }: { card: RepoCard }) {
+function Card({ card, onOpenRun }: { card: RepoCard; onOpenRun: (runId: number) => void }) {
   const { repo, last_run: lastRun, queue_depth: queued, budget } = card;
 
   return (
@@ -77,9 +77,14 @@ function Card({ card }: { card: RepoCard }) {
         <dd>
           {/* Said, never omitted: a card with no line about runs reads as one
               whose runs failed to load. */}
-          {lastRun
-            ? `#${lastRun.run_id} ${lastRun.status}${lastRun.verdict ? ` (${lastRun.verdict})` : ''}`
-            : 'none yet'}
+          {lastRun ? (
+            <button className="link" onClick={() => onOpenRun(lastRun.run_id)}>
+              #{lastRun.run_id} {lastRun.status}
+              {lastRun.verdict ? ` (${lastRun.verdict})` : ''}
+            </button>
+          ) : (
+            'none yet'
+          )}
         </dd>
         <dt>queued</dt>
         <dd>{queued}</dd>
@@ -142,9 +147,11 @@ function ModeSelector({
 export function Dashboard({
   dashboard,
   onMode,
+  onOpenRun,
 }: {
   dashboard: { repos: RepoCard[]; mode: string; paused: boolean } | null;
   onMode: (next: Mode) => void;
+  onOpenRun: (runId: number) => void;
 }) {
   if (!dashboard) {
     return <p className="empty">Loading the dashboard.</p>;
@@ -168,7 +175,7 @@ export function Dashboard({
       ) : (
         <ul className="cards">
           {dashboard.repos.map((card) => (
-            <Card key={card.repo.id} card={card} />
+            <Card key={card.repo.id} card={card} onOpenRun={onOpenRun} />
           ))}
         </ul>
       )}
