@@ -88,7 +88,13 @@ const ACCOUNTED_FOR: &[(&str, &str)] = &[
         "GRACE, CANCEL_GRACE and DRAIN_GRACE bound how long a killed engine's \
          output is collected, so output can genuinely be lost. Recorded as \
          run.killed with its KillReason, and the run is marked degraded so §8.2's \
-         salvage ladder and §12.3's risk escalation both see it.",
+         salvage ladder and §12.3's risk escalation both see it. \
+         EXIT_DRAIN_GRACE bounds the same collection for an engine that was NOT \
+         killed — a parent can exit cleanly while a child it spawned keeps the \
+         pipe open — and `run.killed` says nothing about that case, since it is \
+         None. That one is recorded as Supervised::output_truncated, read through \
+         output_is_complete(), because \"it finished\" and \"we read all of it\" \
+         are separate facts and only one is about the exit code.",
     ),
     (
         "crates/revlocal-mcp/src/stdio.rs",
@@ -307,5 +313,65 @@ fn no_silent_caps_finds_the_site_it_was_written_for() {
             .any(|s| s.ends_with("daemon/src/truncation.rs")),
         "the diff truncation site was not detected; sites were:\n  {}",
         sites.join("\n  ")
+    );
+}
+
+/// A registered file's entry must name every cap constant that file now has.
+///
+/// The audit's doc comment says plainly that it "does not check that existing
+/// entries are still true, it checks that nobody added a cap quietly". That was a
+/// deliberate limit and it has now cost something: `EXIT_DRAIN_GRACE` was added to
+/// `supervise.rs`, a file already in the registry, so nothing fired — and the
+/// entry went on describing three constants and a recording mechanism
+/// (`run.killed`) that does not apply to the fourth. A run that was never killed
+/// has `killed = None`.
+///
+/// This closes the cheap half of that gap. It cannot tell whether an entry's
+/// *reasoning* is still sound, but it can tell when a constant appeared that
+/// nobody wrote down — and "a new cap in an old file" is the case that slips
+/// through, because adding to a file that already has an entry feels like nothing
+/// new has happened.
+#[test]
+fn no_silent_caps_every_named_constant_appears_in_its_entry() {
+    let root = workspace_root();
+    let mut missing: Vec<String> = Vec::new();
+
+    for (file, entry) in ACCOUNTED_FOR {
+        let path = root.join(file);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            // A stale path is `no_silent_caps_the_registry_has_no_stale_entries`'
+            // job, not this one.
+            continue;
+        };
+
+        for line in text.lines() {
+            if !is_cap_shaped(line) {
+                continue;
+            }
+            // Only named constants; `.take(` and `.truncate(` have no name to
+            // look for and are covered by the entry as a whole.
+            let code = line.split("//").next().unwrap_or(line);
+            let Some(name) = code
+                .split_whitespace()
+                .skip_while(|word| *word != "const")
+                .nth(1)
+                .map(|name| name.trim_end_matches(':'))
+            else {
+                continue;
+            };
+
+            if !entry.contains(name) {
+                missing.push(format!("{file}: {name}"));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these cap constants exist in files the registry already covers, and the \
+         entry does not name them:\n  {}\n\
+         Adding a cap to a file that already has an entry is the case that slips \
+         through: nothing about it looks new.",
+        missing.join("\n  ")
     );
 }
