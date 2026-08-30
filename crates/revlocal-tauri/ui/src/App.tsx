@@ -7,12 +7,17 @@ import {
   fetchApprovals,
   fetchDashboard,
   fetchFindings,
+  emptyDraft,
+  fetchInitialOnboardingStep,
   fetchInitialRepo,
+  fetchIsFirstRun,
   fetchInitialRun,
   fetchInitialScreen,
   fetchRepository,
   fetchSettings,
   notify,
+  onboardAddRepo,
+  onboardFirstReview,
   reasonForApproval,
   refreshTray,
   fetchRun,
@@ -39,6 +44,10 @@ import {
   type RepositoryView as RepositoryData,
   type RunView as RunViewData,
   type SettingsView as SettingsData,
+  type Draft,
+  type FirstReview,
+  type Step,
+  STEPS,
   type Mode,
   type UiEvent,
 } from './ipc';
@@ -49,6 +58,7 @@ import { Approvals } from './Approvals';
 import { Findings } from './Findings';
 import { Repository } from './Repository';
 import { Settings } from './Settings';
+import { Onboarding } from './Onboarding';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -77,6 +87,12 @@ export function App() {
   const [repoId, setRepoId] = useState<number | null>(null);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
+  const [onboarding, setOnboarding] = useState(false);
+  const [step, setStep] = useState<Step>('check');
+  const [draft, setDraft] = useState<Draft>(emptyDraft());
+  const [firstReview, setFirstReview] = useState<FirstReview | null>(null);
+  const [onboardBusy, setOnboardBusy] = useState(false);
+  const [onboardError, setOnboardError] = useState<string | null>(null);
 
   useEffect(() => {
     let seq = 0;
@@ -470,6 +486,87 @@ export function App() {
     if (entries.length > 0) announce();
   }, [entries.length, announce]);
 
+  // Offered on a fresh install, and re-runnable from Settings at any time.
+  // Onboarding that can only happen once is a thing people are afraid to leave,
+  // and the second repository deserves the same walk as the first.
+  useEffect(() => {
+    if (!inTauri()) return;
+    // A harness asking for a step wins over the first-run check: it is capturing
+    // one frame of the flow, not being onboarded.
+    fetchInitialOnboardingStep()
+      .then((wanted) => {
+        if (STEPS.includes(wanted as Step)) {
+          startOnboarding();
+          setStep(wanted as Step);
+          return;
+        }
+        return fetchIsFirstRun().then((first) => {
+          if (first) startOnboarding();
+        });
+      })
+      .catch(() => {
+        // Not worth a notice: failing to *offer* onboarding leaves somebody on
+        // the dashboard, which is where they would have ended up anyway.
+      });
+    // Asked once, on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function startOnboarding() {
+    setStep('check');
+    setDraft(emptyDraft());
+    setFirstReview(null);
+    setOnboardError(null);
+    setOnboarding(true);
+    // §8.4: doctor's output "is the first thing the UI shows on a fresh install".
+    rerunDoctor().catch(() => {});
+  }
+
+  async function advanceOnboarding() {
+    setOnboardError(null);
+    const index = STEPS.indexOf(step);
+
+    // Leaving the autonomy step is where the repository is actually created:
+    // everything before it is a draft, so somebody who abandons the walk halfway
+    // does not find a repository they never finished adding, polling a path they
+    // were still choosing.
+    if (step === 'pick_autonomy') {
+      setOnboardBusy(true);
+      try {
+        const added = await onboardAddRepo(draft);
+        setDraft({ ...draft, name: added.name });
+        setStep('first_review');
+      } catch (error: unknown) {
+        setOnboardError(messageOf(error));
+        return;
+      } finally {
+        setOnboardBusy(false);
+      }
+      return;
+    }
+
+    if (step === 'first_review') {
+      setOnboardBusy(true);
+      try {
+        setFirstReview(await onboardFirstReview(draft.name));
+      } catch (error: unknown) {
+        setOnboardError(messageOf(error));
+      } finally {
+        setOnboardBusy(false);
+      }
+      return;
+    }
+
+    const next = STEPS[index + 1];
+    if (next) setStep(next);
+  }
+
+  function finishOnboarding() {
+    setOnboarding(false);
+    reload();
+    if (firstReview) openRun(firstReview.run_id);
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -510,10 +607,29 @@ export function App() {
         </div>
       )}
 
-      <Nav screen={screen} onSelect={setScreen} />
+      {!onboarding && <Nav screen={screen} onSelect={setScreen} />}
 
       <main>
-        {screen === 'dashboard' && (
+        {onboarding && (
+          <Onboarding
+            step={step}
+            draft={draft}
+            doctor={settings?.doctor ?? null}
+            review={firstReview}
+            busy={onboardBusy || doctorRunning}
+            error={onboardError}
+            onDraft={setDraft}
+            onBack={() => {
+              const index = STEPS.indexOf(step);
+              const previous = STEPS[index - 1];
+              if (previous) setStep(previous);
+            }}
+            onNext={advanceOnboarding}
+            onFinish={finishOnboarding}
+          />
+        )}
+
+        {!onboarding && screen === 'dashboard' && (
           <Dashboard
             dashboard={dashboard}
             onMode={changeMode}
@@ -522,7 +638,7 @@ export function App() {
           />
         )}
 
-        {screen === 'approvals' && (
+        {!onboarding && screen === 'approvals' && (
           <Approvals
             view={approvals}
             onApprove={approveOne}
@@ -532,7 +648,7 @@ export function App() {
           />
         )}
 
-        {screen === 'repository' &&
+        {!onboarding && screen === 'repository' &&
           (repoId === null ? (
             // A screen about "a repository" with none chosen is not an error, and
             // an empty panel would read as one. It says where to choose.
@@ -541,7 +657,7 @@ export function App() {
             <Repository view={repository} onOpenRun={openRun} onSave={saveConfig} />
           ))}
 
-        {screen === 'findings' && (
+        {!onboarding && screen === 'findings' && (
           <Findings
             view={findings}
             filter={filter}
@@ -552,17 +668,18 @@ export function App() {
           />
         )}
 
-        {screen === 'settings' && (
+        {!onboarding && screen === 'settings' && (
           <Settings
             view={settings}
             busy={doctorRunning}
             onRunDoctor={rerunDoctor}
             onMap={mapCapability}
             onUnmap={unmapCapability}
+            onRunOnboarding={startOnboarding}
           />
         )}
 
-        {screen === 'run' && (
+        {!onboarding && screen === 'run' && (
           <RunDetail
             run={run}
             transcript={transcript}
@@ -575,7 +692,7 @@ export function App() {
             screen, which put "Nothing has run yet" directly beneath a table of
             findings from run #1 — two true-sounding statements contradicting each
             other, which is worse than either alone. Found by reading a capture. */}
-        {screen === 'dashboard' && (
+        {!onboarding && screen === 'dashboard' && (
           <>
           <p className="note">
             Live activity. Events arrive over <code>revlocal://run-event</code> — this

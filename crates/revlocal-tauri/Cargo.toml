@@ -11,6 +11,8 @@ chrono = { workspace = true }
 revlocal-core = { workspace = true }
 revlocal-daemon = { workspace = true }
 revlocal-store = { workspace = true }
+# Onboarding discovers a repository's changes before its first review (§15).
+revlocal-vcs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

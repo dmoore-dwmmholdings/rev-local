@@ -22,7 +22,10 @@ pub mod exit;
 pub mod export;
 pub mod hooks;
 pub mod inspect;
-pub mod repo;
+/// Repository commands live in the daemon so the desktop app can add a repository
+/// too — §15's onboarding walks somebody through exactly that, and a front end
+/// depending on another front end for it is the shape RL-1105 rejected.
+pub use revlocal_daemon::repos as repo;
 pub mod watch;
 pub mod webhook;
 

@@ -263,6 +263,11 @@ export function fetchInitialRepo(): Promise<number> {
   return invoke<number>('initial_repo');
 }
 
+/** Which onboarding step a capture harness asked for, or "" (RL-1102, §16.4). */
+export function fetchInitialOnboardingStep(): Promise<string> {
+  return invoke<string>('initial_onboarding_step');
+}
+
 /** Which run a capture harness asked for, or 0 (RL-1102, §16.4). */
 export function fetchInitialRun(): Promise<number> {
   return invoke<number>('initial_run');
@@ -569,4 +574,69 @@ export function notify(reason: NotifyReason): Promise<NotifyDecision> {
 /** Bring the tray tooltip in line with the paused state. Returns the tooltip. */
 export function refreshTray(): Promise<string> {
   return invoke<string>('refresh_tray');
+}
+
+// --- onboarding (RL-1205, SPEC §15) -----------------------------------------
+
+/** §15's five steps, in order. */
+export const STEPS = ['check', 'add_repo', 'pick_engine', 'pick_autonomy', 'first_review'] as const;
+export type Step = (typeof STEPS)[number];
+
+export const STEP_TITLES: Record<Step, string> = {
+  check: 'Check what is installed',
+  add_repo: 'Choose a repository',
+  pick_engine: 'Choose an engine',
+  pick_autonomy: 'Choose how much it may do',
+  first_review: 'Review one change',
+};
+
+/** §8.4's engines. `mock` spends nothing and invents its findings. */
+export const ENGINES = ['mock', 'claude', 'codex'] as const;
+
+export const ENGINE_LABELS: Record<string, string> = {
+  mock: 'Mock — spends nothing, invents its findings (a rehearsal)',
+  claude: 'Claude Code',
+  codex: 'Codex',
+};
+
+/**
+ * What onboarding is building.
+ *
+ * `autonomy` starts at `dry_run` and never at `auto`: a repository added a moment
+ * ago has never been reviewed and nobody has seen a finding from it, so the one
+ * thing this flow must not do is leave it able to publish.
+ */
+export type Draft = {
+  path: string;
+  name: string;
+  kind: string;
+  engine: string;
+  autonomy: string;
+};
+
+export function emptyDraft(): Draft {
+  return { path: '', name: '', kind: 'git', engine: 'mock', autonomy: 'dry_run' };
+}
+
+export type FirstReview = {
+  run_id: number;
+  repo: string;
+  status: string;
+  verdict?: string;
+  findings: number;
+  engine: string;
+  /** Present when the mock ran — said out loud, never implied (§18). */
+  caveat?: string;
+};
+
+export function fetchIsFirstRun(): Promise<boolean> {
+  return invoke<boolean>('is_first_run');
+}
+
+export function onboardAddRepo(draft: Draft): Promise<{ name: string }> {
+  return invoke<{ name: string }>('onboard_add_repo', { draft });
+}
+
+export function onboardFirstReview(repo: string): Promise<FirstReview> {
+  return invoke<FirstReview>('onboard_first_review', { repo });
 }

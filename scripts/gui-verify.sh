@@ -51,7 +51,9 @@ if [[ ${#SCREENS[@]} -eq 0 ]]; then
   exit 2
 fi
 if [[ "${SCREENS[0]}" == "all" ]]; then
-  SCREENS=(dashboard repository:1 repository:3 run:1 findings approvals settings)
+  SCREENS=(dashboard repository:1 repository:3 run:1 findings approvals settings
+           onboarding:check onboarding:add_repo onboarding:pick_engine
+           onboarding:pick_autonomy onboarding:first_review)
 fi
 
 if ! command -v framewatch >/dev/null 2>&1; then
@@ -107,13 +109,17 @@ for screen in "${SCREENS[@]}"; do
   # One selector, routed by screen. `repository:3` and `run:1` read the same way
   # and the app takes them on different variables, so the split happens here
   # rather than making the caller remember which is which.
-  want_repo=0; want_run=0
+  want_repo=0; want_run=0; want_step=""
   case "$want_screen" in
     repository) want_repo="$want_id" ;;
     run)        want_run="$want_id" ;;
+    # `onboarding:pick_autonomy` photographs one step of the flow. RL-1103's
+    # scripted flow capture is the real answer; until it exists, one shot per
+    # step beats one shot of a wizard nobody clicked through.
+    onboarding) want_step="$want_id"; want_screen="dashboard" ;;
   esac
 
-  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" REVLOCAL_RUN="$want_run" framewatch shot \
+  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" REVLOCAL_RUN="$want_run" REVLOCAL_ONBOARDING="$want_step" framewatch shot \
        --launch "$BIN" \
        --title "rev-local" \
        --out-file "$out" \
