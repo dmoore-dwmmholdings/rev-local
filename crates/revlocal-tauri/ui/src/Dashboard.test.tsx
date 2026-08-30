@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { Dashboard } from './Dashboard';
 import type { RepoCard } from './ipc';
 
@@ -40,7 +40,7 @@ const noop = vi.fn();
 
 describe('dashboard', () => {
   it('shows all four regions of a card', () => {
-    render(<Dashboard dashboard={{ repos: [card()], mode: 'dry_run', paused: false }} onMode={noop} onOpenRun={noop} />);
+    render(<Dashboard dashboard={{ repos: [card()], mode: 'dry_run', paused: false }} onMode={noop} onOpenRun={noop} onOpenRepo={noop} />);
 
     expect(screen.getByText('acme')).toBeDefined();
     expect(screen.getByText(/#7 done \(comment\)/)).toBeDefined();
@@ -55,6 +55,7 @@ describe('dashboard', () => {
         dashboard={{ repos: [card({ last_run: undefined })], mode: 'dry_run', paused: false }}
         onMode={noop}
         onOpenRun={noop}
+        onOpenRepo={noop}
       />,
     );
 
@@ -74,6 +75,7 @@ describe('dashboard', () => {
         }}
         onMode={noop}
         onOpenRun={noop}
+        onOpenRepo={noop}
       />,
     );
 
@@ -85,7 +87,7 @@ describe('dashboard', () => {
   it('does not hedge a fully measured count', () => {
     // The other half: hedging everything would train people to ignore the hedge.
     const { container } = render(
-      <Dashboard dashboard={{ repos: [card()], mode: 'dry_run', paused: false }} onMode={noop} onOpenRun={noop} />,
+      <Dashboard dashboard={{ repos: [card()], mode: 'dry_run', paused: false }} onMode={noop} onOpenRun={noop} onOpenRepo={noop} />,
     );
 
     expect(screen.queryByText(/lower bound/)).toBeNull();
@@ -95,7 +97,7 @@ describe('dashboard', () => {
   it('shows the kill switch state as a banner when paused', () => {
     // §15: the switch is reachable from every screen, and a screen that does not
     // say it is engaged is worse than one without the switch.
-    render(<Dashboard dashboard={{ repos: [card()], mode: 'off', paused: true }} onMode={noop} onOpenRun={noop} />);
+    render(<Dashboard dashboard={{ repos: [card()], mode: 'off', paused: true }} onMode={noop} onOpenRun={noop} onOpenRepo={noop} />);
 
     expect(screen.getByRole('status').textContent).toMatch(/Paused/);
   });
@@ -108,6 +110,7 @@ describe('dashboard', () => {
         dashboard={{ repos: [card(), card({ repo: { ...card().repo, id: 2, repo: 'widgets', autonomy: 'auto' } })], mode: 'auto', paused: false }}
         onMode={noop}
         onOpenRun={noop}
+        onOpenRepo={noop}
       />,
     );
 
@@ -116,7 +119,7 @@ describe('dashboard', () => {
   });
 
   it('says so when there are no repositories at all', () => {
-    render(<Dashboard dashboard={{ repos: [], mode: 'off', paused: false }} onMode={noop} onOpenRun={noop} />);
+    render(<Dashboard dashboard={{ repos: [], mode: 'off', paused: false }} onMode={noop} onOpenRun={noop} onOpenRepo={noop} />);
 
     expect(screen.getByText(/No repositories yet/)).toBeDefined();
   });
@@ -128,7 +131,7 @@ describe('dashboard', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const { container } = render(
-      <Dashboard dashboard={{ repos: [card()], mode: 'dry_run', paused: false }} onMode={onMode} onOpenRun={noop} />,
+      <Dashboard dashboard={{ repos: [card()], mode: 'dry_run', paused: false }} onMode={onMode} onOpenRun={noop} onOpenRepo={noop} />,
     );
     const select = container.querySelector('select');
     if (!select) throw new Error('no mode selector');
@@ -145,5 +148,23 @@ describe('dashboard', () => {
     expect(confirm).toHaveBeenCalled();
 
     confirm.mockRestore();
+  });
+
+  it('opens the repository screen from the card name', () => {
+    // §15 screen 1 → screen 2. A card that showed a repository but could not
+    // open it would leave the command line as the only route to its config.
+    const onOpenRepo = vi.fn();
+    render(
+      <Dashboard
+        dashboard={{ repos: [card()], mode: 'dry_run', paused: false }}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={onOpenRepo}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'acme' }));
+
+    expect(onOpenRepo).toHaveBeenCalledWith(1);
   });
 });

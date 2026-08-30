@@ -32,6 +32,16 @@ done
 "$CLI" db migrate --database "$DB" >/dev/null
 "$CLI" repo add "$work/acme"    --kind git --name acme    --database "$DB" >/dev/null
 "$CLI" repo add "$work/widgets" --kind git --name widgets --autonomy auto --database "$DB" >/dev/null
+# An SVN repository, because §15's repository screen has to be captured in both
+# vocabularies (REVL-92) — a git-only fixture cannot show that "watched paths"
+# and "watched branches" are different screens rather than different words.
+# A URL, not a working copy: nothing here invokes svn, and a capture must not
+# depend on a binary that is absent on most machines.
+"$CLI" repo add "svn://svn.example.invalid/legacy" --kind svn --name legacy --database "$DB" >/dev/null
+# Hooks installed on one repository so the trigger indicators are not all off in
+# the capture. The indicator reads the disk, so this has to be a real install.
+"$CLI" hooks install --repo "$work/acme" --name acme >/dev/null 2>&1 || true
+
 "$CLI" watch --once --database "$DB" >/dev/null 2>&1 || true
 
 # One measured repository and one that is not, so every capture exercises §18's

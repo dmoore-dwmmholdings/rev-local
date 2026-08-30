@@ -258,6 +258,11 @@ export function fetchInitialScreen(): Promise<string> {
   return invoke<string>('initial_screen');
 }
 
+/** Which repository a capture harness asked for, or 0 (RL-1102, §16.4). */
+export function fetchInitialRepo(): Promise<number> {
+  return invoke<number>('initial_repo');
+}
+
 // --- findings (RL-1108, SPEC §15 screen 4) ----------------------------------
 
 /** §10.1's severities, worst first — the order the filter means by "and worse". */
@@ -322,4 +327,64 @@ export function suppressFinding(id: number): Promise<string> {
  */
 export function fileToAndare(id: number): Promise<string> {
   return invoke<string>('file_to_andare', { id });
+}
+
+// --- repository (RL-1106, SPEC §15 screen 2) --------------------------------
+
+/** The four ways a change reaches rev-local (§7). */
+export const TRIGGERS = ['poll', 'hooks', 'webhook', 'manual'] as const;
+
+/**
+ * One trigger's live state.
+ *
+ * Four cases rather than a boolean, because "off" and "broken" want opposite
+ * responses from whoever is reading. A deliberately disabled webhook is fine; one
+ * enabled with no secret is silently dropping every delivery.
+ */
+export type TriggerStatus = {
+  trigger: string;
+  state: 'active' | 'off' | 'broken' | 'not_applicable';
+  /** Why it stands there. Always present — an unexplained light gets guessed at. */
+  detail: string;
+};
+
+/**
+ * What a repository watches, in its own vocabulary (§6.4).
+ *
+ * Tagged, so SVN paths cannot be rendered under a "branches" heading. An SVN
+ * "branch" is a directory, and calling it a branch is where the confusion starts.
+ */
+export type Watching =
+  | { kind: 'branches'; globs: string[] }
+  | { kind: 'paths'; paths: string[] };
+
+export type RunLine = {
+  run_id: number;
+  status: string;
+  verdict?: string;
+  trigger: string;
+  started_at?: string;
+};
+
+export type RepositoryView = {
+  repo: RepoView;
+  watching: Watching;
+  /** Exactly four, each computed independently. */
+  triggers: TriggerStatus[];
+  recent_runs: RunLine[];
+  /** Whether there are older runs than the ones listed (§18). */
+  more_runs: boolean;
+  budget: BudgetBar;
+  /** §13.2's document, not a form over it. */
+  config_json: string;
+  last_run?: LastRun;
+};
+
+export function fetchRepository(repoId: number): Promise<RepositoryView> {
+  return invoke<RepositoryView>('get_repository', { repoId });
+}
+
+/** Save a config. Rejects with the validation error when it will not parse. */
+export function saveRepoConfig(repoId: number, configJson: string): Promise<string> {
+  return invoke<string>('save_repo_config', { repoId, configJson });
 }

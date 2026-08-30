@@ -416,3 +416,34 @@ fn write_hook(path: &Path, contents: &str) -> Result<(), HookError> {
 
     Ok(())
 }
+
+/// Which of rev-local's hooks are installed in a repository (§15 screen 2).
+///
+/// Read-only, and it asks the file rather than the database. A row saying "hooks
+/// installed" survives somebody replacing `.git/hooks/post-commit` by hand, or
+/// re-cloning, or a `husky` install that overwrote it — and the indicator would
+/// then be reporting an intention rather than a fact. §7.2's managed block is the
+/// evidence, so the block is what gets looked for.
+///
+/// Both modes are checked because the caller does not always know which one a
+/// repository was set up with: a bare mirror and a working clone are told apart
+/// by what is on disk, not by anything stored.
+pub fn installed(repo_path: &Path) -> Result<Vec<String>, HookError> {
+    let dir = hooks_dir(repo_path)?;
+
+    let mut found = Vec::new();
+    for mode in [HookMode::Reference, HookMode::BareMirror] {
+        for name in mode.hook_names() {
+            // An unreadable hook is not an installed hook. Reading is allowed to
+            // fail quietly here — this is an indicator, and refusing to render
+            // the whole screen because one file has odd permissions would be a
+            // worse answer than "no".
+            if std::fs::read_to_string(dir.join(name)).is_ok_and(|text| text.contains(BEGIN_MARKER))
+            {
+                found.push((*name).to_owned());
+            }
+        }
+    }
+
+    Ok(found)
+}

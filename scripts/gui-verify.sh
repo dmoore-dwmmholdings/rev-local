@@ -51,7 +51,7 @@ if [[ ${#SCREENS[@]} -eq 0 ]]; then
   exit 2
 fi
 if [[ "${SCREENS[0]}" == "all" ]]; then
-  SCREENS=(dashboard run findings approvals)
+  SCREENS=(dashboard repository:1 repository:3 findings approvals run)
 fi
 
 if ! command -v framewatch >/dev/null 2>&1; then
@@ -78,7 +78,7 @@ fi
 
 failed=0
 for screen in "${SCREENS[@]}"; do
-  out="$OUT_DIR/$screen.png"
+  out="$OUT_DIR/${screen//:/-}.png"
   rm -f "$out"
 
   # `--settle-best-effort` is deliberately NOT passed. §16.4: a screen that never
@@ -96,7 +96,15 @@ for screen in "${SCREENS[@]}"; do
   # this every capture was the dashboard under a different filename — which looks
   # exactly like a working gate until somebody opens two PNGs and finds the same
   # picture. `initial_screen` reads this on mount.
-  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$screen" framewatch shot \
+  # `repository:3` captures screen `repository` with repo 3 selected. §15's
+  # repository screen is about *a* repository, and REVL-92 wants it captured in
+  # both vocabularies — a git repo and an SVN one are different screens, not
+  # different words, and only a second capture shows that.
+  want_screen="${screen%%:*}"
+  want_repo="${screen#*:}"
+  [[ "$want_repo" == "$screen" ]] && want_repo=0
+
+  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" framewatch shot \
        --launch "$BIN" \
        --title "rev-local" \
        --out-file "$out" \
