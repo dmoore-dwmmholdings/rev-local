@@ -717,3 +717,45 @@ fn the_fork_point_survives_an_intervening_trunk_merge() -> Result<(), String> {
             Ok(())
         })
 }
+
+/// §6.4's threshold has one source of truth, not two (REVL-120).
+///
+/// The bug this closes was a *disagreement between two sections of the spec*:
+/// §6.4 named `pseudo_pr_min_files` with a default of 5, and §13.2's config
+/// document did not list it. The threshold therefore lived only as a constant and
+/// the setting the spec described was unreachable.
+///
+/// With the key added, there are now two places a 5 can be written. That is how
+/// they drift — so this fails if they ever disagree, rather than leaving somebody
+/// to notice that config says one thing and the default does another.
+#[test]
+fn the_configured_threshold_and_the_constant_agree() {
+    let config = revlocal_core::RepoConfig::default();
+
+    assert_eq!(
+        config.pseudo_pr_min_files as usize,
+        revlocal_vcs::svn::DEFAULT_PSEUDO_PR_MIN_FILES,
+        "§13.2's default and the constant disagree; §6.4 states 5"
+    );
+    assert_eq!(
+        config.pseudo_pr_min_files, 5,
+        "§6.4 states the default is 5"
+    );
+}
+
+/// A repository can actually tune it, which was the point of the issue.
+#[test]
+fn a_repository_can_raise_the_file_count_threshold() {
+    let config = revlocal_core::RepoConfig {
+        pseudo_pr_min_files: 40,
+        ..revlocal_core::RepoConfig::default()
+    };
+
+    let heuristics = Heuristics::for_repo(&config);
+
+    assert_eq!(heuristics.min_files, 40, "config must reach the heuristic");
+    // All three stay on: §6.4 does not offer them as switches, and a config that
+    // could disable `mergeinfo` would let somebody turn off the strongest
+    // evidence while keeping the weakest.
+    assert!(heuristics.mergeinfo && heuristics.log_message && heuristics.file_count);
+}
