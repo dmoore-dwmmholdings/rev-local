@@ -55,6 +55,13 @@ mod errors {
         ),
         (
             "crates/revlocal-cli/src/review.rs",
+            "Engine",
+            "Wraps an engines::EngineError, or a config read that failed — both of \
+             which carry their own `try:` line naming the key or the file. A second, \
+             vaguer suggestion here would bury the specific one.",
+        ),
+        (
+            "crates/revlocal-cli/src/review.rs",
             "Json",
             "Same: a serialisation failure on our own output. Nothing the user did \
              causes it and nothing they can do fixes it.",

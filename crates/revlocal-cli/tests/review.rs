@@ -271,3 +271,93 @@ fn review_does_not_mutate_the_repository() {
     );
     assert!(String::from_utf8_lossy(&after.stdout).trim().is_empty());
 }
+
+/// The report says which engine ran (RL-1206).
+///
+/// Until this existed, `revlocal review` used the mock whatever the repository was
+/// configured with — decision D3 put the engine on the repository, `repo add`
+/// wrote it, and nothing read it. `--json` could not see the stderr line that
+/// admitted the substitution, so a script had no way to tell a mock review from a
+/// real one. A mock result that reads like a real one is the most convincing wrong
+/// answer this program can give.
+#[test]
+fn review_says_which_engine_actually_ran() {
+    let (output, _temp) =
+        review("planted_bug_off_by_one", &["--json"]).unwrap_or_else(|e| panic!("{e}"));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}:\n{stdout}"));
+
+    // The default, and it is in the document rather than only on stderr.
+    assert_eq!(parsed["engine"], "mock");
+}
+
+/// An unknown engine is refused with the list, not silently mocked.
+#[test]
+fn review_refuses_an_engine_it_does_not_know() {
+    let (output, _temp) =
+        review("planted_bug_off_by_one", &["--engine", "clod"]).unwrap_or_else(|e| panic!("{e}"));
+
+    assert!(!output.status.success(), "an unknown engine must not run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // §18: the error names what to type instead.
+    assert!(stderr.contains("clod"), "stderr: {stderr}");
+    assert!(stderr.contains("--engine claude"), "stderr: {stderr}");
+}
+
+/// Choosing a real engine actually tries to run it, and does not fall back.
+///
+/// Asserted through a template pointed at a binary that does not exist, so the
+/// review fails saying so — in milliseconds, spending nothing. The first version
+/// of this test ran `--engine claude` for real: it passed, and took four minutes
+/// and somebody's tokens on every `cargo test`. A suite that costs money to run is
+/// a suite people stop running.
+///
+/// The property is the same either way, and it is the one that matters: the old
+/// behaviour returned a clean report full of invented findings on a machine with
+/// no engine installed at all.
+#[test]
+fn review_with_a_real_engine_does_not_fall_back_to_the_mock() {
+    let config = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+    let path = config.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[engines.claude]\nbin = \"revlocal-no-such-engine-9f3a\"\n",
+    )
+    .unwrap_or_else(|e| panic!("writing config: {e}"));
+
+    let (output, _temp) = review(
+        "planted_bug_off_by_one",
+        &[
+            "--engine",
+            "claude",
+            "--config",
+            &path.display().to_string(),
+            "--json",
+        ],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+        // Whatever happened, it was not the mock standing in for Claude.
+        assert_eq!(parsed["engine"], "claude", "stdout: {stdout}");
+        assert_eq!(parsed["status"], "failed", "stdout: {stdout}");
+        // §18: it says why, rather than reporting a review that did not happen.
+        assert!(
+            parsed["failure"].is_string(),
+            "a failed review must say why: {stdout}"
+        );
+    } else {
+        // A non-zero exit with a message is equally acceptable. What is not is a
+        // successful review from an engine that is not installed.
+        assert!(
+            !output.status.success(),
+            "stdout was not a report and the command succeeded:\n{stdout}\n{stderr}"
+        );
+    }
+}

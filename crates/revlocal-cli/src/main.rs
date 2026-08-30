@@ -208,6 +208,22 @@ enum Command {
         /// The revision to review.
         #[arg(long, value_name = "REV")]
         rev: String,
+        /// Which engine reviews it: `mock`, `claude` or `codex` (§8.4, D3).
+        ///
+        /// `mock` by default. This command takes a path rather than a configured
+        /// repository, so there is no stored choice to honour — and a command
+        /// that started spending somebody's tokens because they typed a
+        /// directory name would be the wrong way for a default to be wrong.
+        #[arg(long, value_name = "ENGINE", default_value = "mock")]
+        engine: String,
+        /// The global config file, for §8.4's `[engines.*]` templates.
+        ///
+        /// Optional: §8.4's shipped defaults are used without one. Named
+        /// explicitly rather than discovered, like every other config argument in
+        /// this CLI — a command that silently picked up a file from somewhere is
+        /// one whose behaviour depends on where it was run.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
         /// Print the machine-readable report instead of the human one.
         ///
         /// Exactly one JSON document reaches stdout and nothing else — see
@@ -917,8 +933,50 @@ async fn run(command: Command) -> Result<(), CliError> {
                 Ok(())
             }
         },
-        Command::Review { repo, rev, json } => {
-            review::run(&repo, &rev, json).await?;
+        Command::Review {
+            repo,
+            rev,
+            engine,
+            config,
+            json,
+        } => {
+            let kind: revlocal_core::EngineKind = engine.parse().map_err(|_| {
+                review::ReviewCommandError::Engine {
+                    detail: format!(
+                        "unknown engine {engine:?}\n  try: --engine mock, --engine claude or --engine codex"
+                    ),
+                }
+            })?;
+            // §13.1's document, so a configured template is honoured rather than
+            // silently replaced by the shipped default.
+            let global =
+                match config.as_deref() {
+                    None => revlocal_core::GlobalConfig::default(),
+                    Some(path) => {
+                        let text = std::fs::read_to_string(path).map_err(|source| {
+                            review::ReviewCommandError::Engine {
+                                detail: format!(
+                                    "could not read {}: {source}\n  try: check the path, \
+                                 or omit --config to use §8.4's shipped templates",
+                                    path.display()
+                                ),
+                            }
+                        })?;
+                        let (parsed, warnings) = revlocal_core::GlobalConfig::parse(&text)
+                            .map_err(|source| review::ReviewCommandError::Engine {
+                                detail: format!(
+                                    "{}: {source}\n  try: revlocal config check --config {}",
+                                    path.display(),
+                                    path.display()
+                                ),
+                            })?;
+                        for warning in &warnings {
+                            eprintln!("revlocal: {}", warning.message());
+                        }
+                        parsed
+                    }
+                };
+            review::run(&repo, &rev, kind, &global, json).await?;
             Ok(())
         }
         Command::Publish { command } => {
