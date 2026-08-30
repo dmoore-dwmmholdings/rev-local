@@ -259,7 +259,10 @@ pub fn engine_check(
         None => Check::warn(
             &name,
             &format!("installed ({version}) and logged in; output contract not verified"),
-            Some("run `revlocal doctor --smoke` to spend a few tokens checking it"),
+            // Not `doctor --smoke`, which this used to name and which does not
+            // exist. A remediation that points at a flag somebody cannot type is
+            // worse than none: they conclude their install is broken.
+            Some("run `revlocal review --repo <path> --rev HEAD --engine <id>` to check it end to end"),
         ),
         Some(true) => Check::ok(&name, &format!("{version}, logged in, output contract verified")),
     }
@@ -389,7 +392,23 @@ pub fn gather(svn_repos: usize) -> DoctorReport {
         // Usage reporting is the exception: it is a property of the engine
         // *implementation*, not of anybody's configuration, so it is known
         // without one and belongs in the report a fresh install prints.
-        engines: usage_checks(),
+        //
+        // So is presence. `engines` used to hold only the usage warnings, which
+        // meant a machine with both engines installed and measured got an EMPTY
+        // engine list from the command §8.4 says "tells the user exactly which
+        // engine is usable and why not" — and onboarding's first screen, which
+        // shows this report, listed no engines at all.
+        engines: {
+            let mut checks: Vec<Check> = [
+                revlocal_core::EngineKind::Claude,
+                revlocal_core::EngineKind::Codex,
+            ]
+            .into_iter()
+            .map(engine_presence)
+            .collect();
+            checks.extend(usage_checks());
+            checks
+        },
         targets: Vec::new(),
         platform,
     }
@@ -407,6 +426,42 @@ pub fn gather(svn_repos: usize) -> DoctorReport {
 /// Only unmeasured engines get a line. A check per engine saying "yes, measured"
 /// would bury the two that matter under noise, and §8.4's report earns attention
 /// by not spending it.
+/// Whether an engine's binary is on PATH (§8.4).
+///
+/// Presence only, and it says so. §8.4's full probe runs the engine's
+/// `version_args` and then a smoke task, and a smoke task spends tokens — so
+/// `doctor`, which somebody runs to find out why nothing is working, must not
+/// bill them for asking. What this can answer for free is the question that is
+/// wrong most often: whether the binary is there at all.
+///
+/// `warn`, not `ok`, when it is found. Installed is not the same as logged in,
+/// and a green line against an engine that has never been authenticated is the
+/// kind of reassurance that sends somebody looking somewhere else for a day.
+pub fn engine_presence(engine: revlocal_core::EngineKind) -> Check {
+    let name = format!("engine:{}", engine.as_str());
+
+    match revlocal_engine::live::readiness(engine) {
+        revlocal_engine::live::Readiness::Ready { binary } => Check::warn(
+            &name,
+            &format!("found at {}; not probed", binary.display()),
+            Some(&format!(
+                "check it end to end with `revlocal review --repo <path> --rev HEAD \
+                 --engine {}` — being on PATH is not the same as being logged in",
+                engine.as_str()
+            )),
+        ),
+        revlocal_engine::live::Readiness::Skip { reason } => Check::fail(
+            &name,
+            &reason,
+            &format!(
+                "install {} , or point `engines.{}.bin` at it in your config",
+                engine.as_str(),
+                engine.as_str()
+            ),
+        ),
+    }
+}
+
 fn usage_checks() -> Vec<Check> {
     revlocal_engine::usage::unmeasured_engines()
         .into_iter()
