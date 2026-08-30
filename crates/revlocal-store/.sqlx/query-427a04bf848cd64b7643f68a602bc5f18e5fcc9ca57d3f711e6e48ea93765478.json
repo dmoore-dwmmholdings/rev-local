@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT change.id AS id\n               FROM change\n              WHERE change.repo_id = ?\n                AND NOT EXISTS (SELECT 1 FROM run WHERE run.change_id = change.id)\n              ORDER BY change.detected_at ASC, change.id ASC\n              LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "change",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "427a04bf848cd64b7643f68a602bc5f18e5fcc9ca57d3f711e6e48ea93765478"
+}

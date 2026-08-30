@@ -230,7 +230,7 @@ fn review_role(
         .await
         .map_err(|e| format!("pipeline: {e}"))?;
 
-        Ok((report, engine))
+        Ok((report.report, engine))
     })
 }
 
@@ -417,7 +417,7 @@ fn a_suppressed_critical_does_not_escalate() {
         .await
         .unwrap_or_else(|e| panic!("{e}"));
 
-        (report, engine.run_count())
+        (report.report, engine.run_count())
     });
 
     assert!(!report.escalated, "a suppressed finding must not escalate");
@@ -563,6 +563,7 @@ fn the_m6_exit_gate_runs_at_default_settings() {
             &CancellationToken::new(),
         )
         .await
+        .map(|outcome| outcome.report)
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(

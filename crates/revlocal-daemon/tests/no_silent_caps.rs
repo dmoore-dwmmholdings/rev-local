@@ -27,6 +27,15 @@ use std::path::{Path, PathBuf};
 /// legitimate entry; a *blank* one is not, which is why the test rejects those.
 const ACCOUNTED_FOR: &[(&str, &str)] = &[
     (
+        "crates/revlocal-daemon/src/executor.rs",
+        "ENQUEUE_BATCH bounds how many changes one pass turns into queued runs. \
+         `EnqueueReport::more_waiting` says when it was hit and `watch` prints it, \
+         so a queue that has not caught up does not read as one that has. A \
+         backfill of ten thousand commits should not become ten thousand rows in \
+         one pass, and the next tick takes the rest — nothing is dropped, only \
+         deferred, which is the distinction §18 cares about.",
+    ),
+    (
         "crates/revlocal-daemon/src/notify.rs",
         "PER_WINDOW rate-limits native notifications so a backfill cannot fill \
          somebody's screen, and KEY_MEMORY bounds the deduplication set. The rate \

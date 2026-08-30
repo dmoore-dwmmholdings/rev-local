@@ -3,7 +3,7 @@
 //! Scaffolded by `RL-101`. The complete command surface is `RL-1201`; commands
 //! land here as the work items that need them do.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -88,6 +88,18 @@ enum Command {
         /// The database to use.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+        /// The global config file (§13.1), for budgets, autonomy and engines.
+        ///
+        /// Optional: the documented defaults are used without one, which is what
+        /// a fresh install has.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+        /// Where scratch worktrees go (§4.1's `{data_dir}/scratch/{run_id}`).
+        ///
+        /// Defaults to the database's own directory, so a second installation
+        /// with its own database does not collide on run id 1.
+        #[arg(long, value_name = "PATH")]
+        data_dir: Option<PathBuf>,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -1032,8 +1044,47 @@ async fn run(command: Command) -> Result<(), CliError> {
             once,
             interval,
             database,
+            config,
+            data_dir,
             json,
         } => {
+            let watch_config =
+                match config.as_deref() {
+                    None => revlocal_core::GlobalConfig::default(),
+                    Some(path) => {
+                        let text = std::fs::read_to_string(path).map_err(|source| {
+                            watch::WatchError::Execute {
+                                detail: format!(
+                                    "could not read {}: {source}\n  try: check the path, or omit \
+                                 --config to use §13.1's defaults",
+                                    path.display()
+                                ),
+                            }
+                        })?;
+                        let (parsed, warnings) = revlocal_core::GlobalConfig::parse(&text)
+                            .map_err(|source| watch::WatchError::Execute {
+                                detail: format!(
+                                    "{}: {source}\n  try: revlocal config check --config {}",
+                                    path.display(),
+                                    path.display()
+                                ),
+                            })?;
+                        for warning in &warnings {
+                            eprintln!("revlocal: {}", warning.message());
+                        }
+                        parsed
+                    }
+                };
+
+            // Beside the database by default. §4.1 puts scratch under the data
+            // directory, and inventing a shared path would make two installations
+            // collide on run id 1.
+            let watch_data_dir = data_dir.unwrap_or_else(|| {
+                database
+                    .parent()
+                    .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            });
+
             let pool = revlocal_store::open(&database).await?;
 
             // Ctrl-C ends the loop rather than killing the process: §4.2 runs the
@@ -1050,7 +1101,8 @@ async fn run(command: Command) -> Result<(), CliError> {
             });
 
             loop {
-                let report = watch::tick(&pool, chrono::Utc::now()).await?;
+                let report =
+                    watch::tick(&pool, &watch_config, &watch_data_dir, chrono::Utc::now()).await?;
                 println!("{}", watch::render(&report, json)?);
 
                 if once || stop.is_cancelled() {

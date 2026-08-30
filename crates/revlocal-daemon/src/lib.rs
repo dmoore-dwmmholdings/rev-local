@@ -11,6 +11,7 @@ pub mod dashboard;
 pub mod depth;
 pub mod doctor;
 pub mod engines;
+pub mod executor;
 pub mod findings_view;
 pub mod gating;
 pub mod hooks;

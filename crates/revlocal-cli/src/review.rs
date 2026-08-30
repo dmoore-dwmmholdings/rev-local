@@ -140,7 +140,7 @@ pub async fn run(
         );
     }
 
-    let report = pipeline::review(
+    let outcome = pipeline::review(
         &pipeline::ReviewInputs {
             repo_name: &repo.name,
             repo_kind: "git",
@@ -164,9 +164,9 @@ pub async fn run(
 
     if json {
         // The only thing this branch may write to stdout.
-        println!("{}", report.to_json()?);
+        println!("{}", outcome.report.to_json()?);
     } else {
-        print!("{}", render_human(&report));
+        print!("{}", render_human(&outcome.report));
     }
 
     Ok(())
