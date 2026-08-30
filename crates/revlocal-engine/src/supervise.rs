@@ -168,6 +168,13 @@ pub struct Supervised {
     /// The child's pid, recorded so a test — and a bug report — can check for
     /// survivors.
     pub pid: Option<u32>,
+    /// Whether reading stopped before the pipe closed (SPEC §18).
+    ///
+    /// Set when a drain hit its bound, which means something was still holding
+    /// the pipe. The captured output is what arrived, not necessarily all of it,
+    /// and §18 forbids that difference being invisible: a partial review that
+    /// looks complete is worse than one that admits it is partial.
+    pub output_truncated: bool,
     /// How long it ran.
     pub elapsed: Duration,
 }
@@ -176,6 +183,16 @@ impl Supervised {
     /// Whether the process finished on its own.
     pub const fn completed(&self) -> bool {
         self.killed.is_none()
+    }
+
+    /// Whether this output can be trusted as the whole of what the engine said.
+    ///
+    /// Deliberately not the same question as [`completed`](Self::completed). A
+    /// process can exit successfully and still leave a child holding the pipe, so
+    /// "it finished" and "we read everything it wrote" are separate facts and only
+    /// one of them is about the exit code.
+    pub const fn output_is_complete(&self) -> bool {
+        !self.output_truncated
     }
 }
 
@@ -462,6 +479,22 @@ fn signal_group(pid: u32, signal: nix::sys::signal::Signal) {
 /// worse than the timeout it was enforcing.
 pub const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
+/// How long to drain after a process exited **on its own** (SPEC §18).
+///
+/// A process that exits closes its pipes, so this normally elapses not at all.
+/// It exists for the case where that is not true: a grandchild outliving its
+/// parent keeps the write end open, and the read never ends.
+///
+/// The wait used to be unbounded there, on the reasoning that an exited process
+/// has closed its pipes. That is true of the process and not of its children, and
+/// the difference is a deadlock: no timeout wraps this, and on Windows the job
+/// object that would reap the grandchild is not closed until after this returns.
+///
+/// Longer than [`DRAIN_GRACE`] because nothing is waiting on it — §12.1's
+/// three-second budget is about *cancellation*, and this path was not cancelled.
+/// The point is a bound, not a short one.
+pub const EXIT_DRAIN_GRACE: Duration = Duration::from_secs(10);
+
 /// A buffer a reader task fills and the supervisor can read at any point.
 type SharedBuffer = Arc<Mutex<Vec<u8>>>;
 
@@ -507,32 +540,39 @@ fn snapshot(buffer: &SharedBuffer) -> String {
 /// Wait for a reader, giving up after `grace` and keeping what it read.
 async fn drain(
     reader: Option<(tokio::task::JoinHandle<()>, SharedBuffer)>,
-    grace: Option<Duration>,
-) -> String {
+    grace: Duration,
+    killed: bool,
+) -> (String, bool) {
     let Some((handle, buffer)) = reader else {
-        return String::new();
+        return (String::new(), false);
     };
 
-    match grace {
-        Some(grace) => {
-            if tokio::time::timeout(grace, handle).await.is_err() {
-                // Whoever is holding the pipe is not ours to wait for. Take what
-                // arrived and move on; the run records that it was killed, so
-                // truncated output is visible rather than passed off as all of it.
-                tracing::warn!(
-                    bytes = snapshot(&buffer).len(),
-                    ?grace,
-                    "an engine's output pipe was still open after the process was \
-                     killed; something it spawned is still holding it"
-                );
-            }
-        }
-        None => {
-            let _ = handle.await;
+    let gave_up = tokio::time::timeout(grace, handle).await.is_err();
+    if gave_up {
+        // Whoever is holding the pipe is not ours to wait for. Take what arrived
+        // and say the reading stopped early, so truncated output is visible
+        // rather than passed off as all of it (§18).
+        if killed {
+            tracing::warn!(
+                bytes = snapshot(&buffer).len(),
+                ?grace,
+                "an engine's output pipe was still open after the process was \
+                 killed; something it spawned is still holding it"
+            );
+        } else {
+            // Worse than the killed case, and said differently. The engine
+            // finished normally and something it spawned outlived it — so this
+            // output is being treated as a complete review's, and it is not.
+            tracing::warn!(
+                bytes = snapshot(&buffer).len(),
+                ?grace,
+                "an engine exited on its own but its output pipe is still held by \
+                 something it spawned; the captured output may be incomplete"
+            );
         }
     }
 
-    snapshot(&buffer)
+    (snapshot(&buffer), gave_up)
 }
 
 /// Collect what the readers gathered, however the process ended.
@@ -547,10 +587,15 @@ async fn finish(
     pid: Option<u32>,
     started: Instant,
 ) -> Result<Supervised, EngineError> {
-    // Bounded only when the process was killed. One that exited on its own has
-    // closed its pipes, so the drain finishes immediately and waiting costs
-    // nothing; a killed one may have left a grandchild holding them.
-    let grace = killed.map(|_| DRAIN_GRACE);
+    // Always bounded. It used to be bounded only when the process was killed,
+    // on the reasoning that one which exited has closed its pipes — true of the
+    // process, false of anything it spawned, and the gap between those is an
+    // unbounded await with no timeout around it.
+    let grace = if killed.is_some() {
+        DRAIN_GRACE
+    } else {
+        EXIT_DRAIN_GRACE
+    };
 
     // Concurrently, not one after the other. The two drains wait on independent
     // pipes, and awaiting them in sequence makes the worst case the *sum* of their
@@ -565,7 +610,11 @@ async fn finish(
     //
     // Sequential awaits are the easy thing to write and are wrong whenever the
     // things being awaited are independent and bounded by a timeout.
-    let (stdout, stderr) = tokio::join!(drain(stdout, grace), drain(stderr, grace));
+    let killed_flag = killed.is_some();
+    let ((stdout, stdout_cut), (stderr, stderr_cut)) = tokio::join!(
+        drain(stdout, grace, killed_flag),
+        drain(stderr, grace, killed_flag)
+    );
 
     Ok(Supervised {
         stdout,
@@ -573,6 +622,7 @@ async fn finish(
         exit_code,
         killed,
         pid,
+        output_truncated: stdout_cut || stderr_cut,
         elapsed: started.elapsed(),
     })
 }

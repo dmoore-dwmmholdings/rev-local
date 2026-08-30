@@ -75,11 +75,18 @@ fn unsafe_is_confined_to_the_job_object() -> Result<(), String> {
                 && line.contains("unsafe_code")
         });
         if carries {
+            // Normalised to `/` before comparing. `Path::display` uses the
+            // platform separator, so the expected value below matched on Unix
+            // and failed on Windows with `crates\revlocal-engine\src\job.rs` —
+            // a path-separator bug in the test guarding the Windows-only code,
+            // and exactly the class REVL-106 exists to catch.
             allowing.push(
                 file.strip_prefix(&root)
                     .unwrap_or(file)
-                    .display()
-                    .to_string(),
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
             );
         }
     }
