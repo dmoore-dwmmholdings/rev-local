@@ -79,9 +79,8 @@ pub const fn support(engine: EngineKind) -> UsageSupport {
 
         // RL-409: `from_claude_json` reads it, against a captured real payload.
         EngineKind::Claude => UsageSupport::Measured,
-        EngineKind::Codex => UsageSupport::Unmeasured {
-            source: "`codex exec --json`",
-        },
+        // RL-408/RL-409: `from_codex_jsonl` reads it, against a captured stream.
+        EngineKind::Codex => UsageSupport::Measured,
     }
 }
 
@@ -104,6 +103,14 @@ pub enum UsageError {
         #[source]
         source: serde_json::Error,
     },
+
+    /// Nothing in the output parsed as JSON at all.
+    ///
+    /// Separate from [`NotJson`](Self::NotJson), which is about a single document
+    /// failing to parse: this is a JSONL stream in which no line was JSON, so the
+    /// engine printed something else entirely.
+    #[error("no line of engine output was JSON; the run was not measured")]
+    NoJsonLines,
 
     /// The JSON carried no `usage` object.
     ///
@@ -169,46 +176,125 @@ pub fn from_claude_json(stdout: &str) -> Result<Usage, UsageError> {
     })
 }
 
+/// Read token usage out of `codex exec --json` (RL-408, RL-409, SPEC §8.1).
+///
+/// # Codex counts the opposite way to Claude, and that is the whole point
+///
+/// Claude reports **additive buckets** — `input_tokens` excludes cached ones, so
+/// they must be summed. Codex reports an **inclusive total with a breakdown**:
+///
+/// ```json
+/// "input_tokens": 35945, "cached_input_tokens": 28160,
+/// "output_tokens": 230,  "reasoning_output_tokens": 69
+/// ```
+///
+/// Summing here would double-count 28,160 tokens — the exact inverse of the
+/// mistake that undercounts Claude by summing nothing.
+///
+/// Two pieces of evidence, because inferring this from one number would be
+/// guessing. `reasoning_output_tokens` (69) sits inside `output_tokens` (230),
+/// which is a subset by definition and establishes the convention. And across two
+/// captured runs with very different prompt sizes, `input_tokens` exceeded
+/// `cached_input_tokens` both times while tracking total context — additive
+/// buckets would not behave that way.
+///
+/// **One extractor per engine, never a shared one.** These two conventions cannot
+/// both be right in the same function, and the failure would be silent in either
+/// direction.
+///
+/// # Why the last `turn.completed` wins
+///
+/// `--json` emits JSONL and a session can have several turns. The last completed
+/// turn carries the cumulative figure; taking the first would report the opening
+/// turn as though it were the run.
+pub fn from_codex_jsonl(stdout: &str) -> Result<Usage, UsageError> {
+    let mut usage: Option<Usage> = None;
+    let mut saw_json = false;
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // A non-JSON line is not fatal: the stream is JSONL and a stray banner or
+        // progress line should not lose the counts that came after it.
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        saw_json = true;
+
+        if event.get("type").and_then(serde_json::Value::as_str) != Some("turn.completed") {
+            continue;
+        }
+        let Some(counts) = event.get("usage") else {
+            continue;
+        };
+        let field = |name: &str| {
+            counts
+                .get(name)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        };
+
+        usage = Some(Usage {
+            // Already the total. `cached_input_tokens` is a breakdown of it.
+            tokens_in: field("input_tokens"),
+            tokens_out: field("output_tokens"),
+            tokens_known: true,
+            // Codex reports no price. `None` rather than a computed one: ADR 0010
+            // keeps an unmeasured cost from reading as a free one, and arithmetic
+            // over rates this crate hard-coded would go stale silently.
+            cost_usd: None,
+        });
+    }
+
+    match usage {
+        Some(usage) => Ok(usage),
+        // Nothing parsed at all is a different failure from a stream that parsed
+        // and carried no completed turn — one means the engine printed something
+        // else, the other that it stopped early.
+        None if !saw_json => Err(UsageError::NoJsonLines),
+        None => Err(UsageError::NoUsage),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn usage_codex_is_not_claimed_to_be_measured() {
-        // Claiming measurement rev-local does not have is how a budget silently
-        // stops being a ceiling. Codex has no extractor yet — RL-408 has to
-        // establish what `codex exec --json` emits first.
-        assert!(!support(EngineKind::Codex).is_measured());
+    fn usage_every_engine_is_measured() {
+        // As of RL-408 and RL-409, both real engines have an extractor tested
+        // against a captured payload, and the mock reports counts it invents.
+        //
+        // This is the state, not a permanent property: `unmeasured_engines` and
+        // the doctor check that reads it stay, because the next engine added
+        // starts unmeasured and must say so rather than inheriting this.
+        for engine in [EngineKind::Claude, EngineKind::Codex, EngineKind::Mock] {
+            assert!(
+                support(engine).is_measured(),
+                "{} is not measured",
+                engine.as_str()
+            );
+        }
+        assert!(unmeasured_engines().is_empty());
     }
 
     #[test]
-    fn usage_claude_is_measured_because_its_payload_was_read() {
-        // Not an assumption: `from_claude_json` is tested against a captured
-        // `--output-format json` response in tests/fixtures.
-        assert!(support(EngineKind::Claude).is_measured());
-    }
+    fn usage_an_unmeasured_engine_would_say_what_it_means_for_a_budget() {
+        // No engine is unmeasured today, so this exercises the value rather than
+        // the table — the wording is what an operator would act on, and it must
+        // keep working for the next engine that arrives without an extractor.
+        let unmeasured = UsageSupport::Unmeasured {
+            source: "`someengine --json`",
+        };
 
-    #[test]
-    fn usage_the_mock_is_measured_because_it_makes_the_numbers_up() {
-        assert!(support(EngineKind::Mock).is_measured());
-    }
-
-    #[test]
-    fn usage_an_unmeasured_engine_says_what_it_means_for_a_budget() {
-        // §18: a limitation nobody can act on is not reported. "Advisory" is the
-        // word that tells an operator their ceiling is not holding anything.
-        let line = support(EngineKind::Codex).summary_line(EngineKind::Codex);
+        let line = unmeasured.summary_line(EngineKind::Codex);
         assert!(line.contains("advisory"), "{line}");
         assert!(
-            line.contains("codex exec --json"),
+            line.contains("someengine"),
             "and where it would come from: {line}"
         );
-    }
-
-    #[test]
-    fn usage_only_codex_remains_unmeasured() {
-        let unmeasured = unmeasured_engines();
-        assert_eq!(unmeasured.len(), 1, "{unmeasured:?}");
-        assert_eq!(unmeasured[0].0, EngineKind::Codex);
+        assert!(!unmeasured.is_measured());
     }
 }

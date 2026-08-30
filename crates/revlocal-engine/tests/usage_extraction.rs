@@ -102,3 +102,93 @@ fn usage_a_missing_sub_field_is_zero_but_a_missing_usage_object_is_not() -> Resu
     assert!(usage.cost_usd.is_none(), "no total_cost_usd means unpriced");
     Ok(())
 }
+
+// --- codex (RL-408) ---------------------------------------------------------
+
+fn codex_stream() -> Result<String, String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/codex-exec-json.jsonl");
+    std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))
+}
+
+#[test]
+fn usage_codex_counts_the_opposite_way_to_claude() -> Result<(), String> {
+    // The finding this fixture exists for. Codex reports an inclusive total with
+    // a breakdown:
+    //
+    //   input_tokens         35945
+    //   cached_input_tokens  28160   <- part of the 35945, not extra
+    //
+    // Summing them would double-count 28,160 tokens — the exact inverse of the
+    // Claude mistake, where *not* summing undercounts by 99.99%. Two conventions,
+    // one extractor each, and neither can be shared.
+    let usage =
+        revlocal_engine::usage::from_codex_jsonl(&codex_stream()?).map_err(|e| e.to_string())?;
+
+    assert_eq!(usage.tokens_in, 35_945, "input_tokens is already the total");
+    assert_ne!(
+        usage.tokens_in,
+        35_945 + 28_160,
+        "summing would double-count the cached portion"
+    );
+    assert_eq!(usage.tokens_out, 230);
+    assert!(usage.tokens_are_known());
+    Ok(())
+}
+
+#[test]
+fn usage_codex_reports_no_price() -> Result<(), String> {
+    // ADR 0010: unpriced is `None`, not zero. Computing one from hard-coded rates
+    // would be a number that goes stale silently the next time pricing moves.
+    let usage =
+        revlocal_engine::usage::from_codex_jsonl(&codex_stream()?).map_err(|e| e.to_string())?;
+
+    assert!(usage.cost_usd.is_none());
+    Ok(())
+}
+
+#[test]
+fn usage_the_last_completed_turn_wins() -> Result<(), String> {
+    // A session can have several turns and the last carries the cumulative
+    // figure. Taking the first would report the opening turn as the whole run.
+    let stream = concat!(
+        r#"{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":1}}"#,
+        "\n",
+        r#"{"type":"turn.completed","usage":{"input_tokens":900,"output_tokens":90}}"#,
+        "\n",
+    );
+
+    let usage = revlocal_engine::usage::from_codex_jsonl(stream).map_err(|e| e.to_string())?;
+
+    assert_eq!(usage.tokens_in, 900);
+    assert_eq!(usage.tokens_out, 90);
+    Ok(())
+}
+
+#[test]
+fn usage_a_stray_non_json_line_does_not_lose_the_counts() -> Result<(), String> {
+    // JSONL in practice picks up banners and progress lines. Losing a run's
+    // counts to one of them would record a measured run as unmeasured.
+    let stream = concat!(
+        "Codex starting up...\n",
+        r#"{"type":"turn.completed","usage":{"input_tokens":42,"output_tokens":7}}"#,
+        "\n",
+    );
+
+    let usage = revlocal_engine::usage::from_codex_jsonl(stream).map_err(|e| e.to_string())?;
+
+    assert_eq!(usage.tokens_in, 42);
+    Ok(())
+}
+
+#[test]
+fn usage_a_stream_that_never_completed_a_turn_is_not_zero() {
+    // The engine started and stopped. That is unmeasured, not free.
+    let stream = concat!(r#"{"type":"turn.started"}"#, "\n");
+
+    let error = revlocal_engine::usage::from_codex_jsonl(stream).expect_err("must not parse");
+    assert!(
+        error.to_string().contains("not measured"),
+        "and say what it means for the run: {error}"
+    );
+}
