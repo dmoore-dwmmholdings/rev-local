@@ -148,6 +148,19 @@ jobs:
         if: always()
         run: npm --prefix crates/revlocal-tauri/ui ci && npm --prefix crates/revlocal-tauri/ui run build
 
+      # ADR 0032: capture is a local gate and CI runs the vitest layer. This is
+      # that layer — component logic, and in particular that a token figure which
+      # is a lower bound never renders as a total (§18).
+      #
+      # macOS only. The suite is jsdom and platform-independent, so running it on
+      # all three would triple the cost to learn the same thing three times.
+      - name: vitest
+        if: runner.os == 'macOS'
+        run: |
+          set -o pipefail
+          npm --prefix crates/revlocal-tauri/ui test 2>&1 \
+            | tee artifacts/logs/vitest-${{ matrix.os }}.log
+
       - name: cargo clippy (desktop shell)
         if: runner.os == 'macOS'
         run: |
