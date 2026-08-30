@@ -180,3 +180,66 @@ tr.bad td.kind { color: var(--bad); }
 .meter-partial .meter-fill { background: var(--warn); }
 
 .hedge { margin: 0.2rem 0 0; color: var(--warn); font-size: 0.8rem; }
+
+/* --- run detail (SPEC §15 screen 3) ------------------------------------- */
+
+.run-detail h3 { margin: 1.2rem 0 0.4rem; font-size: 0.95rem; color: var(--dim); }
+.run-head { display: flex; align-items: center; gap: 0.5rem; }
+.run-head h2 { margin: 0; font-size: 1.05rem; }
+.dim { color: var(--dim); font-size: 0.85rem; }
+
+/* Amber, not red: the review happened and is useful. What it is not is
+   complete, and that is a different thing from a failure. */
+.caveats {
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.75rem 0;
+  color: var(--warn);
+}
+.caveats ul { margin: 0.3rem 0 0; padding-left: 1.2rem; }
+.caveats details { margin-top: 0.4rem; }
+.omitted { font-family: inherit; }
+
+.findings { list-style: none; margin: 0; padding: 0; }
+.finding {
+  display: grid;
+  grid-template-columns: 5rem 1fr max-content;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+}
+.sev { text-transform: uppercase; font-size: 0.75rem; }
+.sev-critical .sev, .sev-high .sev { color: var(--bad); }
+.sev-medium .sev { color: var(--warn); }
+.sev-low .sev, .sev-info .sev { color: var(--dim); }
+.anchor { color: var(--dim); font-size: 0.85rem; }
+/* Visibly different from a real anchor, so "we could not place this" does not
+   read as a location. */
+.anchor-none { color: var(--warn); font-style: italic; }
+
+.targets { border-collapse: collapse; width: 100%; }
+.targets th {
+  text-align: left;
+  color: var(--dim);
+  font-weight: normal;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.2rem 0.5rem 0.2rem 0;
+}
+.targets td { padding: 0.25rem 0.5rem 0.25rem 0; border-bottom: 1px solid var(--line); }
+.targets td.bad { color: var(--bad); }
+.targets button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.transcript {
+  max-height: 24rem;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

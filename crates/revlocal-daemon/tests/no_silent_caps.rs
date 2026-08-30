@@ -36,6 +36,17 @@ const ACCOUNTED_FOR: &[(&str, &str)] = &[
          itself the one that exists to report a cap.",
     ),
     (
+        "crates/revlocal-tauri/src/bin/revlocal-desktop.rs",
+        "MAX_BYTES bounds how much of a transcript the run detail screen reads. \
+         An engine writes whatever it likes, and a gigabyte of progress bars \
+         should not be able to exhaust this process through a UI control. When \
+         the bound is hit the returned text *begins* with a line saying the real \
+         size and how much is shown — in the text itself, because the screen \
+         renders it verbatim and a silently clipped log looks like a short one. \
+         The tail is kept rather than the head: the end of a log is where the \
+         failure is.",
+    ),
+    (
         "crates/revlocal-cli/src/export.rs",
         "EXPORT_RUN_CAP bounds how many runs `db export` reads. It genuinely can \
          hide history, so the document carries `truncated` and the summary line \

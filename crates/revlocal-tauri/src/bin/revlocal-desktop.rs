@@ -106,6 +106,72 @@ async fn set_mode(mode: String) -> Result<(), String> {
     result
 }
 
+/// One run's detail (§15 screen 3).
+#[tauri::command]
+async fn get_run(run_id: i64) -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let view = revlocal_daemon::run_view::gather(&pool, revlocal_core::RunId::new(run_id)).await;
+    pool.close().await;
+
+    serde_json::to_value(view.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// One run's raw transcript, read only when somebody expands it (§15 screen 3).
+///
+/// Bounded. A transcript is whatever the engine wrote, and an engine that emitted
+/// a gigabyte of progress bars should not be able to exhaust this process's memory
+/// through a UI control. The tail is kept rather than the head: the end of a log
+/// is where the failure is.
+#[tauri::command]
+async fn get_transcript(run_id: i64) -> Result<String, String> {
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let run = revlocal_store::RunStore::new(&pool)
+        .get(revlocal_core::RunId::new(run_id))
+        .await
+        .map_err(|e| e.to_string());
+    pool.close().await;
+
+    let Some(path) = run?.transcript_path else {
+        return Ok(String::new());
+    };
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+
+    if size <= MAX_BYTES {
+        return Ok(text);
+    }
+    // §18: a truncated read says so in the text itself, because the screen shows
+    // this verbatim and a silently clipped log looks like a short one.
+    let kept: String = text
+        .chars()
+        .skip(text.chars().count().saturating_sub(MAX_BYTES as usize))
+        .collect();
+    Ok(format!(
+        "[rev-local: this transcript is {size} bytes; showing the last {MAX_BYTES}]\n\n{kept}"
+    ))
+}
+
+/// Re-queue one target's failed actions (§15's retry buttons, §11.6).
+#[tauri::command]
+async fn retry_target(run_id: i64, target: String) -> Result<(), String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let result = revlocal_store::PublishActionStore::new(&pool)
+        .reset_for_retry(revlocal_core::RunId::new(run_id), &target)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+    pool.close().await;
+    result
+}
+
 /// Stop everything (SPEC §12.1).
 ///
 /// One line of delegation, like every command here.
@@ -151,7 +217,14 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> tauri::Result<()> {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![kill_switch, dashboard, set_mode])
+        .invoke_handler(tauri::generate_handler![
+            kill_switch,
+            dashboard,
+            set_mode,
+            get_run,
+            get_transcript,
+            retry_target
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
 

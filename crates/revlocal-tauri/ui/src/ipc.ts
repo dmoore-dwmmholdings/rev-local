@@ -157,3 +157,67 @@ export function fetchDashboard(): Promise<Dashboard> {
 export function setMode(mode: Mode): Promise<void> {
   return invoke<void>('set_mode', { mode });
 }
+
+// --- run detail (RL-1107, SPEC §15 screen 3) --------------------------------
+
+export type AnchoredFinding = {
+  id: number;
+  severity: string;
+  category: string;
+  title: string;
+  file?: string;
+  line_start?: number;
+  line_end?: number;
+  /** False when this finding cannot be placed against the diff (§18). */
+  anchorable: boolean;
+};
+
+export type Stages = {
+  started_at?: string;
+  finished_at?: string;
+  elapsed_secs?: number;
+  /** Why there is no per-stage breakdown. §15 asks for one; nothing records it. */
+  per_stage_unavailable: string;
+};
+
+export type TargetLine = {
+  target: string;
+  sent: number;
+  pending: number;
+  awaiting_approval: number;
+  failed: number;
+  /** Only a failed target can be retried. */
+  retryable: boolean;
+};
+
+export type RunView = {
+  run_id: number;
+  change: string;
+  status: string;
+  engine: string;
+  depth: string;
+  verdict?: string;
+  degraded?: string;
+  tokens: number;
+  tokens_known: boolean;
+  stages: Stages;
+  truncated: boolean;
+  /** Names, not a count: "58 files omitted" cannot be checked and a list can. */
+  omitted_files: string[];
+  findings: AnchoredFinding[];
+  /** Size only. The text is fetched separately, on expand. */
+  transcript_bytes: number;
+  targets: TargetLine[];
+};
+
+export function fetchRun(runId: number): Promise<RunView> {
+  return invoke<RunView>('get_run', { runId });
+}
+
+export function fetchTranscript(runId: number): Promise<string> {
+  return invoke<string>('get_transcript', { runId });
+}
+
+export function retryTarget(runId: number, target: string): Promise<void> {
+  return invoke<void>('retry_target', { runId, target });
+}
