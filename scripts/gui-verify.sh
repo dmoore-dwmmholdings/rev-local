@@ -27,23 +27,38 @@ FIXTURE_DB="${REVLOCAL_GUI_DB:-$ROOT/artifacts/gui/fixture.db}"
 SETTLE_MS="${REVLOCAL_SETTLE_MS:-800}"
 TIMEOUT="${REVLOCAL_GUI_TIMEOUT:-40}"
 
-# No ROI by default, and that is a decision rather than an omission.
+# An ROI by default, because the window's own bounds are what never settle.
 #
-# §16.4 asks for a crop that clips host chrome so captures are comparable. The
-# obvious implementation — crop from the window size in `tauri.conf.json` — is
-# wrong, and wrong in a way that cost an afternoon: the *captured surface* is not
-# the configured size. A 1100x760 window captures as 1094x756 here, so an ROI
-# derived from the config overflows by six pixels and framewatch fails rather than
-# clipping. That produced a gate which passed about one run in three, and a flaky
-# gate is worse than none because it teaches people to re-run until green.
+# This file previously said "no ROI by default, and that is a decision" — and the
+# reasoning was wrong in a way worth recording, because the evidence for it was
+# real. Deriving a crop from `tauri.conf.json` DOES overflow: a 1100x760 window
+# captures as a smaller surface, so that ROI failed rather than clipped. The
+# lesson was "measure the surface", and what got written down instead was "do not
+# crop".
 #
-# framewatch already captures the *window*, not the screen, so the only thing an
-# ROI would remove is the title bar — and a title bar that is identical between
-# two runs does not hurt comparability at all. Reliability beats a cosmetic crop.
+# The cost of that was REVL-88: a gate that settled about one run in four, cause
+# unknown, for weeks. Three consecutive best-effort captures finally showed it —
+# 1096x758, then 1100x760, then 1100x760. **The captured surface changes size
+# between frames.** framewatch settles by comparing consecutive frames, and two
+# frames of different sizes can never match, so a window whose bounds are still
+# moving never settles no matter how long it is given. That is why a 90-second
+# timeout failed exactly as fast as a 40-second one.
 #
-# `REVLOCAL_ROI` opts back in for anybody who measures their own surface first:
-#   framewatch shot ... --out-file /tmp/probe.png   # then read its dimensions
-ROI="${REVLOCAL_ROI:-}"
+# Cropping to a region safely inside the smallest observed surface makes the
+# comparison immune to the outer bounds. Measured, not derived: 4/6 without,
+# 12/12 with, across two screens in one sitting. The region is sized against the
+# SMALLEST surface seen (1094x756), not the configured window — that is the
+# measurement the first attempt skipped.
+#
+# `REVLOCAL_ROI` overrides it; `REVLOCAL_ROI=""` disables cropping entirely, which
+# is how the old behaviour is reproduced if this ever needs re-testing.
+ROI="${REVLOCAL_ROI-4,4,1086,748}"
+
+# How many times one screen may be attempted before the gate fails.
+#
+# Three, not "until it works": a screen that needs more than three goes has a
+# problem worth knowing about, and an unbounded retry is a gate that cannot fail.
+ATTEMPTS="${REVLOCAL_ATTEMPTS:-3}"
 
 SCREENS=("$@")
 if [[ ${#SCREENS[@]} -eq 0 ]]; then
@@ -119,23 +134,48 @@ for screen in "${SCREENS[@]}"; do
     onboarding) want_step="$want_id"; want_screen="dashboard" ;;
   esac
 
-  if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" REVLOCAL_RUN="$want_run" REVLOCAL_ONBOARDING="$want_step" framewatch shot \
-       --launch "$BIN" \
-       --title "rev-local" \
-       --out-file "$out" \
-       "${roi_args[@]}" \
-       --timeout "$TIMEOUT"
-  then
-    if [[ -s "$out" ]]; then
-      echo "gui-verify: $screen -> $out"
-    else
+  # Bounded retries, and the count is printed when one is used.
+  #
+  # Not a way of passing a gate that failed: every attempt still has to produce a
+  # settled frame, and running out of attempts still fails. It is here because
+  # even with the ROI a launch occasionally loses the race — 20 of 21 in one
+  # sitting — and re-running the whole sweep by hand is how somebody ends up
+  # re-running until green, which is the habit this gate exists to prevent.
+  #
+  # §18: a retry that said nothing would hide a screen that needs three goes from
+  # the person who could fix it.
+  attempt=0
+  settled=0
+  while (( attempt < ATTEMPTS )); do
+    attempt=$(( attempt + 1 ))
+
+    if REVLOCAL_DB="$FIXTURE_DB" REVLOCAL_SCREEN="$want_screen" REVLOCAL_REPO="$want_repo" REVLOCAL_RUN="$want_run" REVLOCAL_ONBOARDING="$want_step" framewatch shot \
+         --launch "$BIN" \
+         --title "rev-local" \
+         --out-file "$out" \
+         "${roi_args[@]}" \
+         --timeout "$TIMEOUT"
+    then
+      if [[ -s "$out" ]]; then
+        settled=1
+        break
+      fi
       # framewatch exited 0 and wrote nothing. Belt and braces, because an empty
       # PNG is exactly the "silently captured nothing" case.
-      echo "gui-verify: $screen produced an empty file" >&2
-      failed=1
+      echo "gui-verify: $screen produced an empty file (attempt $attempt)" >&2
+    else
+      echo "gui-verify: $screen never settled within ${TIMEOUT}s (attempt $attempt)" >&2
+    fi
+  done
+
+  if (( settled == 1 )); then
+    if (( attempt > 1 )); then
+      echo "gui-verify: $screen -> $out (settled on attempt $attempt of $ATTEMPTS)"
+    else
+      echo "gui-verify: $screen -> $out"
     fi
   else
-    echo "gui-verify: $screen never settled within ${TIMEOUT}s" >&2
+    echo "gui-verify: $screen never settled in $ATTEMPTS attempts" >&2
     failed=1
   fi
 done
