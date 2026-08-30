@@ -1018,7 +1018,8 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
   "webhook_secret_ref": null,           // keychain reference, never the secret itself
   "block_on_findings": false,
   "allow_approve": false,
-  "merge_detect_regex": "(?i)\\b(merge|reintegrat\\w+)\\b.*\\b(branches?/[\\w./-]+)"
+  "merge_detect_regex": "(?i)\\b(merge|reintegrat\\w+)\\b.*\\b(branches?/[\\w./-]+)",
+  "pseudo_pr_min_files": 5              // §6.4 heuristic 3
 }
 ```
 

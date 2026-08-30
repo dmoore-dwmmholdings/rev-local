@@ -92,6 +92,17 @@ pub struct RepoConfig {
     pub allow_approve: bool,
     /// Pattern for detecting an SVN branch reintegration (decision D6).
     pub merge_detect_regex: String,
+    /// How many files a revision must touch for §6.4's third heuristic to fire.
+    ///
+    /// §6.4 names this key and gives it a default of 5; §13.2's document did not
+    /// list it, so it was unreachable — the threshold lived only as a constant in
+    /// `revlocal-vcs`. A repository whose commits are unusually large or small
+    /// could not tune the heuristic the spec says is tunable.
+    ///
+    /// It is a *lower bound on evidence*, not a filter: heuristic 3 is the weakest
+    /// of the three, inferring a reintegration from breadth plus a branch-shaped
+    /// commit message, so a small number makes it fire on ordinary commits.
+    pub pseudo_pr_min_files: u32,
     /// Keys present in the document that this version does not know.
     #[serde(flatten)]
     pub extra: Extra,
@@ -156,6 +167,7 @@ impl Default for RepoConfig {
             block_on_findings: false,
             allow_approve: false,
             merge_detect_regex: r"(?i)\b(merge|reintegrat\w+)\b.*\b(branches?/[\w./-]+)".to_owned(),
+            pseudo_pr_min_files: 5,
             extra: Extra::default(),
         }
     }

@@ -56,6 +56,7 @@
 use std::collections::BTreeMap;
 
 use regex::Regex;
+use revlocal_core::RepoConfig;
 
 use super::cmd::{SvnError, SvnRunner};
 use super::discover::SvnRevision;
@@ -299,6 +300,28 @@ impl Default for Heuristics {
 }
 
 impl Heuristics {
+    /// The heuristics a repository's configuration asks for (§6.4, §13.2).
+    ///
+    /// §6.4 names `pseudo_pr_min_files` and gives it a default of 5, and §13.2's
+    /// document now carries it — before REVL-120 it did not, so the threshold
+    /// lived only as [`DEFAULT_PSEUDO_PR_MIN_FILES`] and a repository could not
+    /// tune the heuristic the spec says is tunable.
+    ///
+    /// All three heuristics stay on. §6.4 does not offer them as switches, and a
+    /// config that could turn `mergeinfo` off would let somebody disable the
+    /// strongest evidence and keep the weakest.
+    pub fn for_repo(config: &RepoConfig) -> Self {
+        Self {
+            mergeinfo: true,
+            log_message: true,
+            file_count: true,
+            // `usize` here, `u32` in config: the config document is a wire format
+            // and 32 bits is plenty for a file count, while this is an index-like
+            // comparison against `files.len()`.
+            min_files: config.pseudo_pr_min_files as usize,
+        }
+    }
+
     /// Only the named heuristic, so a test can prove it works alone.
     pub const fn only_mergeinfo() -> Self {
         Self {
