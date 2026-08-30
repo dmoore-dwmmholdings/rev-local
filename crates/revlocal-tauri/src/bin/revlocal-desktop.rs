@@ -761,6 +761,48 @@ fn initial_screen() -> String {
     std::env::var("REVLOCAL_SCREEN").unwrap_or_default()
 }
 
+/// The step a scripted flow capture is currently on (RL-1103, §16.4).
+///
+/// Reads the **last line of the driver's own labels file** — the same file
+/// `framewatch watch --labels-file` is tailing to caption frames. That is not a
+/// convenience: §16.4 wants captions and actions that cannot drift apart, and one
+/// file written by one process is the only way to get that mechanically. A
+/// separate "advance" channel would eventually caption a frame with the step
+/// before or after the one it shows, which is worse than no caption at all.
+///
+/// Returns "" when no flow is running, which is every real user, and
+/// [`FLOW_IDLE`] when one is configured but has not named a step yet.
+///
+/// Those two have to be distinguishable. The first version returned "" for both,
+/// so the front end — which starts polling only once it sees a flow — never
+/// started when the driver had not written its first label yet. The capture hung
+/// waiting for frames from a window that was never going to change.
+#[tauri::command]
+fn flow_step() -> String {
+    let Some(path) = std::env::var_os("REVLOCAL_FLOW_FILE") else {
+        return String::new();
+    };
+
+    // A missing or unreadable file is "no step yet", not an error: the driver
+    // creates it and the app may look before the first write.
+    let last = std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+
+    if last.is_empty() {
+        FLOW_IDLE.to_owned()
+    } else {
+        last
+    }
+}
+
+/// What [`flow_step`] answers while a flow is configured and has named no step.
+pub const FLOW_IDLE: &str = "idle";
+
 /// Which onboarding step a capture harness asked for, or "" (RL-1102, §16.4).
 ///
 /// Onboarding is a *flow*, and §16.4's single-shot harness photographs one screen
@@ -877,7 +919,8 @@ fn run() -> tauri::Result<()> {
             initial_screen,
             initial_repo,
             initial_run,
-            initial_onboarding_step
+            initial_onboarding_step,
+            flow_step
         ])
         .setup(|app| {
             let handle = app.handle().clone();

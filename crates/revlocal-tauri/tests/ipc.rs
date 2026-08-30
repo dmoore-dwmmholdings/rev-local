@@ -398,8 +398,36 @@ fn the_front_end_does_not_poll() -> Result<(), String> {
     )
     .map_err(|e| format!("reading ui/src/App.tsx: {e}"))?;
 
+    // One exception, delimited in the source and checked here rather than
+    // assumed: RL-1103's scripted flow capture drives the app by polling a
+    // command that reads the driver's labels file. It is not a live update and it
+    // is not the database — it is unreachable without `REVLOCAL_FLOW_FILE`, which
+    // only the capture harness sets.
+    //
+    // Delimited rather than allowed by name, because "allow one setTimeout" is a
+    // budget somebody spends. Everything outside the markers is still refused.
+    const BEGIN: &str = "BEGIN FLOW CAPTURE ONLY";
+    const END: &str = "END FLOW CAPTURE ONLY";
+
+    let begin = app.find(BEGIN);
+    let end = app.find(END);
+    assert_eq!(
+        begin.is_some(),
+        end.is_some(),
+        "the flow-capture markers must come in pairs; one without the other means \
+         the exempt region has no end and would swallow the rest of the file"
+    );
+
+    let outside: String = match (begin, end) {
+        (Some(b), Some(e)) => {
+            assert!(b < e, "the flow-capture markers are the wrong way round");
+            format!("{}{}", &app[..b], &app[e..])
+        }
+        _ => app.clone(),
+    };
+
     for polling in ["setInterval(", "setTimeout(", "fetch("] {
-        let code: String = app
+        let code: String = outside
             .lines()
             .filter(|line| {
                 !line.trim_start().starts_with("//") && !line.trim_start().starts_with('*')
@@ -409,9 +437,21 @@ fn the_front_end_does_not_poll() -> Result<(), String> {
         assert!(
             !code.contains(polling),
             "§15: the UI updates from events, never by polling — found `{polling}` \
-             in App.tsx"
+             in App.tsx outside the flow-capture region"
         );
     }
+
+    // And the exempt region really is guarded, rather than being a region that
+    // says so. A poller that ran for everybody would pass the check above.
+    if begin.is_some() {
+        let region = &app[begin.unwrap_or(0)..end.unwrap_or(app.len())];
+        assert!(
+            region.contains("fetchFlowStep"),
+            "the flow-capture region must be driven by `flow_step`, which returns \
+             nothing unless REVLOCAL_FLOW_FILE is set"
+        );
+    }
+
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   describe,
   approveAction,
@@ -8,6 +8,7 @@ import {
   fetchDashboard,
   fetchFindings,
   emptyDraft,
+  fetchFlowStep,
   fetchInitialOnboardingStep,
   fetchInitialRepo,
   fetchIsFirstRun,
@@ -53,7 +54,7 @@ import {
 } from './ipc';
 import { Dashboard } from './Dashboard';
 import { RunDetail } from './RunDetail';
-import { Nav, initialScreen, type Screen } from './Nav';
+import { Nav, SCREENS, initialScreen, type Screen } from './Nav';
 import { Approvals } from './Approvals';
 import { Findings } from './Findings';
 import { Repository } from './Repository';
@@ -173,6 +174,71 @@ export function App() {
         // leave somebody on the dashboard, not staring at an error.
       });
   }, []);
+
+  // BEGIN FLOW CAPTURE ONLY — not reachable without REVLOCAL_FLOW_FILE
+  //
+  // A scripted flow capture drives the app by writing to the file framewatch is
+  // tailing for captions (RL-1103). This is the ONE place in the app that polls,
+  // it exists only when `REVLOCAL_FLOW_FILE` is set, and it stops the moment the
+  // command reports no flow — §15's no-polling rule is about live updates from
+  // the database during normal operation, and a real user never enters this
+  // branch. The markers are what `the_front_end_does_not_poll` allows through;
+  // a timer added anywhere else still fails that test.
+  // The last step actually applied. Without it the poller re-applies the current
+  // step every tick, and `run:1` restarts its fetch four times a second — the
+  // screen never leaves its loading state, and the frame framewatch captions
+  // `run-1` shows "Select a run". A caption that is confidently wrong is the one
+  // thing this whole mechanism exists to prevent.
+  const appliedStep = useRef<string>('');
+
+  useEffect(() => {
+    if (!inTauri()) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = () => {
+      fetchFlowStep()
+        .then((wanted) => {
+          if (stop) return;
+          // `idle` means a flow is configured and has not named a step yet —
+          // keep polling. `""` means no flow at all, which never reaches here.
+          if (!wanted || wanted === 'idle') return;
+          if (wanted === appliedStep.current) return;
+          appliedStep.current = wanted;
+          // `run:1` and `repository:3` name what to open, the same spelling
+          // gui-verify.sh uses — a driver should not have to learn two.
+          const [name, id] = wanted.split(':');
+          if (STEPS.includes(name as Step)) {
+            setOnboarding(true);
+            setStep(name as Step);
+          } else if (SCREENS.includes(name as Screen)) {
+            setOnboarding(false);
+            if (name === 'run' && id) openRun(Number(id));
+            else if (name === 'repository' && id) setRepoId(Number(id));
+            setScreen(name as Screen);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!stop) timer = setTimeout(poll, 400);
+        });
+    };
+
+    // Only when a flow file is named. `flow_step` returns "" when there is no
+    // flow and `idle` when there is one waiting for its first label — the
+    // distinction is what lets a driver start the app before writing anything.
+    fetchFlowStep()
+      .then((first) => {
+        if (!stop && first) poll();
+      })
+      .catch(() => {});
+
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+  // END FLOW CAPTURE ONLY
 
   useEffect(reload, [reload]);
   useEffect(() => {
