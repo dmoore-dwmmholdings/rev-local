@@ -414,3 +414,55 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .repository section { margin-bottom: 1.2rem; }
 .repository h3 { font-size: 0.9rem; color: var(--dim); margin: 0 0 0.4rem; }
+
+/* --- settings (§15 screen 6) ---------------------------------------------- */
+
+.section-head { display: flex; align-items: baseline; gap: 1rem; }
+.settings section { margin-bottom: 1.4rem; }
+.settings h3 { font-size: 0.9rem; color: var(--dim); margin: 0 0 0.4rem; }
+
+.checks, .servers, .targets, .secrets, .unmapped-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.check strong { min-width: 12rem; }
+.check-fail .tag { color: var(--bad); border-color: var(--bad); }
+.check-warn .tag { color: var(--warn); border-color: var(--warn); }
+
+.remedy { color: var(--dim); font-size: 0.8rem; }
+
+.server, .target { padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+.server-head { display: flex; gap: 0.6rem; align-items: baseline; }
+
+.secrets li { padding: 0.15rem 0; }
+
+.mapping { width: 100%; border-collapse: collapse; }
+.mapping th { text-align: left; color: var(--dim); font-size: 0.75rem; text-transform: uppercase; }
+.mapping td { padding: 0.2rem 0; }
+
+.unmapped {
+  border-left: 2px solid var(--warn);
+  padding: 0.4rem 0 0.4rem 0.6rem;
+  margin: 0.4rem 0;
+}
+.map-row { display: flex; gap: 0.6rem; align-items: flex-end; }
+.map-row label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; color: var(--dim); }
+.map-row select {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.banner-warn { border-color: var(--warn); color: var(--warn); }

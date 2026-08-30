@@ -292,6 +292,100 @@ async fn edit_payload(id: i64, payload_json: String) -> Result<(), String> {
     .await
 }
 
+/// Where manual capability overrides live: beside the config (§11.2, RL-605).
+fn overrides_path() -> std::path::PathBuf {
+    config_path().parent().map_or_else(
+        || std::path::PathBuf::from("target-overrides.json"),
+        |dir| dir.join("target-overrides.json"),
+    )
+}
+
+/// The settings screen (§15 screen 6).
+///
+/// `doctor` is **not** run here. It shells out to every configured engine, and a
+/// screen that did that on every open would make opening settings the slowest
+/// thing in the app. The report starts empty — which the screen renders as
+/// "doctor has not run yet", not as a pass — and the button runs it.
+#[tauri::command]
+async fn settings() -> Result<serde_json::Value, String> {
+    let config = global_config();
+    let view = revlocal_daemon::settings_view::gather(
+        &config,
+        &config_path().display().to_string(),
+        &overrides_path().display().to_string(),
+        revlocal_daemon::doctor::DoctorReport::default(),
+    )
+    .await;
+
+    serde_json::to_value(view).map_err(|e| e.to_string())
+}
+
+/// Re-run `doctor` and return the whole screen with its output (§15 screen 6).
+///
+/// The whole view, not just the report: doctor checks the same engines and
+/// targets the rest of the screen describes, and refreshing half of it would
+/// leave two answers about one machine on screen at once.
+///
+/// `spawn_blocking` because `doctor::gather` shells out and this is an async
+/// command — blocking the runtime here would freeze the window while it ran,
+/// which §15 forbids: the app stays usable while work happens.
+#[tauri::command]
+async fn run_doctor() -> Result<serde_json::Value, String> {
+    let report = tokio::task::spawn_blocking(|| revlocal_daemon::doctor::gather(0))
+        .await
+        .map_err(|e| format!("doctor did not finish: {e}"))?;
+
+    let config = global_config();
+    let view = revlocal_daemon::settings_view::gather(
+        &config,
+        &config_path().display().to_string(),
+        &overrides_path().display().to_string(),
+        report,
+    )
+    .await;
+
+    serde_json::to_value(view).map_err(|e| e.to_string())
+}
+
+/// Bind a capability to a tool by hand (§11.2, RL-605).
+///
+/// The override is checked against the tool's own schema before it is written, so
+/// a name the server does not expose is refused here rather than at the first
+/// publish that needed it — which would be a review that silently did not publish.
+#[tauri::command]
+async fn set_override(
+    target: String,
+    capability: String,
+    tool: String,
+    args_json: String,
+) -> Result<(), String> {
+    let args: serde_json::Value =
+        serde_json::from_str(&args_json).map_err(|e| format!("the arguments are not JSON: {e}"))?;
+
+    revlocal_daemon::settings_view::set_override(
+        &global_config(),
+        &overrides_path().display().to_string(),
+        &target,
+        &capability,
+        &tool,
+        args,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Remove a manual binding. Resolution takes over again.
+#[tauri::command]
+fn clear_override(target: String, capability: String) -> Result<(), String> {
+    revlocal_daemon::settings_view::clear_override(
+        &overrides_path().display().to_string(),
+        &target,
+        &capability,
+    )
+    .map(|_removed| ())
+    .map_err(|e| e.to_string())
+}
+
 /// One repository's screen (§15 screen 2).
 ///
 /// The webhook listener port comes from §13.1's global config, because the
@@ -563,6 +657,10 @@ fn run() -> tauri::Result<()> {
             approve_run,
             reject_action,
             edit_payload,
+            settings,
+            run_doctor,
+            set_override,
+            clear_override,
             get_repository,
             save_repo_config,
             list_findings,

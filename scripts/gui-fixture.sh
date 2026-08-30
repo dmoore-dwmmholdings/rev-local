@@ -79,4 +79,37 @@ INSERT INTO publish_action
    'awaiting_approval',0,'2026-01-01T01:05:00Z');
 "
 
+# §13.1's config, beside the database where the app looks for it. The MCP server
+# is the repo's own mock (fixtures/mock-mcp) running the `andare-renamed` profile:
+# it exposes `create_work_item` and `transition_issue`, so two of Andare's four
+# capabilities bind and two genuinely do not. REVL-96 wants a capture showing an
+# unmapped capability, and a fixture that mapped everything could not produce one.
+#
+# The profile is chosen by an environment variable and `[mcpServers.*]` has no env
+# map, so the command is `env` — what a person would type, and no product change
+# to accommodate a fixture.
+#
+# The Authorization header is a keychain *reference*. A literal would put a fake
+# secret in a committed file, and the screen exists to discourage exactly that.
+cat > "$(dirname "$DB")/config.toml" <<TOML
+[global]
+webhook_port = 0
+
+[budgets]
+daily_tokens_per_repo = 2000000
+daily_runs_per_repo = 200
+daily_cost_usd_per_repo = 0
+on_exhausted = "pause"
+
+[mcpServers.andare]
+type = "stdio"
+command = "env"
+args = ["MOCK_MCP_PROFILE=$ROOT/fixtures/mock-mcp/profiles/andare-renamed.json", "node", "$ROOT/fixtures/mock-mcp/server.js"]
+
+[mcpServers.trama]
+type = "http"
+url = "https://trama.example.invalid/mcp"
+headers = { Authorization = "{{keychain:trama-token}}" }
+TOML
+
 echo "gui-fixture: $DB"

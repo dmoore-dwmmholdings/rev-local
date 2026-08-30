@@ -51,7 +51,7 @@ if [[ ${#SCREENS[@]} -eq 0 ]]; then
   exit 2
 fi
 if [[ "${SCREENS[0]}" == "all" ]]; then
-  SCREENS=(dashboard repository:1 repository:3 findings approvals run)
+  SCREENS=(dashboard repository:1 repository:3 findings approvals settings run)
 fi
 
 if ! command -v framewatch >/dev/null 2>&1; then

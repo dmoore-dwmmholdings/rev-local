@@ -388,3 +388,120 @@ export function fetchRepository(repoId: number): Promise<RepositoryView> {
 export function saveRepoConfig(repoId: number, configJson: string): Promise<string> {
   return invoke<string>('save_repo_config', { repoId, configJson });
 }
+
+// --- settings (RL-1110, SPEC §15 screen 6) ----------------------------------
+
+/**
+ * That a secret is configured, and where it comes from. Never what it is.
+ *
+ * There is no field here that could hold a secret value, which is the property
+ * that makes this safe rather than careful: a redacted-on-render secret has
+ * already crossed the boundary, and every future renderer has to remember.
+ */
+export type SecretPresence = {
+  header: string;
+  source: string;
+  /** A keychain entry's name — not a secret, and the useful half. */
+  keychain_entry?: string;
+  advice?: string;
+};
+
+export type ServerPanel = {
+  id: string;
+  transport: string;
+  endpoint: string;
+  secrets: SecretPresence[];
+  tools: string[];
+  summary: string;
+  contacted: boolean;
+  error?: string;
+};
+
+export type BoundRow = {
+  capability: string;
+  tool: string;
+  /** ADR 0015: "you told us to" and "we worked it out" are different answers. */
+  from_override: boolean;
+};
+
+export type UnmappedRow = {
+  capability: string;
+  /** What was looked for. */
+  candidates: string[];
+  /** What the server has instead — the list an override picks from. */
+  available: string[];
+  explanation: string;
+};
+
+export type TargetPanel = {
+  target: string;
+  server: string;
+  bound: BoundRow[];
+  unmapped: UnmappedRow[];
+  /** When false the mapping is unknown, not unmapped. */
+  server_contacted: boolean;
+};
+
+export type DoctorCheck = {
+  name: string;
+  health: 'ok' | 'warn' | 'fail' | 'not_needed';
+  detail: string;
+  remediation?: string;
+};
+
+export type DoctorReport = {
+  prerequisites: DoctorCheck[];
+  engines: DoctorCheck[];
+  targets: DoctorCheck[];
+  platform: DoctorCheck[];
+};
+
+export type Limits = {
+  daily_tokens_per_repo: number;
+  daily_runs_per_repo: number;
+  daily_cost_usd_per_repo: number;
+  on_exhausted: string;
+  transcript_retention_days: number;
+};
+
+export type SettingsView = {
+  doctor: DoctorReport;
+  servers: ServerPanel[];
+  targets: TargetPanel[];
+  limits: Limits;
+  config_path: string;
+  overrides_path: string;
+  target_errors: string[];
+};
+
+/** Every check in report order — the four groups are presentation, not meaning. */
+export function allChecks(report: DoctorReport): DoctorCheck[] {
+  return [...report.prerequisites, ...report.engines, ...report.targets, ...report.platform];
+}
+
+/** How many capabilities are unmapped across every target. */
+export function unmappedCount(view: SettingsView): number {
+  return view.targets.reduce((total, t) => total + t.unmapped.length, 0);
+}
+
+export function fetchSettings(): Promise<SettingsView> {
+  return invoke<SettingsView>('settings');
+}
+
+/** Re-run doctor and return the settings with its fresh output. */
+export function runDoctor(): Promise<SettingsView> {
+  return invoke<SettingsView>('run_doctor');
+}
+
+export function setOverride(
+  target: string,
+  capability: string,
+  tool: string,
+  argsJson: string,
+): Promise<void> {
+  return invoke<void>('set_override', { target, capability, tool, argsJson });
+}
+
+export function clearOverride(target: string, capability: string): Promise<void> {
+  return invoke<void>('clear_override', { target, capability });
+}

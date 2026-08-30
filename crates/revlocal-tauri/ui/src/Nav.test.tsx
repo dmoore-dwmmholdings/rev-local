@@ -26,14 +26,24 @@ describe('nav', () => {
     expect(disabled).toBe(UNBUILT.size);
   });
 
-  it('does not navigate to an unbuilt screen', () => {
-    // A disabled tab that still fired would land somebody on a blank view and
-    // leave them thinking the screen is broken rather than absent.
+  it('has every screen §15 names built', () => {
+    // This used to assert that clicking `Settings` did nothing, because it was
+    // the last one unbuilt. All six exist now, so the honest test is that none
+    // of them is disabled — the same fact, stated the way round it is now true.
+    render(<Nav screen="dashboard" onSelect={vi.fn()} />);
+
+    expect(UNBUILT.size).toBe(0);
+    for (const button of screen.getAllByRole('button')) {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    }
+  });
+
+  it('navigates to every screen, including the last one built', () => {
     const onSelect = vi.fn();
     render(<Nav screen="dashboard" onSelect={onSelect} />);
 
     screen.getByText('Settings').click();
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith('settings');
   });
 
   it('navigates to a built one', () => {

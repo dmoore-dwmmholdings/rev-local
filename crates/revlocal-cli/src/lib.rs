@@ -11,7 +11,13 @@
 pub mod backfill;
 pub mod control;
 pub mod decide;
-pub mod doctor;
+/// `doctor` lives in the daemon so the desktop app can run it too (§15 screen 6).
+///
+/// Re-exported rather than moved-and-forgotten: `revlocal doctor` is §14's
+/// command and this is still where the CLI reaches for it. The alternative was
+/// the Tauri crate depending on `revlocal-cli`, which is a front end depending on
+/// another front end — the shape RL-1105 already rejected once.
+pub use revlocal_daemon::doctor;
 pub mod exit;
 pub mod export;
 pub mod hooks;

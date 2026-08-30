@@ -17,6 +17,7 @@ globset = { workspace = true }
 handlebars = { workspace = true }
 revlocal-core = { workspace = true }
 revlocal-engine = { workspace = true }
+revlocal-mcp = { workspace = true }
 revlocal-store = { workspace = true }
 revlocal-vcs = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }

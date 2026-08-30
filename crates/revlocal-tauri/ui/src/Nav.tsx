@@ -31,8 +31,8 @@ export const SCREEN_LABELS: Record<Screen, string> = {
   settings: 'Settings',
 };
 
-/** Screens that are specified but not built yet. */
-export const UNBUILT: ReadonlySet<Screen> = new Set<Screen>(['settings']);
+/** Screens that are specified but not built yet. All six are built. */
+export const UNBUILT: ReadonlySet<Screen> = new Set<Screen>();
 
 export function Nav({
   screen,

@@ -10,12 +10,16 @@ import {
   fetchInitialRepo,
   fetchInitialScreen,
   fetchRepository,
+  fetchSettings,
   fetchRun,
   fetchTranscript,
   fileToAndare,
   rejectAction,
   retryTarget,
+  runDoctor,
   saveRepoConfig,
+  setOverride,
+  clearOverride,
   suppressFinding,
   inTauri,
   invoke,
@@ -30,6 +34,7 @@ import {
   type QueuedAction,
   type RepositoryView as RepositoryData,
   type RunView as RunViewData,
+  type SettingsView as SettingsData,
   type Mode,
   type UiEvent,
 } from './ipc';
@@ -39,6 +44,7 @@ import { Nav, initialScreen, type Screen } from './Nav';
 import { Approvals } from './Approvals';
 import { Findings } from './Findings';
 import { Repository } from './Repository';
+import { Settings } from './Settings';
 
 /** One row in the activity feed, with the moment it arrived. */
 type Entry = { event: UiEvent; at: Date; seq: number };
@@ -65,6 +71,8 @@ export function App() {
   const [filter, setFilter] = useState<FindingFilter>({});
   const [repository, setRepository] = useState<RepositoryData | null>(null);
   const [repoId, setRepoId] = useState<number | null>(null);
+  const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [doctorRunning, setDoctorRunning] = useState(false);
 
   useEffect(() => {
     let seq = 0;
@@ -364,6 +372,67 @@ export function App() {
     reloadRepository(repoId);
   }
 
+  // Read when the screen opens. Contacting every MCP server is a real cost, so
+  // it happens on demand rather than on a timer — and §15 forbids polling anyway.
+  const reloadSettings = useCallback(() => {
+    if (!inTauri()) return;
+    fetchSettings()
+      .then(setSettings)
+      .catch((error: unknown) => setNotice(`Could not load settings — ${messageOf(error)}`));
+  }, []);
+
+  useEffect(() => {
+    if (screen === 'settings') reloadSettings();
+  }, [screen, reloadSettings]);
+
+  async function rerunDoctor() {
+    setDoctorRunning(true);
+    try {
+      // The whole view comes back, not just the report: doctor checks the same
+      // engines and targets the rest of the screen describes, and refreshing
+      // half of it would leave two answers about one machine on screen.
+      setSettings(await runDoctor());
+    } catch (error: unknown) {
+      setNotice(`Could not run doctor — ${messageOf(error)}`);
+    } finally {
+      setDoctorRunning(false);
+    }
+  }
+
+  async function mapCapability(target: string, capability: string, tool: string) {
+    // §15: an action that changes what rev-local will send names what it changes.
+    const ok = window.confirm(
+      `Bind ${target}'s "${capability}" to the tool "${tool}"?\n\n` +
+        'rev-local will call that tool whenever it performs this capability. The ' +
+        "tool's own required arguments are checked now, not at the first publish.",
+    );
+    if (!ok) return;
+    try {
+      // Empty arguments: the server's schema decides what is required, and it
+      // refuses the binding if this is not enough. Better a refusal here than a
+      // publish that silently did not happen.
+      await setOverride(target, capability, tool, '{}');
+      reloadSettings();
+    } catch (error: unknown) {
+      setNotice(`Could not map ${capability} — ${messageOf(error)}`);
+    }
+  }
+
+  async function unmapCapability(target: string, capability: string) {
+    const ok = window.confirm(
+      `Remove your manual binding for ${target}'s "${capability}"?\n\n` +
+        'rev-local goes back to resolving it against the tools the server exposes, ' +
+        'which may leave it unmapped.',
+    );
+    if (!ok) return;
+    try {
+      await clearOverride(target, capability);
+      reloadSettings();
+    } catch (error: unknown) {
+      setNotice(`Could not unmap ${capability} — ${messageOf(error)}`);
+    }
+  }
+
   async function killSwitch() {
     // §15: a destructive action names its target. There is exactly one target
     // here — everything — and the confirmation says so rather than asking "are
@@ -439,6 +508,16 @@ export function App() {
             onOpenRun={openRun}
             onSuppress={suppressOne}
             onFile={fileOne}
+          />
+        )}
+
+        {screen === 'settings' && (
+          <Settings
+            view={settings}
+            busy={doctorRunning}
+            onRunDoctor={rerunDoctor}
+            onMap={mapCapability}
+            onUnmap={unmapCapability}
           />
         )}
 
