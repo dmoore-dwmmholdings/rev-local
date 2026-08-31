@@ -53,6 +53,16 @@ pub enum StoreError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    /// The directory containing the database could not be created.
+    #[error("could not create database directory {path}: {source}")]
+    DatabaseDirectory {
+        /// Directory SQLite needs before it can create the database file.
+        path: std::path::PathBuf,
+        /// The operating-system error that prevented creation.
+        #[source]
+        source: std::io::Error,
+    },
+
     /// A migration could not be applied or reverted.
     #[error("migration error: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),

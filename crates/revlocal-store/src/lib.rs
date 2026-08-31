@@ -49,6 +49,7 @@ pub type Pool = sqlx::SqlitePool;
 /// - `busy_timeout` turns normal write contention into a wait rather than an
 ///   error.
 pub async fn open(path: &Path) -> Result<Pool> {
+    ensure_parent_directory(path)?;
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -66,6 +67,7 @@ pub async fn open(path: &Path) -> Result<Pool> {
 /// For the migration tests and for `revlocal db` subcommands that need to inspect
 /// a database before deciding what to do with it.
 pub async fn open_unmigrated(path: &Path) -> Result<Pool> {
+    ensure_parent_directory(path)?;
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -74,6 +76,26 @@ pub async fn open_unmigrated(path: &Path) -> Result<Pool> {
         .busy_timeout(BUSY_TIMEOUT);
 
     Ok(Pool::connect_with(options).await?)
+}
+
+/// Create the parent directory a fresh SQLite database needs.
+///
+/// SQLite's `create_if_missing` creates the database *file*, but not its parent
+/// directories. Keeping this at the store boundary makes a first run work for
+/// the desktop app, the CLI, and callers that override the database location.
+fn ensure_parent_directory(path: &Path) -> Result<()> {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+
+    std::fs::create_dir_all(parent).map_err(|source| StoreError::DatabaseDirectory {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    Ok(())
 }
 
 /// Apply every migration that has not been applied yet.

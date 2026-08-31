@@ -82,6 +82,25 @@ mod migrations {
     }
 
     #[tokio::test]
+    async fn creates_missing_parent_directories_for_a_fresh_database() {
+        let dir = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let parent = dir.path().join("Library/Application Support/rev-local");
+        let path = parent.join("rev-local.db");
+
+        assert!(
+            !parent.exists(),
+            "test setup must begin without the data directory"
+        );
+        let pool = open(&path).await.unwrap_or_else(|e| panic!("open: {e}"));
+        pool.close().await;
+
+        assert!(
+            path.is_file(),
+            "open must create the database in its new parent directory"
+        );
+    }
+
+    #[tokio::test]
     async fn journal_mode_is_wal() {
         let (_dir, path) = scratch().unwrap_or_else(|e| panic!("temp dir: {e}"));
         let pool = open(&path).await.unwrap_or_else(|e| panic!("open: {e}"));
