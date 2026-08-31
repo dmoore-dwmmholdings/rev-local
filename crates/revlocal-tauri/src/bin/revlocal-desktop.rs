@@ -488,11 +488,12 @@ async fn discover_for(pool: &revlocal_store::Pool, name: &str) -> Result<(), Str
 #[tauri::command]
 async fn settings() -> Result<serde_json::Value, String> {
     let config = global_config();
-    let view = revlocal_daemon::settings_view::gather(
+    let view = revlocal_daemon::settings_view::gather_with_resolver(
         &config,
         &config_path().display().to_string(),
         &overrides_path().display().to_string(),
         revlocal_daemon::doctor::DoctorReport::default(),
+        &revlocal_mcp::MacKeychain,
     )
     .await;
 
@@ -515,15 +516,116 @@ async fn run_doctor() -> Result<serde_json::Value, String> {
         .map_err(|e| format!("doctor did not finish: {e}"))?;
 
     let config = global_config();
-    let view = revlocal_daemon::settings_view::gather(
+    let view = revlocal_daemon::settings_view::gather_with_resolver(
         &config,
         &config_path().display().to_string(),
         &overrides_path().display().to_string(),
         report,
+        &revlocal_mcp::MacKeychain,
     )
     .await;
 
     serde_json::to_value(view).map_err(|e| e.to_string())
+}
+
+/// Configure the known HTTP MCP services using bearer values held only in Keychain.
+///
+/// Endpoint locations are product defaults discovered from this machine's existing
+/// MCP configuration. The config file stores only deferred Keychain references.
+#[tauri::command]
+fn configure_mcp(andare_bearer: String, trama_bearer: String) -> Result<(), String> {
+    if andare_bearer.trim().is_empty() || trama_bearer.trim().is_empty() {
+        return Err("enter a bearer token for both Andare and Trama".to_owned());
+    }
+
+    store_keychain_bearer("andare-bearer", &andare_bearer)?;
+    store_keychain_bearer("trama-bearer", &trama_bearer)?;
+
+    let mut config = global_config();
+    for (id, url, keychain_entry) in [
+        (
+            "andare",
+            "https://us-central1-business-suite-7996a.cloudfunctions.net/claudemcp",
+            "andare-bearer",
+        ),
+        (
+            "trama",
+            "https://us-central1-business-suite-7996a.cloudfunctions.net/tramamcp",
+            "trama-bearer",
+        ),
+    ] {
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert(
+            "Authorization".to_owned(),
+            revlocal_core::SecretRef::parse(&format!("{{{{keychain:{keychain_entry}}}}}")),
+        );
+        config.mcp_servers.insert(
+            id.to_owned(),
+            revlocal_core::McpServerSettings {
+                transport: "http".to_owned(),
+                command: None,
+                args: Vec::new(),
+                url: Some(url.to_owned()),
+                headers,
+                extra: revlocal_core::config::Extra::default(),
+            },
+        );
+    }
+
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create the configuration directory: {error}"))?;
+    }
+    let document = toml::to_string_pretty(&config)
+        .map_err(|error| format!("could not encode the MCP configuration: {error}"))?;
+    std::fs::write(&path, document)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))
+}
+
+/// Put a bearer into the login Keychain through stdin, never an argument.
+#[cfg(target_os = "macos")]
+fn store_keychain_bearer(account: &str, bearer: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("security")
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            "rev-local",
+            "-a",
+            account,
+            "-w",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("could not access the macOS Keychain: {error}"))?;
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err("could not open the private Keychain input channel".to_owned());
+    };
+    stdin
+        .write_all(bearer.as_bytes())
+        .map_err(|error| format!("could not save the bearer in Keychain: {error}"))?;
+    let status = child
+        .wait()
+        .map_err(|error| format!("could not finish the Keychain update: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(
+            "macOS Keychain rejected the bearer; unlock your login keychain and try again"
+                .to_owned(),
+        )
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn store_keychain_bearer(_account: &str, _bearer: &str) -> Result<(), String> {
+    Err("bearer setup is currently available on macOS only".to_owned())
 }
 
 /// Bind a capability to a tool by hand (§11.2, RL-605).
@@ -909,6 +1011,7 @@ fn run() -> tauri::Result<()> {
             onboard_first_review,
             settings,
             run_doctor,
+            configure_mcp,
             set_override,
             clear_override,
             get_repository,

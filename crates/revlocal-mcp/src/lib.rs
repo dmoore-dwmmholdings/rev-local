@@ -21,7 +21,8 @@ pub use discovery::{
     Discovery, DiscoveryError, HealthReport, McpClient, ServerHealth, ServerState,
 };
 pub use http::{
-    parse_sse, HttpClient, HttpEndpoint, HttpError, NoSecrets, SecretResolver, SESSION_HEADER,
+    parse_sse, HttpClient, HttpEndpoint, HttpError, MacKeychain, NoSecrets, SecretResolver,
+    SESSION_HEADER,
 };
 pub use overrides::{parse_arg, Override, OverrideError, Overrides};
 pub use protocol::{

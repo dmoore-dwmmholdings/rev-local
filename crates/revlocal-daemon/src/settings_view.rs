@@ -388,6 +388,20 @@ pub async fn gather(
     overrides_path: &str,
     doctor: DoctorReport,
 ) -> SettingsView {
+    gather_with_resolver(config, config_path, overrides_path, doctor, &NoSecrets).await
+}
+
+/// Assemble settings while resolving configured secrets through `resolver`.
+///
+/// The default [`gather`] uses [`NoSecrets`] so unit tests never touch a real
+/// keychain. Desktop callers supply the platform resolver at the application edge.
+pub async fn gather_with_resolver(
+    config: &GlobalConfig,
+    config_path: &str,
+    overrides_path: &str,
+    doctor: DoctorReport,
+    resolver: &dyn revlocal_mcp::SecretResolver,
+) -> SettingsView {
     let overrides = Overrides::load(std::path::Path::new(overrides_path)).unwrap_or_default();
 
     let mut discovery = Discovery::new();
@@ -423,7 +437,7 @@ pub async fn gather(
             continue;
         }
 
-        match discovery.tools(id, &NoSecrets).await {
+        match discovery.tools(id, resolver).await {
             Some(Ok(tools)) => {
                 let tools = tools.to_vec();
                 state_by_server.insert(

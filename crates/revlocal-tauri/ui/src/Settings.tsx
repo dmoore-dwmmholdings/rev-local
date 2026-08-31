@@ -206,6 +206,7 @@ export function Settings({
   onRunDoctor,
   onMap,
   onUnmap,
+  onConfigureMcp = () => {},
   onRunOnboarding,
 }: {
   view: SettingsView | null;
@@ -213,6 +214,7 @@ export function Settings({
   onRunDoctor: () => void;
   onMap: (target: string, capability: string, tool: string) => void;
   onUnmap: (target: string, capability: string) => void;
+  onConfigureMcp?: () => void;
   onRunOnboarding: () => void;
 }) {
   if (!view) return <p className="empty">Loading settings.</p>;
@@ -235,6 +237,30 @@ export function Settings({
           {error}
         </p>
       ))}
+
+      <section>
+        <div className="section-head">
+          <h3>MCP servers</h3>
+          <button onClick={onConfigureMcp} disabled={busy}>
+            Set up Andare and Trama
+          </button>
+        </div>
+        <p className="dim">
+          Uses this machine&apos;s known endpoints. You enter separate bearer tokens once; they are
+          saved in macOS Keychain, never in the configuration file.
+        </p>
+        {view.servers.length === 0 ? (
+          <p className="empty">
+            No MCP servers are configured in <span className="mono">{view.config_path}</span>.
+          </p>
+        ) : (
+          <ul className="servers">
+            {view.servers.map((s) => (
+              <Server key={s.id} server={s} />
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* Ahead of doctor and the server list, because it is the only part of this
           screen with an action attached. §15 lists what the screen contains, not
@@ -267,21 +293,6 @@ export function Settings({
           <ul className="checks">
             {checks.map((c) => (
               <Check key={c.name} check={c} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section>
-        <h3>MCP servers</h3>
-        {view.servers.length === 0 ? (
-          <p className="empty">
-            No MCP servers are configured in <span className="mono">{view.config_path}</span>.
-          </p>
-        ) : (
-          <ul className="servers">
-            {view.servers.map((s) => (
-              <Server key={s.id} server={s} />
             ))}
           </ul>
         )}

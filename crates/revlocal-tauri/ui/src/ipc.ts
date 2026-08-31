@@ -513,6 +513,11 @@ export function runDoctor(): Promise<SettingsView> {
   return invoke<SettingsView>('run_doctor');
 }
 
+/** Configure the built-in Andare and Trama HTTP endpoints with Keychain bearers. */
+export function configureMcp(andareBearer: string, tramaBearer: string): Promise<void> {
+  return invoke<void>('configure_mcp', { andareBearer, tramaBearer });
+}
+
 export function setOverride(
   target: string,
   capability: string,

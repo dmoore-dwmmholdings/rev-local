@@ -100,6 +100,38 @@ impl SecretResolver for NoSecrets {
     }
 }
 
+/// Resolves entries from the macOS login keychain.
+///
+/// `security` is invoked without a secret on its command line. Its output is
+/// retained only long enough to form the HTTP request and never appears in an
+/// error, log, or debug representation.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MacKeychain;
+
+impl SecretResolver for MacKeychain {
+    fn resolve(&self, name: &str) -> Result<String, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let output = std::process::Command::new("security")
+                .args(["find-generic-password", "-s", "rev-local", "-a", name, "-w"])
+                .output()
+                .map_err(|error| format!("could not read the macOS Keychain: {error}"))?;
+            if !output.status.success() {
+                return Err("entry is missing or macOS denied access".to_owned());
+            }
+            String::from_utf8(output.stdout)
+                .map(|value| value.trim_end_matches(['\r', '\n']).to_owned())
+                .map_err(|_| "the Keychain returned a non-text value".to_owned())
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = name;
+            Err("this build has no OS keychain integration yet".to_owned())
+        }
+    }
+}
+
 /// What can go wrong over HTTP.
 ///
 /// **No variant carries a header value.** That is structural, not a convention: a

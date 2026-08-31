@@ -27,6 +27,7 @@ import {
   rejectAction,
   retryTarget,
   runDoctor,
+  configureMcp,
   saveRepoConfig,
   setOverride,
   clearOverride,
@@ -490,6 +491,26 @@ export function App() {
     }
   }
 
+  async function setUpMcp() {
+    // These are deliberately local variables, not React state: retaining a bearer
+    // after the Keychain write would keep it alive in the page for no benefit.
+    const andareBearer = window.prompt('Enter the Andare bearer token');
+    if (andareBearer === null) return;
+    const tramaBearer = window.prompt('Enter the Trama bearer token');
+    if (tramaBearer === null) return;
+
+    setDoctorRunning(true);
+    try {
+      await configureMcp(andareBearer, tramaBearer);
+      await rerunDoctor();
+      setNotice('Andare and Trama are configured. Their bearer tokens are stored in Keychain.');
+    } catch (error: unknown) {
+      setNotice(`Could not configure MCP servers — ${messageOf(error)}`);
+    } finally {
+      setDoctorRunning(false);
+    }
+  }
+
   async function mapCapability(target: string, capability: string, tool: string) {
     // §15: an action that changes what rev-local will send names what it changes.
     const ok = window.confirm(
@@ -741,6 +762,7 @@ export function App() {
             onRunDoctor={rerunDoctor}
             onMap={mapCapability}
             onUnmap={unmapCapability}
+            onConfigureMcp={setUpMcp}
             onRunOnboarding={startOnboarding}
           />
         )}
