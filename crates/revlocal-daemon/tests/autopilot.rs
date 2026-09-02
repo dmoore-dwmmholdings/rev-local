@@ -733,3 +733,77 @@ async fn an_action_awaiting_approval(
         .await?
         .id)
 }
+
+// --- the configured limits are the ones used (RL-1524) ----------------------
+
+#[tokio::test]
+async fn the_configured_concurrency_ceiling_is_the_one_that_applies(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Every call site used `DEFAULT_MAX_CONCURRENT_RUNS` rather than the config,
+    // so `max_concurrent_runs` did nothing. The existing tests missed it by
+    // asserting the constant equals its documented value — which it does, and
+    // which says nothing about whether a configured value is honoured.
+    let fixture = install().await?;
+    for (n, body) in [(1, "let a = 1;"), (2, "let b = 2;"), (3, "let c = 3;")] {
+        commit(
+            &fixture.checkout,
+            &format!("fn main() {{\n    {body}\n}}\n"),
+            &format!("change {n}"),
+        )?;
+    }
+
+    let mut config = config();
+    config.global.max_concurrent_runs = 1;
+
+    let report = autopilot::tick(
+        &fixture.pool,
+        &config,
+        &NullSink,
+        &fixture.data_dir(),
+        &[],
+        at(1),
+        &CancellationToken::new(),
+    )
+    .await?;
+
+    assert_eq!(
+        report.reviewed.len(),
+        1,
+        "a ceiling of one means one review per pass: {report:?}"
+    );
+    assert!(
+        report.still_queued > 0,
+        "and the rest stay queued rather than being dropped: {report:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_ceiling_of_zero_falls_back_rather_than_stopping_everything(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // An unset field must not become a loop that reviews nothing while reporting
+    // itself healthy.
+    let fixture = install().await?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    let mut config = config();
+    config.global.max_concurrent_runs = 0;
+
+    let report = autopilot::tick(
+        &fixture.pool,
+        &config,
+        &NullSink,
+        &fixture.data_dir(),
+        &[],
+        at(1),
+        &CancellationToken::new(),
+    )
+    .await?;
+
+    assert!(!report.reviewed.is_empty(), "{report:?}");
+    Ok(())
+}

@@ -338,7 +338,7 @@ pub async fn tick(
             .push(format!("run #{} was given up on — {reason}", run.get()));
     }
 
-    if scheduler_says_discover(pool, &repos, at).await? {
+    if scheduler_says_discover(pool, config, &repos, at).await? {
         for repo in &repos {
             report.passes.push(discover_one(pool, repo, at).await);
         }
@@ -364,19 +364,12 @@ pub async fn tick(
         }
     }
 
-    let drained = crate::executor::drain(
-        pool,
-        config,
-        sink,
-        data_dir,
-        DEFAULT_MAX_CONCURRENT_RUNS,
-        at,
-        cancel,
-    )
-    .await
-    .map_err(|error| AutopilotError::Execute {
-        detail: error.to_string(),
-    })?;
+    let drained =
+        crate::executor::drain(pool, config, sink, data_dir, slot_limit(config), at, cancel)
+            .await
+            .map_err(|error| AutopilotError::Execute {
+                detail: error.to_string(),
+            })?;
     report.reviewed = drained.finished;
     report.notes.extend(drained.held);
 
@@ -563,12 +556,32 @@ async fn sweep(pool: &Pool, config: &GlobalConfig, at: Timestamp) -> Result<u64,
     Ok(deleted)
 }
 
+/// §4.3's concurrency ceiling, as configured.
+///
+/// `DEFAULT_MAX_CONCURRENT_RUNS` is the *default* the config falls back to, which
+/// is what the constant was always for. Every call site used the constant
+/// directly instead, so setting `max_concurrent_runs` did nothing at all — and
+/// the tests did not catch it because they assert the constant equals its
+/// documented value rather than that a configured value is honoured (RL-1524).
+///
+/// Zero would mean a loop that reviews nothing while reporting itself healthy, so
+/// it is read as "unset" and falls back rather than being obeyed.
+fn slot_limit(config: &GlobalConfig) -> usize {
+    let configured = usize::try_from(config.global.max_concurrent_runs).unwrap_or(usize::MAX);
+    if configured == 0 {
+        DEFAULT_MAX_CONCURRENT_RUNS
+    } else {
+        configured
+    }
+}
+
 /// Ask the scheduler whether this tick should poll remotes at all.
 ///
 /// The decision lives in `Scheduler::tick` and its ordering rules are asserted
 /// there; this gathers the world it needs and reads the answer.
 async fn scheduler_says_discover(
     pool: &Pool,
+    config: &GlobalConfig,
     repos: &[Repo],
     at: Timestamp,
 ) -> Result<bool, AutopilotError> {
@@ -580,7 +593,11 @@ async fn scheduler_says_discover(
             at,
         ));
     }
-    let due = bus.due_passes(at + chrono::Duration::milliseconds(2_000));
+    // §7.1's window, from the config. This was a hardcoded 2000ms copied out of
+    // `watch.rs` when the loop moved here, which silently duplicated a setting
+    // that already existed (RL-1524).
+    let window = i64::try_from(config.global.coalesce_window_ms).unwrap_or(i64::MAX);
+    let due = bus.due_passes(at + chrono::Duration::milliseconds(window));
 
     let mut budgets: BTreeMap<RepoId, BudgetVerdict> = BTreeMap::new();
     for repo in repos {
@@ -597,7 +614,7 @@ async fn scheduler_says_discover(
     let world = WorldState {
         killed: false,
         running: 0,
-        slot_limit: DEFAULT_MAX_CONCURRENT_RUNS,
+        slot_limit: slot_limit(config),
         due,
         backfill_waiting: Vec::new(),
         budgets,
