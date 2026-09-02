@@ -334,19 +334,55 @@ pub async fn drain(
 
     let mut report = ExecutorReport::default();
 
-    for run in queued.iter().rev().take(limit) {
+    // The limit counts runs that **started**, not runs considered.
+    //
+    // `take(limit)` counted both, and a held run — missing checkout, disabled
+    // repository, over budget — is not executed and stays `Queued`. So it was the
+    // oldest again on the next tick, and the one after, consuming a slot it never
+    // used. On the machine this was written for that was the entire queue: fifty-
+    // one runs, the oldest two belonging to a repository whose checkout is gone,
+    // `max_concurrent_runs` of 2, and therefore nothing else ever ran. The loop
+    // ticked every minute and did nothing, which is the symptom this whole
+    // milestone started from.
+    //
+    // Refusing a run costs a database read and no engine, so walking past held
+    // ones is cheap, and it is what lets the queue drain (RL-1534).
+    let mut started = 0_usize;
+    for run in queued.iter().rev() {
+        if started >= limit {
+            break;
+        }
         if cancel.is_cancelled() {
             report.held.push(format!(
                 "run #{}: cancelled before it started",
                 run.id.get()
             ));
-            continue;
+            // Every remaining run is about to be refused for the same reason, and
+            // saying so once beats saying it two hundred times.
+            break;
         }
 
         match execute_one(pool, config, sink, data_dir, run, at, cancel).await? {
-            Ok(outcome) => report.finished.push(outcome),
+            Ok(outcome) => {
+                report.finished.push(outcome);
+                started += 1;
+            }
             Err(held) => report.held.push(held),
         }
+    }
+
+    // §18 the other way round: a report nobody can read has dropped the thing it
+    // was reporting. Now that a tick walks past held runs, one broken repository
+    // can produce dozens of identical lines and bury everything else — so a few
+    // are shown and the rest are counted, the same shape the queue panel uses for
+    // waiting runs.
+    const SHOW_HELD: usize = 5;
+    if report.held.len() > SHOW_HELD {
+        let hidden = report.held.len() - SHOW_HELD;
+        report.held.truncate(SHOW_HELD);
+        report.held.push(format!(
+            "and {hidden} more run(s) held for the same kinds of reason\n  try: `revlocal runs list --status queued` for all of them"
+        ));
     }
 
     Ok(report)

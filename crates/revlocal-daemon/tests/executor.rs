@@ -984,3 +984,151 @@ async fn a_change(fixture: &Fixture) -> Result<revlocal_core::Change, String> {
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "the discovered change is not in the store".to_owned())
 }
+
+/// A run that cannot start must not hold up the ones behind it.
+#[tokio::test]
+async fn a_held_run_does_not_consume_a_slot() {
+    // `take(limit)` counted runs *considered*, and a held run stays queued — so it
+    // was the oldest again next tick, forever. On a real install that was the
+    // whole queue: fifty-one runs behind two that could never start (RL-1534).
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+
+    // A disabled repository whose runs are queued first, and can never run.
+    let blocked = RepoStore::new(&fixture.pool)
+        .insert(&revlocal_core::Repo {
+            id: revlocal_core::RepoId::new(0),
+            name: "blocked".to_owned(),
+            kind: revlocal_core::RepoKind::Git,
+            local_path: fixture.repo.local_path.clone(),
+            remote_url: None,
+            default_branch: Some("main".to_owned()),
+            engine: revlocal_core::EngineKind::Mock,
+            autonomy: AutonomyMode::Auto,
+            enabled: false,
+            config_json: "{}".to_owned(),
+            created_at: at(0),
+            updated_at: at(0),
+        })
+        .await
+        .expect("insert");
+
+    let change = ChangeStore::new(&fixture.pool)
+        .upsert(&revlocal_core::Change {
+            id: revlocal_core::ChangeId::new(0),
+            repo_id: blocked.id,
+            kind: ChangeKind::Commit,
+            external_id: "blocked-change".to_owned(),
+            title: None,
+            author_name: None,
+            author_email: None,
+            authored_at: None,
+            branch: Some("main".to_owned()),
+            base_ref: None,
+            head_ref: None,
+            url: None,
+            diff_stat: DiffStat::default(),
+            detected_at: at(0),
+        })
+        .await
+        .expect("change");
+
+    // Queued *before* the reviewable one, so it is the oldest and picked first.
+    executor::enqueue_manual(&fixture.pool, &blocked, &change, at(1))
+        .await
+        .expect("enqueue blocked");
+    executor::enqueue(&fixture.pool, &fixture.repo, at(2))
+        .await
+        .expect("enqueue reviewable");
+
+    // One slot: under the old behaviour the blocked run took it and the
+    // reviewable one never started.
+    let mut config = config(AutonomyMode::Auto);
+    config.global.max_concurrent_runs = 1;
+
+    let report = executor::drain(
+        &fixture.pool,
+        &config,
+        &NullSink,
+        &fixture.data_dir(),
+        1,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    assert!(
+        !report.finished.is_empty(),
+        "the reviewable run must get the slot the held one could not use: {report:?}"
+    );
+    assert!(
+        report.held.iter().any(|held| held.contains("blocked")),
+        "and the held one is still reported: {report:?}"
+    );
+}
+
+/// A wall of identical notes is its own way of saying nothing.
+#[tokio::test]
+async fn many_held_runs_are_summarised_rather_than_listed() {
+    // Now that a tick walks past held runs, one broken repository can produce
+    // dozens of lines. A report nobody can read has dropped what it reported.
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+    let disabled = revlocal_core::Repo {
+        enabled: false,
+        ..fixture.repo.clone()
+    };
+    RepoStore::new(&fixture.pool)
+        .update(&disabled)
+        .await
+        .expect("disable");
+
+    for n in 0..12 {
+        let change = ChangeStore::new(&fixture.pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id: disabled.id,
+                kind: ChangeKind::Commit,
+                external_id: format!("held-{n}"),
+                title: None,
+                author_name: None,
+                author_email: None,
+                authored_at: None,
+                branch: Some("main".to_owned()),
+                base_ref: None,
+                head_ref: None,
+                url: None,
+                diff_stat: DiffStat::default(),
+                detected_at: at(1),
+            })
+            .await
+            .expect("change");
+        executor::enqueue_manual(&fixture.pool, &disabled, &change, at(1))
+            .await
+            .expect("enqueue");
+    }
+
+    let report = executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::Auto),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    assert!(
+        report.held.len() <= 6,
+        "a dozen identical reasons must not become a dozen lines: {}",
+        report.held.len()
+    );
+    assert!(
+        report
+            .held
+            .iter()
+            .any(|held| held.contains("more run(s) held")),
+        "and the count must say how many were not listed: {report:?}"
+    );
+}
