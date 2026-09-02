@@ -672,7 +672,10 @@ mod skip_rules {
                 "empty_diff",
                 "ignored_author",
                 "merge_commit",
-                "generated_only"
+                "generated_only",
+                // Added by RL-1525. This assertion is a tripwire: a new reason has
+                // to be acknowledged here rather than absorbed silently.
+                "kind_not_reviewed",
             ]
         );
 
@@ -898,5 +901,100 @@ mod generated_markers {
         let empty: BTreeMap<String, &'static str> = BTreeMap::new();
 
         assert!(evaluate_with_generated(&change, &RepoConfig::default(), &empty).is_none());
+    }
+}
+
+// --- the repository's own choice about what to review (RL-1525) -------------
+
+mod reviewed_kinds {
+    use revlocal_core::RepoConfig;
+    use revlocal_vcs::skip_rules::{evaluate, SkipReason};
+    use revlocal_vcs::DetectedChange;
+
+    fn a_change() -> DetectedChange {
+        DetectedChange {
+            kind: revlocal_core::ChangeKind::Commit,
+            external_id: "deadbeef".to_owned(),
+            title: Some("Fix the thing".to_owned()),
+            author_name: Some("A Human".to_owned()),
+            author_email: Some("human@example.invalid".to_owned()),
+            authored_at: None,
+            branch: Some("main".to_owned()),
+            base_ref: Some("cafebabe".to_owned()),
+            parents: vec!["cafebabe".to_owned()],
+            paths: vec!["src/main.rs".to_owned()],
+            head_ref: Some("deadbeef".to_owned()),
+            url: None,
+            diff_stat: revlocal_core::DiffStat::default(),
+            skip_reason: None,
+            cursor_value: "deadbeef".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_commit_is_not_reviewed_when_the_repository_says_not_to() {
+        // §13.2 defaults to `review_prs = true, review_commits = false`, and neither
+        // field had a reader anywhere in the decision path — so a git repository at
+        // its own defaults reviewed every commit it was configured not to.
+        let config = RepoConfig {
+            review_commits: false,
+            ..RepoConfig::default()
+        };
+
+        let skip = evaluate(&a_change(), &config).unwrap_or_else(|| panic!("must be skipped"));
+
+        assert_eq!(skip.reason, SkipReason::KindNotReviewed);
+        // The reason names the setting to change. "Ignored" would send somebody
+        // through `ignore_globs` to find nothing, which is what `GeneratedOnly`
+        // already exists to prevent.
+        assert!(skip.detail.contains("review_commits"), "{}", skip.detail);
+    }
+
+    #[test]
+    fn a_commit_is_reviewed_when_the_repository_asks_for_it() {
+        let config = RepoConfig {
+            review_commits: true,
+            ..RepoConfig::default()
+        };
+
+        assert!(evaluate(&a_change(), &config).is_none());
+    }
+
+    #[test]
+    fn the_kind_is_decided_before_anything_about_the_content() {
+        // A repository that does not review commits does not review this commit,
+        // whatever its paths or author say. Checking content first would report the
+        // wrong reason for a change that was never eligible.
+        let config = RepoConfig {
+            review_commits: false,
+            ignore_authors: vec!["dependabot[bot]".to_owned()],
+            ..RepoConfig::default()
+        };
+        let mut change = a_change();
+        change.author_name = Some("dependabot[bot]".to_owned());
+
+        let skip = evaluate(&change, &config).unwrap_or_else(|| panic!("must be skipped"));
+
+        assert_eq!(skip.reason, SkipReason::KindNotReviewed);
+    }
+
+    #[test]
+    fn a_subversion_revision_has_no_such_setting_and_is_never_refused_for_its_kind() {
+        // A repository watched over Subversion has nothing else to review, so there
+        // is no field to switch its kind off and none is invented.
+        let config = RepoConfig {
+            review_commits: false,
+            review_prs: false,
+            ..RepoConfig::default()
+        };
+        let mut change = a_change();
+        change.kind = revlocal_core::ChangeKind::SvnRev;
+
+        let skip = evaluate(&change, &config);
+
+        assert!(
+            skip.is_none_or(|skip| skip.reason != SkipReason::KindNotReviewed),
+            "a Subversion revision has no kind switch"
+        );
     }
 }

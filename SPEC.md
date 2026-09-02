@@ -997,7 +997,7 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
 {
   "branches": ["main", "release/*"],
   "review_prs": true,
-  "review_commits": false,
+  "review_commits": true,     // §9.1: a watched local repo may have no PRs
   "review_draft_prs": false,
   "review_merge_commits": false,
   "watch_branches": true,               // svn: branches/* as well as trunk

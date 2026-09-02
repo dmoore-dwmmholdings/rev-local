@@ -139,7 +139,17 @@ impl Default for RepoConfig {
         Self {
             branches: vec!["main".to_owned(), "release/*".to_owned()],
             review_prs: true,
-            review_commits: false,
+            // `true`, and §13.2 says so too (RL-1525).
+            //
+            // It was `false`, which suits a deployment where the pull request is the unit
+            // of review. rev-local watches *local* repositories, where a pull request may
+            // never exist — so a git repository at its own defaults, with the setting
+            // finally being read, would review nothing at all. The old code accidentally
+            // did the right thing by ignoring the field entirely.
+            //
+            // Safe alongside `review_prs`: `CoveredByPr` already exists so a commit inside
+            // an open pull request is not reviewed twice.
+            review_commits: true,
             review_draft_prs: false,
             review_merge_commits: false,
             watch_branches: true,

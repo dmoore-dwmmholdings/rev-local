@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use globset::{Glob, GlobSetBuilder};
-use revlocal_core::RepoConfig;
+use revlocal_core::{ChangeKind, RepoConfig};
 
 use crate::adapter::DetectedChange;
 
@@ -51,6 +51,14 @@ pub enum SkipReason {
     /// a glob and cannot be one. Naming the real reason, and the marker that
     /// triggered it, is the difference between a dead end and an answer.
     GeneratedOnly,
+    /// The repository does not review changes of this kind (§13.2, RL-1525).
+    ///
+    /// Distinct from every other reason here, which are all about a change's
+    /// *content* — its paths, its author, its parents. This one is about its
+    /// type, and somebody who set `review_commits = false` and is told their
+    /// commit was "ignored" would go looking through `ignore_globs` and find
+    /// nothing, exactly as `GeneratedOnly` exists to prevent.
+    KindNotReviewed,
     /// A `done` run already exists for the same content (SPEC §9.4).
     ///
     /// Not decided here: it needs the store. The pipeline sets it, using the content
@@ -69,6 +77,7 @@ impl SkipReason {
         Self::CoveredByPr,
         Self::GeneratedOnly,
         Self::AlreadyReviewed,
+        Self::KindNotReviewed,
     ];
 
     /// The wire spelling stored in `run.skip_reason`.
@@ -82,6 +91,7 @@ impl SkipReason {
             Self::CoveredByPr => "covered_by_pr",
             Self::GeneratedOnly => "generated_only",
             Self::AlreadyReviewed => "already_reviewed",
+            Self::KindNotReviewed => "kind_not_reviewed",
         }
     }
 
@@ -99,6 +109,7 @@ impl SkipReason {
                 | Self::IgnoredAuthor
                 | Self::GeneratedOnly
                 | Self::MergeCommit
+                | Self::KindNotReviewed
         )
     }
 }
@@ -142,6 +153,22 @@ const _ORDER: () = ();
 /// not decided here and are documented on [`SkipReason`]: `covered_by_pr` needs the
 /// GitHub adapter and `already_reviewed` needs the store.
 pub fn evaluate(change: &DetectedChange, config: &RepoConfig) -> Option<Skip> {
+    // First, because it is the cheapest question and the most absolute: a
+    // repository that does not review this kind of change does not review this
+    // change, whatever its paths or author say.
+    //
+    // §13.2 defaults to `review_prs = true, review_commits = false`, and until
+    // now neither field had a reader anywhere in the decision path — so a git
+    // repository at its own defaults reviewed every commit it was configured not
+    // to. Work that runs against the configuration is worse than work that never
+    // runs: it spends model tokens, on a loop that starts itself.
+    if let Some(setting) = disabled_kind(change.kind, config) {
+        return Some(Skip {
+            reason: SkipReason::KindNotReviewed,
+            detail: format!("{setting} is off for this repository"),
+        });
+    }
+
     if !config.review_merge_commits && change.parents.len() > 1 {
         return Some(Skip {
             reason: SkipReason::MergeCommit,
@@ -176,6 +203,19 @@ pub fn evaluate(change: &DetectedChange, config: &RepoConfig) -> Option<Skip> {
     }
 
     None
+}
+
+/// The setting that switches this kind of change off, when it is off.
+///
+/// Subversion's kinds have no such setting — a repository watched over Subversion
+/// has nothing else to review — so they are never refused here. Returning the
+/// field's own name means the skip reason names the thing to change.
+const fn disabled_kind(kind: ChangeKind, config: &RepoConfig) -> Option<&'static str> {
+    match kind {
+        ChangeKind::Commit if !config.review_commits => Some("review_commits"),
+        ChangeKind::Pr if !config.review_prs => Some("review_prs"),
+        _ => None,
+    }
 }
 
 /// [`evaluate`], plus §9.4's generated-file rule (RL-305b).

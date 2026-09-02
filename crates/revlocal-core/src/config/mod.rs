@@ -117,7 +117,7 @@ url = "https://trama.example.com/mcp"
     const SPEC_13_2: &str = r#"{
   "branches": ["main", "release/*"],
   "review_prs": true,
-  "review_commits": false,
+  "review_commits": true,
   "review_draft_prs": false,
   "review_merge_commits": false,
   "watch_branches": true,
@@ -230,7 +230,10 @@ url = "https://trama.example.com/mcp"
     fn repo_default_values_are_the_ones_the_spec_prints() {
         let c = RepoConfig::default();
         assert_eq!(c.branches, ["main", "release/*"]);
-        assert!(c.review_prs && !c.review_commits);
+        // Both: a watched repository may be reviewed through pull requests, through
+        // commits, or through both. `CoveredByPr` is what stops the same code being
+        // reviewed twice when both apply (RL-1525).
+        assert!(c.review_prs && c.review_commits);
         assert!(!c.review_draft_prs && !c.review_merge_commits);
         assert!(c.watch_branches);
         assert_eq!(c.poll_interval_secs, 120);
