@@ -1802,6 +1802,63 @@ fn spawn_autopilot(app: tauri::AppHandle) {
     });
 }
 
+/// The home directory the login item lives under.
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME").map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from)
+}
+
+/// What this app should ask the OS to launch at login.
+///
+/// The `.app` bundle on macOS, the executable elsewhere. `current_exe` inside a
+/// bundle points at `Contents/MacOS/revlocal-desktop`, and a login item pointing
+/// there launches the binary without its bundle — which starts, has no icon, no
+/// bundle identifier and no notification permissions, and is the kind of failure
+/// that looks like it worked.
+fn launch_target() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("could not locate this app: {e}"))?;
+
+    if cfg!(target_os = "macos") {
+        // .../rev-local.app/Contents/MacOS/revlocal-desktop -> .../rev-local.app
+        if let Some(bundle) = exe
+            .ancestors()
+            .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+        {
+            return Ok(bundle.display().to_string());
+        }
+        // Running from `cargo run`, with no bundle to point at. Reported rather
+        // than guessed: a login item for a debug binary in `target/` is one that
+        // breaks the next time somebody runs `cargo clean`.
+        return Err(
+            "this build is not in an app bundle, so it cannot be started at login
+  try: install the packaged app first"
+                .to_owned(),
+        );
+    }
+
+    Ok(exe.display().to_string())
+}
+
+/// Whether rev-local starts when you log in (§4.2, RL-1517).
+#[tauri::command]
+fn startup_status() -> Result<serde_json::Value, String> {
+    serde_json::to_value(revlocal_daemon::startup::status(&home_dir())).map_err(|e| e.to_string())
+}
+
+/// Turn starting-at-login on or off.
+#[tauri::command]
+fn set_startup(enabled: bool) -> Result<serde_json::Value, String> {
+    let home = home_dir();
+    if enabled {
+        revlocal_daemon::startup::enable(&home, &launch_target()?).map_err(|e| e.to_string())?;
+    } else {
+        revlocal_daemon::startup::disable(&home).map_err(|e| e.to_string())?;
+    }
+
+    // Read back rather than assume. The whole point of this setting is that its
+    // failure mode is silently not being there.
+    serde_json::to_value(revlocal_daemon::startup::status(&home)).map_err(|e| e.to_string())
+}
+
 /// What the loop is doing (§15's "what is it doing right now").
 #[tauri::command]
 fn autopilot_status() -> Result<serde_json::Value, String> {
@@ -1910,7 +1967,9 @@ fn run() -> tauri::Result<()> {
             flow_step,
             autopilot_status,
             set_autopilot,
-            autopilot_now
+            autopilot_now,
+            startup_status,
+            set_startup
         ])
         .setup(|app| {
             let handle = app.handle().clone();

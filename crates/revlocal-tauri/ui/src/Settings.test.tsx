@@ -242,11 +242,107 @@ describe('settings', () => {
   it('offers to run onboarding again', () => {
     // RL-1205's criterion. Onboarding that can only happen once is a thing people
     // are afraid to leave halfway.
+    //
+    // Labelled by what somebody wants from it rather than by what it is: the
+    // second repository is the reason this button exists, and "run setup again"
+    // reads like something that would undo the first one.
     const onRunOnboarding = vi.fn();
     mount(view(), { onRunOnboarding });
 
-    fireEvent.click(screen.getByRole('button', { name: /run setup again/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add repository/i }));
 
     expect(onRunOnboarding).toHaveBeenCalled();
+  });
+});
+
+describe('starting at login', () => {
+  it('offers the switch, off, until somebody asks for it', () => {
+    // §4.2: rev-local reviews only while it is running, and nothing arranged for
+    // it to run (RL-1517).
+    render(
+      <Settings
+        view={view()}
+        busy={false}
+        onRunDoctor={noop}
+        onMap={noop}
+        onUnmap={noop}
+        onRunOnboarding={noop}
+        startup="disabled"
+      />,
+    );
+
+    const toggle = screen.getByRole('checkbox', { name: /start rev-local when i log in/i });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('says a reboot stops it, which is the reason the switch exists', () => {
+    render(
+      <Settings
+        view={view()}
+        busy={false}
+        onRunDoctor={noop}
+        onMap={noop}
+        onUnmap={noop}
+        onRunOnboarding={noop}
+        startup="disabled"
+      />,
+    );
+
+    expect(screen.getByText(/a reboot stops it/i)).toBeDefined();
+  });
+
+  it('does not offer a switch that would do nothing', () => {
+    // "You have not turned it on" and "turning it on does nothing here" are
+    // different things to tell somebody.
+    render(
+      <Settings
+        view={view()}
+        busy={false}
+        onRunDoctor={noop}
+        onMap={noop}
+        onUnmap={noop}
+        onRunOnboarding={noop}
+        startup="unsupported"
+      />,
+    );
+
+    expect(screen.queryByRole('checkbox', { name: /start rev-local when i log in/i })).toBeNull();
+    expect(screen.getByText(/not implemented on this platform/i)).toBeDefined();
+  });
+
+  it('hides the section entirely until the status has been read', () => {
+    // `null` is "not asked yet". Drawing an off switch then is a lie somebody
+    // acts on by clicking it.
+    render(
+      <Settings
+        view={view()}
+        busy={false}
+        onRunDoctor={noop}
+        onMap={noop}
+        onUnmap={noop}
+        onRunOnboarding={noop}
+      />,
+    );
+
+    expect(screen.queryByText(/Starting up/)).toBeNull();
+  });
+
+  it('asks the app rather than deciding for itself', () => {
+    const onSetStartup = vi.fn();
+    render(
+      <Settings
+        view={view()}
+        busy={false}
+        onRunDoctor={noop}
+        onMap={noop}
+        onUnmap={noop}
+        onRunOnboarding={noop}
+        startup="disabled"
+        onSetStartup={onSetStartup}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /start rev-local when i log in/i }));
+    expect(onSetStartup).toHaveBeenCalledWith(true);
   });
 });

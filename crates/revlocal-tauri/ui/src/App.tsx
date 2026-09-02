@@ -23,6 +23,8 @@ import {
   fetchReviewBranches,
   fetchReviewCommits,
   fetchSettings,
+  fetchStartup,
+  setStartup,
   notify,
   onboardAddRepo,
   onboardFirstReview,
@@ -58,6 +60,7 @@ import {
   type RepositoryView as RepositoryData,
   type RunView as RunViewData,
   type SettingsView as SettingsData,
+  type StartupStatus,
   type Draft,
   type FirstReview,
   type Step,
@@ -102,6 +105,7 @@ export function App() {
   const [repository, setRepository] = useState<RepositoryData | null>(null);
   const [repoId, setRepoId] = useState<number | null>(null);
   const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [startup, setStartupState] = useState<StartupStatus | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
   const [onboarding, setOnboarding] = useState(false);
   const [step, setStep] = useState<Step>('check');
@@ -203,6 +207,19 @@ export function App() {
       unsubscribe?.();
     };
   }, [reload]);
+
+  // §4.2: rev-local only reviews while it is running, so whether it starts at
+  // login is part of whether the loop works at all. Read once — it changes only
+  // when somebody changes it here.
+  useEffect(() => {
+    if (!inTauri()) return;
+    fetchStartup()
+      .then(setStartupState)
+      .catch(() => {
+        // A login item that cannot be read is not worth a banner on a screen
+        // somebody opened to do something else. The switch stays hidden.
+      });
+  }, []);
 
   // Asked once, on mount. Only a capture harness ever sets it.
   useEffect(() => {
@@ -348,6 +365,21 @@ export function App() {
       await autopilotNow();
     } catch (error: unknown) {
       setNotice(`Could not start a pass — ${messageOf(error)}`);
+    }
+  }
+
+  /** Turn starting-at-login on or off, and show what actually took. */
+  async function changeStartup(enabled: boolean) {
+    try {
+      const now = await setStartup(enabled);
+      setStartupState(now);
+      setNotice(
+        now === 'enabled'
+          ? 'rev-local will start when you log in.'
+          : 'rev-local will not start on its own. It reviews only while it is running.',
+      );
+    } catch (error: unknown) {
+      setNotice(`Could not change that — ${messageOf(error)}`);
     }
   }
 
@@ -906,6 +938,8 @@ export function App() {
             onUnmap={unmapCapability}
             onConfigureMcp={setUpMcp}
             onRunOnboarding={startOnboarding}
+            startup={startup}
+            onSetStartup={changeStartup}
           />
         )}
 

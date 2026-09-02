@@ -29,6 +29,7 @@ pub mod repository_view;
 pub mod run_view;
 pub mod scheduler;
 pub mod settings_view;
+pub mod startup;
 pub mod state_machine;
 pub mod trigger_receiver;
 pub mod triggers;

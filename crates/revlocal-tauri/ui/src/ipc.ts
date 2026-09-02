@@ -707,6 +707,25 @@ export function unmappedCount(view: SettingsView): number {
   return view.targets.reduce((total, t) => total + t.unmapped.length, 0);
 }
 
+// --- starting at login (RL-1517) --------------------------------------------
+
+/**
+ * Whether rev-local starts when you log in.
+ *
+ * `unsupported` is not `disabled`. "You have not turned it on" and "turning it
+ * on does nothing here" are different things to tell somebody, and only one of
+ * them deserves a switch.
+ */
+export type StartupStatus = 'enabled' | 'disabled' | 'unsupported';
+
+export function fetchStartup(): Promise<StartupStatus> {
+  return invoke<StartupStatus>('startup_status');
+}
+
+export function setStartup(enabled: boolean): Promise<StartupStatus> {
+  return invoke<StartupStatus>('set_startup', { enabled });
+}
+
 export function fetchSettings(): Promise<SettingsView> {
   return invoke<SettingsView>('settings');
 }

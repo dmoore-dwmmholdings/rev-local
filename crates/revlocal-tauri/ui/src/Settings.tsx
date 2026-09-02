@@ -4,6 +4,7 @@ import {
   unmappedCount,
   type DoctorCheck,
   type SettingsView,
+  type StartupStatus,
   type ServerPanel,
   type TargetPanel,
   type UnmappedRow,
@@ -208,15 +209,26 @@ export function Settings({
   onUnmap,
   onConfigureMcp = () => {},
   onRunOnboarding,
+  startup = null,
+  onSetStartup = () => {},
 }: {
   view: SettingsView | null;
   busy: boolean;
   onRunDoctor: () => void;
   onMap: (target: string, capability: string, tool: string) => void;
   onUnmap: (target: string, capability: string) => void;
-  onConfigureMcp?: () => void;
+  onConfigureMcp?: (suiteBearer: string) => void;
   onRunOnboarding: () => void;
+  startup?: StartupStatus | null;
+  onSetStartup?: (enabled: boolean) => void;
 }) {
+  // Declared before the early return below: a hook that only runs once `view`
+  // has loaded changes the hook count between renders, and React tears the
+  // whole screen down with "rendered more hooks than during the previous
+  // render". The settings screen mounts with `view === null` every time, so
+  // this was not an edge case — it was the only path.
+  const [suiteBearer, setSuiteBearer] = useState('');
+
   if (!view) return <p className="empty">Loading settings.</p>;
 
   const unmapped = unmappedCount(view);
@@ -238,17 +250,58 @@ export function Settings({
         </p>
       ))}
 
+      {/* §4.2: the daemon runs in-process, so rev-local has to be *running* to
+          review anything. Until this switch existed, "unattended" lasted until
+          the next reboot and nothing said otherwise. */}
+      {startup && (
+        <section>
+          <h3>Starting up</h3>
+          {startup === 'unsupported' ? (
+            <p className="dim">
+              Starting at login is not implemented on this platform yet. Leave rev-local
+              running, or launch it yourself.
+            </p>
+          ) : (
+            <>
+              <label className="autopilot-switch">
+                <input
+                  type="checkbox"
+                  checked={startup === 'enabled'}
+                  onChange={(e) => onSetStartup(e.target.checked)}
+                />
+                <span>Start rev-local when I log in</span>
+              </label>
+              <p className="dim">
+                rev-local reviews only while it is running. Without this, a reboot stops it
+                until you open it again.
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
       <section>
         <div className="section-head">
           <h3>MCP servers</h3>
-          <button onClick={onConfigureMcp} disabled={busy}>
-            Set up Andare and Trama
+          <button onClick={() => onConfigureMcp(suiteBearer)} disabled={busy || !suiteBearer}>
+            Save MCP setup
           </button>
         </div>
         <p className="dim">
-          Uses this machine&apos;s known endpoints. You enter separate bearer tokens once; they are
-          saved in macOS Keychain, never in the configuration file.
+          Uses this machine&apos;s known endpoints. One suite bearer authorizes both Andare and
+          Trama. It is stored in the operating system&apos;s keychain — macOS today; elsewhere
+          saving says so rather than writing the token to a file.
         </p>
+        <label className="filter">
+          Suite MCP bearer
+          <input
+            type="password"
+            aria-label="suite MCP bearer"
+            autoComplete="off"
+            value={suiteBearer}
+            onChange={(e) => setSuiteBearer(e.target.value)}
+          />
+        </label>
         {view.servers.length === 0 ? (
           <p className="empty">
             No MCP servers are configured in <span className="mono">{view.config_path}</span>.
@@ -304,7 +357,7 @@ export function Settings({
           {/* §15's onboarding, re-runnable. One that can only happen once is a
               thing people are afraid to leave — and the second repository
               deserves the same walk as the first. */}
-          <button onClick={onRunOnboarding}>Run setup again</button>
+          <button onClick={onRunOnboarding}>Add repository</button>
         </div>
         <p className="dim">
           Walks through the checks, adding a repository, choosing an engine and an
