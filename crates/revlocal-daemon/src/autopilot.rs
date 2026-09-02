@@ -240,13 +240,11 @@ pub async fn tick(
     // deleted, were still enabled, and had 51 runs waiting against them.
     let (reachable, missing): (Vec<Repo>, Vec<Repo>) = repos
         .into_iter()
-        .partition(|repo| repo.local_path.as_deref().is_none_or(path_exists));
+        .partition(crate::repos::checkout_is_present);
     for repo in &missing {
-        report.notes.push(format!(
-            "{}: the checkout is gone — {}\n  try: put it back, point the repository at its new location, or disable it",
-            repo.name,
-            repo.local_path.as_deref().unwrap_or("no path recorded")
-        ));
+        report
+            .notes
+            .push(crate::repos::checkout_missing_detail(repo));
     }
     let mut repos = reachable;
 
@@ -400,16 +398,6 @@ pub async fn tick(
         .map_err(boxed)?;
 
     Ok(report)
-}
-
-/// Whether a repository's checkout is still on disk.
-///
-/// A separate function only so the reason is written down once: `Path::exists`
-/// answers `false` for a path that exists but cannot be read, and for this
-/// purpose that is the same answer — rev-local cannot review it either way, and
-/// the note tells somebody to go and look.
-fn path_exists(path: &str) -> bool {
-    !path.is_empty() && Path::new(path).exists()
 }
 
 /// Ask the scheduler whether this tick should poll remotes at all.

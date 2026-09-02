@@ -392,6 +392,23 @@ async fn execute_one(
         )));
     }
 
+    // Before the budget check and before an engine is chosen, because a run
+    // against a checkout that is not there costs a model call to learn what one
+    // `exists` call knows.
+    //
+    // Here rather than in the loop's discovery pass, which is where it went
+    // first: that stopped new runs being queued and left the fifty-one already
+    // waiting to run and fail. Every path into a review goes through this
+    // function — the loop, the desktop's queue button, `revlocal watch` — and a
+    // guard in one caller is a guard the other two do not have.
+    if !crate::repos::checkout_is_present(&repo) {
+        return Ok(Err(format!(
+            "run #{}: {}",
+            run.id.get(),
+            crate::repos::checkout_missing_detail(&repo)
+        )));
+    }
+
     // §13.1's budget, checked before anything is spent rather than after.
     let day = budgets::day_of(at);
     let spent = BudgetLedgerStore::new(pool)

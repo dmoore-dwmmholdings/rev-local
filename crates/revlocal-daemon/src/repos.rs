@@ -236,6 +236,33 @@ pub struct RepoWriteReport {
     pub detail: String,
 }
 
+/// Whether this repository's checkout is still on disk (RL-1513, RL-1515).
+///
+/// A repository added by URL has no local path and is not the subject of this
+/// question, so it passes.
+///
+/// `Path::exists` answers `false` for a path that exists but cannot be read, and
+/// for this purpose that is the same answer: rev-local cannot review it either
+/// way, and what somebody needs is to be told to go and look.
+///
+/// Lives here rather than beside either caller because it has two, and the first
+/// version had one — the check went into the loop's discovery pass, which stopped
+/// *new* runs being queued and did nothing about the fifty-one already waiting.
+pub fn checkout_is_present(repo: &revlocal_core::Repo) -> bool {
+    repo.local_path
+        .as_deref()
+        .is_none_or(|path| !path.is_empty() && std::path::Path::new(path).exists())
+}
+
+/// The line shown when it is not.
+pub fn checkout_missing_detail(repo: &revlocal_core::Repo) -> String {
+    format!(
+        "{}: the checkout is gone — {}\n  try: put it back, point the repository at its new location, or disable it",
+        repo.name,
+        repo.local_path.as_deref().unwrap_or("no path recorded")
+    )
+}
+
 /// Add a repository (§14).
 ///
 /// `autonomy` defaults to `dry_run` rather than anything that acts. A repository

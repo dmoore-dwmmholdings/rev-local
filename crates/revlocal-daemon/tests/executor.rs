@@ -686,3 +686,50 @@ async fn a_repository_with_no_andare_project_still_completes_its_review() {
         run.status
     );
 }
+
+/// A run already queued against a checkout that has since gone must not run.
+#[tokio::test]
+async fn a_queued_run_whose_checkout_vanished_is_held_not_executed() {
+    // RL-1513 put this check in the loop's discovery pass, which stopped new runs
+    // being queued and did nothing about the ones already waiting — 51 of them on
+    // a real install, most against deleted repositories. `drain` selects queued
+    // runs globally, so the guard has to be where every path meets (RL-1515).
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+    executor::enqueue(&fixture.pool, &fixture.repo, at(2))
+        .await
+        .expect("enqueue");
+
+    // Deleted *after* the run was queued, which is the whole case.
+    std::fs::remove_dir_all(fixture.repo.local_path.as_deref().expect("a local path"))
+        .expect("remove the checkout");
+
+    let report = executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::Auto),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain must not fail because a checkout is missing");
+
+    assert!(
+        report.finished.is_empty(),
+        "nothing may be reviewed: {report:?}"
+    );
+
+    // §18: held with a reason naming the repository and what to do about it.
+    let held = report.held.join("\n");
+    assert!(held.contains("checkout is gone"), "{held}");
+    assert!(held.contains("try:"), "{held}");
+
+    // And the run is still queued rather than failed: putting the checkout back
+    // should be enough to make it run, without anybody re-queuing anything.
+    let runs = RunStore::new(&fixture.pool)
+        .list_recent(None, Some(revlocal_core::RunStatus::Queued), 10)
+        .await
+        .expect("runs");
+    assert!(!runs.is_empty(), "the run stays queued");
+}
