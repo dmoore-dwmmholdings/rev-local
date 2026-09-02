@@ -22,9 +22,11 @@ Working today:
   configuration at all, an Andare issue, and a GitHub issue — each deduplicated by
   the finding's fingerprint, so a problem that survives another commit updates
   what is already there rather than filing again.
-- **The full command line.** Every command in the specification exists except
-  `db export`, and each is exercised by a test that reads the specification rather
-  than a transcription of it.
+- **The full command line.** Every command in the specification exists, and each is
+  exercised by a test that reads the specification rather than a transcription of
+  it. That includes `db export`, which writes the review record — repositories,
+  runs and findings — as one JSON document, so last month's findings can be read
+  somewhere else or kept before `db vacuum` deletes the rows.
 - **Starting a review whenever you want one.** The repository screen reviews a
   branch against what it forked from, a single commit, or the whole repository —
   queued immediately, with its stages arriving as live events rather than on a

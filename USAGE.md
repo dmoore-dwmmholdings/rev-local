@@ -303,6 +303,19 @@ revlocal db migrate --database <PATH>
 Creates the SQLite database if it does not exist, and upgrades an existing one.
 Safe to run against an up-to-date database.
 
+### Taking the review record elsewhere
+
+```
+revlocal db export --format json --database <PATH>
+```
+
+One JSON document on stdout: repositories, runs and findings, with a
+`schema_version`, the tables deliberately `excluded`, and whether anything was
+`truncated`. Not a backup — copying the SQLite file is a better one — and not a
+debug dump, which `runs show --json` and the audit log already cover. It is for
+reading findings on another machine, or keeping them before `db vacuum` removes
+the rows.
+
 ## Exit codes
 
 `0` on success. Non-zero with a message on stderr naming what to do about it — an
