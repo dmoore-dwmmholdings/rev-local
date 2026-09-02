@@ -126,6 +126,8 @@ pub struct TickReport {
     pub awaiting_approval: usize,
     /// Finished runs removed by retention this tick (§13.1).
     pub pruned: u64,
+    /// Approvals that ran out of time waiting for a human (§12.4).
+    pub expired: usize,
     /// Runs still queued after this tick.
     pub still_queued: u32,
     /// The kill switch is engaged.
@@ -182,6 +184,12 @@ impl TickReport {
         }
         if self.pruned > 0 {
             parts.push(format!("cleared {} old run(s)", self.pruned));
+        }
+        // Named separately from the inbox count: something that expired
+        // unattended is news, and folding it into "waiting for you" would make it
+        // disappear at the moment it stopped waiting (§18).
+        if self.expired > 0 {
+            parts.push(format!("{} approval(s) expired unanswered", self.expired));
         }
         if self.awaiting_approval > 0 {
             parts.push(format!("{} waiting for you", self.awaiting_approval));
@@ -401,6 +409,13 @@ pub async fn tick(
 
     // Housekeeping last: it is the least urgent thing a pass does, and doing it
     // before the review would delay work for a sweep nobody is waiting on.
+    match expire_approvals(pool, config, at).await {
+        Ok(expired) => report.expired = expired,
+        Err(error) => report
+            .notes
+            .push(format!("could not expire old approvals — {error}")),
+    }
+
     match sweep(pool, config, at).await {
         Ok(pruned) => report.pruned = pruned,
         // §18: a sweep that failed is not a pass that failed, but it is also not
@@ -421,6 +436,72 @@ pub async fn tick(
         .map_err(boxed)?;
 
     Ok(report)
+}
+
+/// Reject approvals nobody answered in time (§12.4).
+///
+/// # Why an expiry is a rejection with its own reason
+///
+/// `REASON_EXPIRED` exists precisely so this is distinguishable from somebody
+/// declining the action. They mean opposite things about the finding: one is a
+/// judgement, the other is that nobody made one. Recording both as "rejected"
+/// would make the inbox's history unreadable.
+///
+/// # Why it runs unattended
+///
+/// The inbox is the one place work piles up while nobody is watching, and after
+/// RL-1519 it holds *only* the things that need judgement. A proposal from six
+/// weeks ago against code that has since been rewritten is not something anybody
+/// should approve, and it currently looks exactly like this morning's.
+async fn expire_approvals(
+    pool: &Pool,
+    config: &GlobalConfig,
+    at: Timestamp,
+) -> Result<usize, AutopilotError> {
+    let ttl = i64::from(config.global.approval_ttl_hours);
+    // Zero means "wait forever", which is a legitimate choice for somebody who
+    // reviews their inbox on their own schedule. Reading it as "expire
+    // everything immediately" would throw away every pending approval.
+    if ttl <= 0 {
+        return Ok(0);
+    }
+
+    let store = PublishActionStore::new(pool);
+    let waiting = store.list_awaiting_approval().await.map_err(boxed)?;
+
+    let mut expired = 0_usize;
+    for action in waiting {
+        let deadline = crate::approvals::expires_at(action.created_at, ttl);
+        if at < deadline {
+            continue;
+        }
+
+        store
+            .reject(action.id, crate::approvals::REASON_EXPIRED)
+            .await
+            .map_err(boxed)?;
+
+        // §5: the audit log is what makes an unattended decision reviewable
+        // afterwards. An expiry with no record is indistinguishable from an
+        // action that was never queued.
+        let waited = (at - action.created_at).num_hours();
+        revlocal_store::AuditStore::new(pool)
+            .append(&revlocal_core::AuditEntry {
+                id: revlocal_core::AuditId::new(0),
+                at,
+                actor: "daemon".to_owned(),
+                kind: crate::approvals::AUDIT_KIND_EXPIRED.to_owned(),
+                repo_id: None,
+                run_id: Some(action.run_id),
+                detail_json: crate::approvals::expiry_detail(&action, waited).to_string(),
+            })
+            .await
+            .map_err(boxed)?;
+
+        expired += 1;
+    }
+
+    Ok(expired)
 }
 
 /// Remove finished runs past their retention window, at most once a day.

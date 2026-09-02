@@ -13,7 +13,9 @@ use revlocal_core::{
 };
 use revlocal_daemon::autopilot;
 use revlocal_daemon::state_machine::NullSink;
-use revlocal_store::{open, CursorStore, Pool, RepoStore, RunStore, SettingStore};
+use revlocal_store::{
+    open, CursorStore, Pool, PublishActionStore, RepoStore, RunStore, SettingStore,
+};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -565,6 +567,168 @@ async fn seed_change(
             url: None,
             diff_stat: revlocal_core::DiffStat::default(),
             detected_at: when,
+        })
+        .await?
+        .id)
+}
+
+// --- approvals do not wait forever (RL-1523) --------------------------------
+
+#[tokio::test]
+async fn an_approval_nobody_answered_expires() -> Result<(), Box<dyn std::error::Error>> {
+    // §12.4 gives an approval a deadline and every piece of the mechanism existed
+    // — `expires_at`, `is_expired`, `REASON_EXPIRED`, `AUDIT_KIND_EXPIRED`,
+    // `approval_ttl_hours` — with nothing calling any of it.
+    let fixture = install().await?;
+    let action = an_action_awaiting_approval(&fixture, at(1)).await?;
+
+    // Well past the 72-hour default.
+    let later = at(1) + chrono::Duration::days(5);
+    let report = autopilot::tick(
+        &fixture.pool,
+        &config(),
+        &NullSink,
+        &fixture.data_dir(),
+        &[],
+        later,
+        &CancellationToken::new(),
+    )
+    .await?;
+
+    assert_eq!(report.expired, 1, "{report:?}");
+
+    let stored = PublishActionStore::new(&fixture.pool).get(action).await?;
+    assert_eq!(stored.status, revlocal_core::PublishActionStatus::Rejected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_expiry_is_told_apart_from_somebody_declining() -> Result<(), Box<dyn std::error::Error>>
+{
+    // They mean opposite things about the finding: one is a judgement, the other
+    // is that nobody made one.
+    let fixture = install().await?;
+    an_action_awaiting_approval(&fixture, at(1)).await?;
+
+    autopilot::tick(
+        &fixture.pool,
+        &config(),
+        &NullSink,
+        &fixture.data_dir(),
+        &[],
+        at(1) + chrono::Duration::days(5),
+        &CancellationToken::new(),
+    )
+    .await?;
+
+    let audit = revlocal_store::AuditStore::new(&fixture.pool)
+        .recent(10)
+        .await?;
+    let entry = audit
+        .iter()
+        .find(|entry| entry.kind == "approval_expired")
+        .ok_or("an expiry must be in the audit log")?;
+    assert!(
+        entry.detail_json.contains("expired"),
+        "{}",
+        entry.detail_json
+    );
+    assert_eq!(entry.actor, "daemon", "nobody decided this");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_approval_still_inside_its_window_is_left_alone(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = install().await?;
+    let action = an_action_awaiting_approval(&fixture, at(1)).await?;
+
+    let report = autopilot::tick(
+        &fixture.pool,
+        &config(),
+        &NullSink,
+        &fixture.data_dir(),
+        &[],
+        at(1) + chrono::Duration::hours(2),
+        &CancellationToken::new(),
+    )
+    .await?;
+
+    assert_eq!(report.expired, 0, "{report:?}");
+    let stored = PublishActionStore::new(&fixture.pool).get(action).await?;
+    assert_eq!(
+        stored.status,
+        revlocal_core::PublishActionStatus::AwaitingApproval
+    );
+    Ok(())
+}
+
+/// One action sitting in the inbox since `queued_at`.
+async fn an_action_awaiting_approval(
+    fixture: &Fixture,
+    queued_at: Timestamp,
+) -> Result<revlocal_core::PublishActionId, Box<dyn std::error::Error>> {
+    let change = revlocal_store::ChangeStore::new(&fixture.pool)
+        .upsert(&revlocal_core::Change {
+            id: revlocal_core::ChangeId::new(0),
+            repo_id: fixture.repo.id,
+            kind: revlocal_core::ChangeKind::Commit,
+            external_id: "waiting".to_owned(),
+            title: None,
+            author_name: None,
+            author_email: None,
+            authored_at: None,
+            branch: Some("main".to_owned()),
+            base_ref: None,
+            head_ref: None,
+            url: None,
+            diff_stat: revlocal_core::DiffStat::default(),
+            detected_at: queued_at,
+        })
+        .await?;
+
+    let run = RunStore::new(&fixture.pool)
+        .insert(&revlocal_core::Run {
+            id: revlocal_core::RunId::new(0),
+            change_id: change.id,
+            attempt: 1,
+            status: revlocal_core::RunStatus::AwaitingApproval,
+            engine: EngineKind::Mock,
+            depth: revlocal_core::Depth::Summary,
+            trigger: revlocal_core::TriggerSource::Poll,
+            skip_reason: None,
+            error: None,
+            error_detail: None,
+            degraded: None,
+            usage: revlocal_core::Usage::default(),
+            started_at: Some(queued_at),
+            finished_at: Some(queued_at),
+            transcript_path: None,
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
+            created_at: queued_at,
+        })
+        .await?;
+
+    Ok(PublishActionStore::new(&fixture.pool)
+        .insert(&revlocal_core::PublishAction {
+            id: revlocal_core::PublishActionId::new(0),
+            run_id: run.id,
+            finding_id: None,
+            target: "andare".to_owned(),
+            capability: revlocal_core::Capability::CreateIssue,
+            risk: revlocal_core::RiskClass::High,
+            idempotency_key: "andare-waiting".to_owned(),
+            payload_json: "{}".to_owned(),
+            status: revlocal_core::PublishActionStatus::AwaitingApproval,
+            attempts: 0,
+            response_json: None,
+            external_ref: None,
+            error: None,
+            created_at: queued_at,
+            sent_at: None,
         })
         .await?
         .id)
