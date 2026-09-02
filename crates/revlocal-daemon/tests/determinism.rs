@@ -190,6 +190,7 @@ fn review_once(suppressions: &[Suppression]) -> Result<ReviewReport, String> {
             &engine,
             &scratch,
             &CancellationToken::new(),
+            &revlocal_engine::PidSink::none(),
         )
         .await
         .map(|outcome| outcome.report)

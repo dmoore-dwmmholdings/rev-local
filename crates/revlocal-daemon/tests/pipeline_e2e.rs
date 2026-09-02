@@ -226,6 +226,7 @@ fn review_role(
             &engine,
             &scratch,
             &CancellationToken::new(),
+            &revlocal_engine::PidSink::none(),
         )
         .await
         .map_err(|e| format!("pipeline: {e}"))?;
@@ -413,6 +414,7 @@ fn a_suppressed_critical_does_not_escalate() {
             &engine,
             &scratch,
             &CancellationToken::new(),
+            &revlocal_engine::PidSink::none(),
         )
         .await
         .unwrap_or_else(|e| panic!("{e}"));
@@ -561,6 +563,7 @@ fn the_m6_exit_gate_runs_at_default_settings() {
             &engine,
             &scratch,
             &CancellationToken::new(),
+            &revlocal_engine::PidSink::none(),
         )
         .await
         .map(|outcome| outcome.report)
@@ -807,6 +810,7 @@ fn reviewing_a_repository_does_not_mutate_it() {
             &engine,
             &scratch,
             &CancellationToken::new(),
+            &revlocal_engine::PidSink::none(),
         )
         .await
         .unwrap_or_else(|e| panic!("{e}"));

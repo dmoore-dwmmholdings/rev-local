@@ -21,7 +21,7 @@ pub mod template;
 pub mod usage;
 
 pub use engine::{
-    Engine, EngineError, EngineId, EngineOutcome, EngineProbe, EngineProblem, EngineTask,
+    Engine, EngineError, EngineId, EngineOutcome, EngineProbe, EngineProblem, EngineTask, PidSink,
     RawFinding, Result,
 };
 pub use ladder::{
@@ -29,14 +29,14 @@ pub use ladder::{
     RESULT_FILE,
 };
 pub use mock::{MockBehaviour, MockEngine};
-pub use runner::{CliEngine, PROMPT_FILE};
+pub use runner::{CliEngine, PROMPT_FILE, TRANSCRIPT_FILE};
 pub use schema::{
     validate, DroppedFinding, SchemaError, ValidatedResult, RESULT_SCHEMA_V1,
     SUPPORTED_SCHEMA_VERSION,
 };
 pub use supervise::{
     filtered_env, is_denied, supervise, timeout_for, withheld_auth_remediation,
-    withheld_auth_variables, KillReason, Supervised, CANCEL_GRACE, GRACE,
+    withheld_auth_variables, KillReason, Supervised, Watch, CANCEL_GRACE, GRACE,
 };
 pub use template::{Invocation, InvocationTemplate, RenderContext, TemplateError, PLACEHOLDERS};
 

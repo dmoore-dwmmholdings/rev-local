@@ -159,6 +159,7 @@ pub async fn run(
         engine.as_ref(),
         scratch.path(),
         &CancellationToken::new(),
+        &revlocal_engine::PidSink::none(),
     )
     .await?;
 

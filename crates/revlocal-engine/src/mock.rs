@@ -168,6 +168,9 @@ impl Engine for MockEngine {
         &self,
         task: EngineTask,
         cancel: tokio_util::sync::CancellationToken,
+        // The mock spawns nothing, so there is never a pid to report. Taking the
+        // parameter keeps it a drop-in for a real engine everywhere it is used.
+        _pids: &crate::engine::PidSink,
     ) -> Result<EngineOutcome> {
         // Validated even in the mock: a pipeline that built an unrunnable task would
         // otherwise pass every test here and fail only against a real engine.

@@ -290,6 +290,7 @@ pub async fn review(
     engine: &dyn Engine,
     scratch: &Path,
     cancel: &CancellationToken,
+    pids: &revlocal_engine::PidSink,
 ) -> Result<ReviewOutcome, PipelineError> {
     // --- §9.4 skip ---
     if let Some(reason) = inputs.skip {
@@ -374,7 +375,7 @@ pub async fn review(
             depth: attempt.depth,
         };
 
-        let outcome = engine.run(task, cancel.clone()).await;
+        let outcome = engine.run(task, cancel.clone(), pids).await;
 
         let Ok(ref engine_outcome) = outcome else {
             break (outcome, None);

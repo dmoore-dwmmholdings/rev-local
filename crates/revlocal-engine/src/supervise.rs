@@ -196,6 +196,23 @@ impl Supervised {
     }
 }
 
+/// How a supervised process is watched: stopped, and reported.
+///
+/// The two travel together because they are the same concern from opposite ends
+/// — `cancel` is how something outside tells this process to stop, `pids` is how
+/// this process tells the outside what to stop. Passing them as one argument is
+/// also what keeps `supervise_inner` inside clippy's argument limit, which is a
+/// smell worth listening to: seven positional parameters was already too many to
+/// call correctly.
+#[derive(Debug, Clone, Copy)]
+pub struct Watch<'a> {
+    /// Cancelled when the work should stop. `supervise` terminates the process
+    /// group on cancel, so this reaches grandchildren too.
+    pub cancel: &'a CancellationToken,
+    /// Receives the process id as soon as there is one.
+    pub pids: &'a crate::engine::PidSink,
+}
+
 /// Run `invocation` under supervision.
 pub async fn supervise(
     id: EngineId,
@@ -205,6 +222,36 @@ pub async fn supervise(
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<Supervised, EngineError> {
+    let watch = Watch {
+        cancel,
+        pids: &crate::engine::PidSink::none(),
+    };
+    supervise_inner(id, invocation, cwd, env, timeout, watch, None).await
+}
+
+/// Run an engine while appending stdout to `transcript` as it arrives.
+pub async fn supervise_to_file(
+    id: EngineId,
+    invocation: &Invocation,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    timeout: Duration,
+    watch: Watch<'_>,
+    transcript: &Path,
+) -> Result<Supervised, EngineError> {
+    supervise_inner(id, invocation, cwd, env, timeout, watch, Some(transcript)).await
+}
+
+async fn supervise_inner(
+    id: EngineId,
+    invocation: &Invocation,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    timeout: Duration,
+    watch: Watch<'_>,
+    transcript: Option<&Path>,
+) -> Result<Supervised, EngineError> {
+    let Watch { cancel, pids } = watch;
     let started = Instant::now();
 
     let mut command = tokio::process::Command::new(&invocation.program);
@@ -266,6 +313,14 @@ pub async fn supervise(
 
     let pid = child.id();
 
+    // Announced the instant it exists, not when the process ends. Everything that
+    // wants to *stop* this process needs the pid while it is still running, and
+    // `Supervised.pid` on the return value arrives too late to be any use
+    // (RL-1521).
+    if let Some(pid) = pid {
+        pids.report(pid);
+    }
+
     // §8.5's Job Object. Created after the spawn and assigned immediately, which
     // leaves a race the `job` module documents: a process that spawns a
     // grandchild in its first microseconds could have it escape. Closing that
@@ -311,8 +366,14 @@ pub async fn supervise(
     // consumes the child and would leave nothing to signal. Draining also matters
     // on its own: a child filling a full pipe blocks forever, and would look
     // exactly like a hang.
-    let stdout_reader = child.stdout.take().map(read_into_shared);
-    let stderr_reader = child.stderr.take().map(read_into_shared);
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|reader| read_into_shared(reader, transcript.map(Path::to_path_buf)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|reader| read_into_shared(reader, None));
 
     let killed = tokio::select! {
         status = child.wait() => {
@@ -504,7 +565,10 @@ type SharedBuffer = Arc<Mutex<Vec<u8>>>;
 /// available. §8.2's ladder reads stdout and a killed engine may already have
 /// emitted a usable fenced block; throwing that away because a grandchild held
 /// the pipe open would lose a review that was recoverable.
-fn read_into_shared<R>(mut reader: R) -> (tokio::task::JoinHandle<()>, SharedBuffer)
+fn read_into_shared<R>(
+    mut reader: R,
+    transcript: Option<std::path::PathBuf>,
+) -> (tokio::task::JoinHandle<()>, SharedBuffer)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -512,12 +576,24 @@ where
     let sink = Arc::clone(&buffer);
 
     let handle = tokio::spawn(async move {
+        use std::io::Write as _;
         use tokio::io::AsyncReadExt as _;
+        let mut transcript = transcript.and_then(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+        });
         let mut chunk = [0_u8; 8192];
         loop {
             match reader.read(&mut chunk).await {
                 Ok(0) | Err(_) => break,
                 Ok(read) => {
+                    if let Some(file) = transcript.as_mut() {
+                        let _ = file.write_all(&chunk[..read]);
+                        let _ = file.flush();
+                    }
                     if let Ok(mut sink) = sink.lock() {
                         sink.extend_from_slice(&chunk[..read]);
                     }
@@ -661,8 +737,8 @@ mod tests {
         let started = tokio::time::Instant::now();
 
         let result = finish(
-            Some(read_into_shared(NeverEnds)),
-            Some(read_into_shared(NeverEnds)),
+            Some(read_into_shared(NeverEnds, None)),
+            Some(read_into_shared(NeverEnds, None)),
             None,
             Some(KillReason::Cancelled),
             Some(1),

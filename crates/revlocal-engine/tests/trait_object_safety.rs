@@ -47,7 +47,11 @@ mod trait_ {
         assert!(probe.is_usable());
 
         let outcome = engine
-            .run(a_task(), CancellationToken::new())
+            .run(
+                a_task(),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .unwrap_or_else(|e| panic!("run: {e}"));
         assert_eq!(outcome.verdict, Verdict::RequestChanges);
@@ -88,7 +92,11 @@ mod trait_ {
         // back. A prompt that forgot its diff produces a perfectly valid outcome.
         let engine = MockEngine::new();
         engine
-            .run(a_task(), CancellationToken::new())
+            .run(
+                a_task(),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .unwrap_or_else(|e| panic!("run: {e}"));
 
@@ -114,7 +122,11 @@ mod trait_ {
         let engine = MockEngine::new();
         for _ in 0..3 {
             engine
-                .run(a_task(), CancellationToken::new())
+                .run(
+                    a_task(),
+                    CancellationToken::new(),
+                    &revlocal_engine::PidSink::none(),
+                )
                 .await
                 .unwrap_or_else(|e| panic!("run: {e}"));
         }
@@ -128,7 +140,11 @@ mod trait_ {
                 id: EngineKind::Mock,
             }));
         let error = engine
-            .run(a_task(), CancellationToken::new())
+            .run(
+                a_task(),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .expect_err("it was told to fail");
         assert_eq!(error.code(), "engine_output_unparseable");
@@ -143,7 +159,11 @@ mod trait_ {
 
         let handle = {
             let cancel = cancel.clone();
-            tokio::spawn(async move { engine.run(a_task(), cancel).await })
+            tokio::spawn(async move {
+                engine
+                    .run(a_task(), cancel, &revlocal_engine::PidSink::none())
+                    .await
+            })
         };
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -164,7 +184,7 @@ mod trait_ {
         cancel.cancel();
 
         let error = engine
-            .run(a_task(), cancel)
+            .run(a_task(), cancel, &revlocal_engine::PidSink::none())
             .await
             .expect_err("a cancelled run must not return an outcome");
         assert!(error.is_cancellation());
@@ -181,7 +201,11 @@ mod trait_ {
         task.out_dir = task.cwd.clone();
 
         let error = MockEngine::new()
-            .run(task, CancellationToken::new())
+            .run(
+                task,
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .expect_err("this must be refused");
         assert_eq!(error.code(), "engine_invalid_task");
@@ -194,7 +218,11 @@ mod trait_ {
         task.prompt = "   \n".to_owned();
 
         let error = MockEngine::new()
-            .run(task, CancellationToken::new())
+            .run(
+                task,
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .expect_err("an empty prompt must be refused");
         assert_eq!(error.code(), "engine_invalid_task");
@@ -205,7 +233,11 @@ mod trait_ {
         let mut task = a_task();
         task.timeout = Duration::ZERO;
         assert!(MockEngine::new()
-            .run(task, CancellationToken::new())
+            .run(
+                task,
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none()
+            )
             .await
             .is_err());
     }

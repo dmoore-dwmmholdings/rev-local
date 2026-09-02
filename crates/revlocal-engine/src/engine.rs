@@ -83,6 +83,45 @@ pub struct EngineProblem {
     pub remediation: String,
 }
 
+/// Where an engine reports the process id it just spawned (RL-1521).
+///
+/// # Why the pid has to travel out separately
+///
+/// `supervise_inner` has `child.id()` the instant the process exists, and
+/// `Engine::run` returns `EngineOutcome` only once it has exited. So the pid
+/// reached the caller exactly when it stopped being useful, and `revlocal kill
+/// --hard` — which runs in a different process and cannot reach an in-memory
+/// cancellation token — had nothing to signal.
+///
+/// A channel rather than a callback: the receiver wants to write the pid to the
+/// database, which is async, and a synchronous callback would have to block or
+/// spawn. Sending is non-blocking and cannot fail in a way worth handling — a
+/// dropped receiver means nobody is recording pids, which is exactly what
+/// [`PidSink::none`] means.
+#[derive(Debug, Clone, Default)]
+pub struct PidSink(Option<tokio::sync::mpsc::UnboundedSender<u32>>);
+
+impl PidSink {
+    /// Nobody is listening. The engine runs exactly as before.
+    pub const fn none() -> Self {
+        Self(None)
+    }
+
+    /// Report pids to `tx`.
+    pub const fn to(tx: tokio::sync::mpsc::UnboundedSender<u32>) -> Self {
+        Self(Some(tx))
+    }
+
+    /// Announce a spawned process. Never blocks, never fails the run.
+    pub fn report(&self, pid: u32) {
+        if let Some(tx) = &self.0 {
+            // A closed channel means the caller stopped caring, which is not a
+            // reason to fail a review that is already running.
+            let _ = tx.send(pid);
+        }
+    }
+}
+
 /// One review, handed to an engine (SPEC §8.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineTask {
@@ -307,9 +346,15 @@ pub trait Engine: Send + Sync {
     ///
     /// `cancel` is the kill switch's token (§12.1). An implementation must return
     /// [`EngineError::Cancelled`] promptly rather than finishing the work.
+    /// Run one review.
+    ///
+    /// `pids` receives the process id as soon as there is one, so a caller can
+    /// record it while the process is still alive. [`PidSink::none`] for callers
+    /// that do not care.
     async fn run(
         &self,
         task: EngineTask,
         cancel: tokio_util::sync::CancellationToken,
+        pids: &PidSink,
     ) -> Result<EngineOutcome>;
 }

@@ -121,7 +121,11 @@ async fn review_the_fixture(
     };
 
     engine
-        .run(task, tokio_util::sync::CancellationToken::new())
+        .run(
+            task,
+            tokio_util::sync::CancellationToken::new(),
+            &revlocal_engine::PidSink::none(),
+        )
         .await
         .map_err(|e| e.to_string())
 }

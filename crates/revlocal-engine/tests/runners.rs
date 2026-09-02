@@ -79,6 +79,11 @@ mod runners {
                 .validate(engine.id().as_str())
                 .unwrap_or_else(|e| panic!("{}: {e}", engine.id()));
         }
+        assert!(CliEngine::codex()
+            .template()
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--add-dir", "{out_dir}"]));
     }
 
     // --- probe ------------------------------------------------------------------
@@ -193,7 +198,11 @@ mod runners {
         ]));
 
         let outcome = engine
-            .run(task(cwd.path(), out.path()), CancellationToken::new())
+            .run(
+                task(cwd.path(), out.path()),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .unwrap_or_else(|e| panic!("run: {e}"));
 
@@ -204,6 +213,31 @@ mod runners {
             !outcome.transcript.is_empty(),
             "the transcript must be captured; it is the archive (§5.1)"
         );
+    }
+
+    #[tokio::test]
+    async fn runners_always_passes_the_output_directory_to_the_engine() {
+        let cwd = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let out = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let mut engine = fixture_engine("valid");
+        // `REVLOCAL_OUT` is intentionally absent from both the inherited
+        // environment and the template allow-list: it is a runner protocol
+        // value, not a user-controlled credential.
+        engine = engine.with_parent_env(BTreeMap::from([
+            ("PATH".to_owned(), std::env::var("PATH").unwrap_or_default()),
+            ("MOCK_ENGINE_MODE".to_owned(), "valid".to_owned()),
+        ]));
+
+        engine
+            .run(
+                task(cwd.path(), out.path()),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("the output contract was not passed: {e}"));
+
+        assert!(out.path().join("result.json").is_file());
     }
 
     #[tokio::test]
@@ -221,7 +255,11 @@ mod runners {
         ]));
 
         engine
-            .run(task(cwd.path(), out.path()), CancellationToken::new())
+            .run(
+                task(cwd.path(), out.path()),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .unwrap_or_else(|e| panic!("run: {e}"));
 
@@ -242,7 +280,11 @@ mod runners {
         ]));
 
         let outcome = engine
-            .run(task(cwd.path(), out.path()), CancellationToken::new())
+            .run(
+                task(cwd.path(), out.path()),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .unwrap_or_else(|e| panic!("run: {e}"));
 
@@ -282,7 +324,11 @@ mod runners {
 
         let handle = {
             let cancel = cancel.clone();
-            tokio::spawn(async move { engine.run(spec, cancel).await })
+            tokio::spawn(async move {
+                engine
+                    .run(spec, cancel, &revlocal_engine::PidSink::none())
+                    .await
+            })
         };
         tokio::time::sleep(Duration::from_millis(400)).await;
         cancel.cancel();
@@ -320,7 +366,11 @@ mod runners {
         spec.timeout = Duration::from_millis(400);
 
         let error = engine
-            .run(spec, CancellationToken::new())
+            .run(
+                spec,
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .expect_err("a hung engine must not produce a review");
         assert_eq!(error.code(), "engine_timeout");
@@ -336,9 +386,87 @@ mod runners {
         spec.prompt = "Review this.".to_owned();
 
         let error = engine
-            .run(spec, CancellationToken::new())
+            .run(
+                spec,
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
             .await
             .expect_err("this must be refused");
         assert_eq!(error.code(), "engine_invalid_task");
+    }
+
+    // --- the pid arrives while the process is alive (RL-1521) ----------------
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_pid_is_reported_while_the_process_is_still_running() {
+        // `Engine::run` returns the pid inside `EngineOutcome`, which arrives once
+        // the process has ended — exactly when it stops being useful to anything
+        // trying to stop it. Hang mode is what makes "still running" assertable:
+        // the pid has to arrive while `run` is still awaiting.
+        //
+        // Unix only, for the reason the tests above give — killing a hang-mode
+        // engine on Windows leaves a grandchild holding the pipes.
+        let cwd = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let out = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let engine = fixture_engine("hang").with_parent_env(BTreeMap::from([
+            ("PATH".to_owned(), std::env::var("PATH").unwrap_or_default()),
+            ("HOME".to_owned(), std::env::var("HOME").unwrap_or_default()),
+            ("MOCK_ENGINE_MODE".to_owned(), "hang".to_owned()),
+            ("REVLOCAL_OUT".to_owned(), out.path().display().to_string()),
+        ]));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let mut spec = task(cwd.path(), out.path());
+        spec.timeout = Duration::from_secs(300);
+
+        let handle = {
+            let cancel = cancel.clone();
+            let sink = revlocal_engine::PidSink::to(tx);
+            tokio::spawn(async move { engine.run(spec, cancel, &sink).await })
+        };
+
+        // The whole point: this resolves while the engine is still hanging.
+        let reported = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no pid arrived while the process was running"));
+        assert!(
+            reported.is_some_and(|pid| pid > 0),
+            "a spawned process must report a real pid"
+        );
+        assert!(
+            !handle.is_finished(),
+            "and it must arrive before `run` returns"
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn an_engine_runs_normally_with_nobody_listening_for_pids() {
+        // `PidSink::none()` is the default everywhere that does not reap, and it
+        // must not change how a review behaves.
+        let cwd = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let out = TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let engine = fixture_engine("valid").with_parent_env(BTreeMap::from([
+            ("PATH".to_owned(), std::env::var("PATH").unwrap_or_default()),
+            ("HOME".to_owned(), std::env::var("HOME").unwrap_or_default()),
+            ("MOCK_ENGINE_MODE".to_owned(), "valid".to_owned()),
+            ("REVLOCAL_OUT".to_owned(), out.path().display().to_string()),
+        ]));
+
+        let outcome = engine
+            .run(
+                task(cwd.path(), out.path()),
+                CancellationToken::new(),
+                &revlocal_engine::PidSink::none(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(!outcome.findings.is_empty());
     }
 }

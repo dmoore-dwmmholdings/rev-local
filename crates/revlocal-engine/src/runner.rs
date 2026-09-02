@@ -38,6 +38,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The prompt file written into `out_dir` (SPEC §8.4, `{prompt_file}`).
 pub const PROMPT_FILE: &str = "prompt.md";
+/// Raw engine output retained for the daemon even when parsing fails.
+pub const TRANSCRIPT_FILE: &str = "transcript.txt";
 
 /// An engine backed by a command-line tool.
 pub struct CliEngine {
@@ -82,12 +84,26 @@ impl CliEngine {
 
     /// The environment this engine's child processes receive (§8.5).
     fn child_env(&self) -> BTreeMap<String, String> {
-        supervise::filtered_env(
+        let mut env = supervise::filtered_env(
             self.parent_env
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str())),
             &self.template.pass_env,
-        )
+        );
+
+        // Finder-launched macOS apps receive a short system PATH. Codex is
+        // commonly installed under ~/.local/bin, so a terminal can find it while
+        // the desktop app cannot. This is a binary location, not a credential.
+        if let Some(home) = self.parent_env.get("HOME") {
+            let local_bin = std::path::Path::new(home).join(".local/bin");
+            let current = env.get("PATH").cloned().unwrap_or_default();
+            let separator = if current.is_empty() { "" } else { ":" };
+            env.insert(
+                "PATH".to_owned(),
+                format!("{}{separator}{current}", local_bin.display()),
+            );
+        }
+        env
     }
 
     /// Credentials withheld from this engine that it may have needed (§8.5).
@@ -121,7 +137,14 @@ impl CliEngine {
             depth: revlocal_core::Depth::Summary,
         };
 
-        match self.run(task, CancellationToken::new()).await {
+        match self
+            .run(
+                task,
+                CancellationToken::new(),
+                &crate::engine::PidSink::none(),
+            )
+            .await
+        {
             Ok(_) => Ok(true),
             // A smoke test that fails is an answer, not an error: `doctor` reports
             // it alongside every other engine rather than stopping at the first.
@@ -140,6 +163,7 @@ impl CliEngine {
         task: EngineTask,
         cancel: CancellationToken,
         repair: Option<&dyn RepairPass>,
+        pids: &crate::engine::PidSink,
     ) -> Result<EngineOutcome> {
         task.is_runnable()?;
 
@@ -173,15 +197,40 @@ impl CliEngine {
                 detail: e.to_string(),
             })?;
 
-        let supervised = supervise::supervise(
+        // This is a protocol value, not a user credential. The prompt's output
+        // contract names it explicitly, so it must survive the credential
+        // denylist even when a custom template has an empty `pass_env` list.
+        let mut child_env = self.child_env();
+        child_env.insert(
+            crate::ladder::OUT_DIR_ENV.to_owned(),
+            task.out_dir.display().to_string(),
+        );
+
+        let transcript_path = task.out_dir.join(TRANSCRIPT_FILE);
+        let _ = std::fs::remove_file(&transcript_path);
+        let supervised = supervise::supervise_to_file(
             self.id,
             &invocation,
             &task.cwd,
-            &self.child_env(),
+            &child_env,
             task.timeout,
-            &cancel,
+            supervise::Watch {
+                cancel: &cancel,
+                pids,
+            },
+            &transcript_path,
         )
         .await?;
+
+        // Persist before climbing the output ladder. A malformed answer is the
+        // case where the raw output is most useful, and returning its parse error
+        // before saving it used to leave the run screen with an empty transcript.
+        std::fs::write(task.out_dir.join(TRANSCRIPT_FILE), &supervised.stdout).map_err(|e| {
+            EngineError::Failed {
+                id: self.id,
+                detail: format!("writing engine transcript: {e}"),
+            }
+        })?;
 
         match supervised.killed {
             Some(KillReason::Cancelled) => return Err(EngineError::Cancelled { id: self.id }),
@@ -337,7 +386,12 @@ impl Engine for CliEngine {
         })
     }
 
-    async fn run(&self, task: EngineTask, cancel: CancellationToken) -> Result<EngineOutcome> {
-        self.run_with_repair(task, cancel, None).await
+    async fn run(
+        &self,
+        task: EngineTask,
+        cancel: CancellationToken,
+        pids: &crate::engine::PidSink,
+    ) -> Result<EngineOutcome> {
+        self.run_with_repair(task, cancel, None, pids).await
     }
 }

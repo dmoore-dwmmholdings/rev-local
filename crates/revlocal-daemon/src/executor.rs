@@ -511,6 +511,31 @@ async fn execute_one(
         ..change.clone()
     };
 
+    // Record the engine's pid while its process is alive (RL-1521).
+    //
+    // `Engine::run` returns the pid only inside `EngineOutcome`, which arrives
+    // once the process has exited — exactly when it stops being useful to
+    // anything trying to stop it. The sink is fed from inside `supervise` at
+    // spawn, and this task writes it down.
+    //
+    // A task rather than an inline write because reporting is synchronous and
+    // storing is not. It holds its own pool handle so it cannot borrow anything
+    // the review needs.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
+    let pids = revlocal_engine::PidSink::to(tx);
+    let recorder = {
+        let pool = pool.clone();
+        let run_id = run.id;
+        tokio::spawn(async move {
+            while let Some(pid) = rx.recv().await {
+                // A pid that cannot be stored is not a reason to fail a review
+                // that is already running; it costs the ability to reap that one
+                // process, which is what the kill switch reports.
+                let _ = RunStore::new(&pool).set_engine_pid(run_id, Some(pid)).await;
+            }
+        })
+    };
+
     let outcome = pipeline::review(
         &pipeline::ReviewInputs {
             repo_name: &repo.name,
@@ -530,8 +555,20 @@ async fn execute_one(
         engine.as_ref(),
         scratch.path(),
         cancel,
+        &pids,
     )
     .await;
+
+    // The recorder outlives the review only long enough to drain what is left.
+    // Dropping the sender first is what lets it finish: the loop ends on a closed
+    // channel rather than on a flag somebody has to remember to set.
+    drop(pids);
+    let _ = recorder.await;
+
+    // Cleared once the process is gone. A pid left recorded against a finished
+    // run is what `orphan_pids` reports, and reporting a dead process as an
+    // orphan on every kill from now on is worse than never recording it.
+    let _ = RunStore::new(pool).set_engine_pid(run.id, None).await;
 
     let transcript = retain_transcript(data_dir, run.id, scratch.path());
 
