@@ -68,8 +68,10 @@ Three properties the code is organised around:
 - **Nothing is silently dropped.** Where the system truncates, samples or skips, it
   records the fact and reports it. A review that saw 60% of a diff must never look
   like a review that saw all of it.
-- **The first write to any system is always approved by a human**, whatever the
-  configured autonomy level.
+- **The first write to any system is high risk**, so under every mode that asks,
+  a human sees it before it goes. First use is a classification rather than a
+  veto: `auto` means "send without asking" and sends it, which is what choosing
+  `auto` is for.
 
 `SPEC.md` is the design specification; `docs/adr/` records the decisions that were
 not obvious. Section references (§) in source comments point into `SPEC.md`.

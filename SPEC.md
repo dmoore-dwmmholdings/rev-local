@@ -925,7 +925,9 @@ Mode is per repo, with a global ceiling: the effective mode is
 - `publish_page` on Trama;
 - **any** action whose target/capability pair is newly mapped and has never
   succeeded before (first-use is always high risk — this is deliberate: the first
-  time rev-local ever writes to a system, a human sees it).
+  time rev-local ever writes to a system, a human sees it under any mode that asks
+  about high risk. `auto` asks about nothing, per §12.2's table; the
+  classification still stands and is still recorded against the action).
 
 Additionally, any action is escalated to high risk if the run is `degraded`, if the
 finding's `confidence < 0.6`, or if the repo has posted > `burst_threshold`
@@ -1211,7 +1213,7 @@ begin milestone N+1 until N's gate passes. Record any deviation as an ADR.
 | **M7** | MCP client | stdio + HTTP transports, `tools/list` discovery, capability mapping + validation, manual override | test against `fixtures/mock-mcp`: resolves candidates to real names, reports an unmapped capability instead of guessing, validates args against tool schema and **refuses** a mismatched payload |
 | **M8** | Publish: GitHub | review/comment/check via `gh` and MCP transports, idempotency, inline-anchor demotion | test with a mocked transport: second publish for the same head SHA **edits** rather than duplicates; an unanchorable comment lands in the body section |
 | **M9** | Publish: Andare + Trama | issue filing with fingerprint trailer + dedupe search, status transition from work-item key, Trama read-before-write upsert, index page regeneration, `link_to_issue` | mock-MCP journal assertions: `update_page` is always preceded by `get_page` for the same page and carries the **full** merged body; a re-run for the same fingerprint produces a comment, not a second issue |
-| **M10** | Autonomy | modes, risk classification wiring, approvals inbox, kill switch, budgets | tests: `dry_run` performs zero MCP writes; `auto_low_ask_high` sends a comment but queues an issue; **first-use of a capability is always queued**; kill switch cancels a running mock engine within 3s and leaves the publish queue intact; budget exhaustion pauses and later resumes without losing changes |
+| **M10** | Autonomy | modes, risk classification wiring, approvals inbox, kill switch, budgets | tests: `dry_run` performs zero MCP writes; `auto_low_ask_high` sends a comment but queues an issue; **first-use of a capability is always classified high risk**, and queued under `auto_low_ask_high`; kill switch cancels a running mock engine within 3s and leaves the publish queue intact; budget exhaustion pauses and later resumes without losing changes |
 | **M11** | SVN adapter | per-revision discovery/materialize, pseudo-PR synthesis (§6.4) | integration test on `svn-basic`: N revisions discovered in order; the reintegration revision produces **both** a `svn_rev` and a `svn_pseudo_pr` change; the pseudo-PR diff equals the branch-vs-trunk diff, not the merge revision's; per-revision branch findings are demoted in the pseudo-PR's publish plan |
 | **M12** | Triggers | poll loop w/ backoff+jitter, loopback hook receiver + hook installer, webhook listener + signature verification + tunnel adapters, coalescing | tests: hook script exits 0 in < 2s with the receiver **down**; an existing user hook survives install/uninstall byte-identically; four simultaneous triggers for one repo produce exactly one discovery pass; a bad webhook signature is rejected |
 | **M13** | Desktop UI | six screens (§15), Tauri commands, live events, tray + kill switch, **visual verification harness** (§16.4) | `vitest` green; single-screen capture writes a non-empty settled PNG per screen and exits 0; each PNG is read and confirmed against the screen's §15 checklist; the `add-repo-to-review` flow produces one captioned frame per step; kill switch visible in all six captures |
