@@ -34,6 +34,13 @@ use crate::autonomy::{disposition, Disposition};
 pub struct GateContext {
     /// The effective autonomy mode (§12.2's ceiling already applied).
     pub mode: AutonomyMode,
+    /// Where this action's effect lands (RL-1519).
+    ///
+    /// Per action rather than per run, unlike everything else here: one run's
+    /// findings can go to a tracker and to a local file, and those are not the
+    /// same decision. `GateContext` is `Copy`, so a caller varies it with
+    /// `GateContext { destination, ..context }`.
+    pub destination: revlocal_core::Destination,
     /// Whether the run's engine output had to be salvaged (§8.2).
     pub run_degraded: bool,
     /// How many actions this repo has already sent in the last hour.
@@ -85,6 +92,7 @@ pub fn gate(
 ) -> GatedAction {
     let assessment = classify(&RiskInputs {
         intent,
+        destination: context.destination,
         pair_previously_succeeded,
         run_degraded: context.run_degraded,
         finding_confidence,

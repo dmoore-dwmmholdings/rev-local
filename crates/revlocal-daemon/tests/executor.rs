@@ -290,12 +290,27 @@ async fn findings_reach_the_publish_queue_under_the_repository_autonomy_mode() {
     assert!(outcome.actions > 0, "no publish action was queued");
     assert_eq!(outcome.status, "awaiting_approval");
 
+    // Not every queued action waits. Since RL-1519 risk depends on where an
+    // action goes, so one run's findings can produce an Andare issue that asks
+    // and a local report that does not — which is the whole point of the local
+    // report, and what this assertion used to rule out by equating the two.
     let waiting = revlocal_store::PublishActionStore::new(&fixture.pool)
         .list_awaiting_approval()
         .await
         .expect("waiting");
-    assert_eq!(waiting.len(), outcome.actions);
-    assert_eq!(waiting[0].target, "andare");
+    assert!(!waiting.is_empty(), "the Andare issue must wait");
+    assert!(
+        waiting.iter().all(|action| action.target == "andare"),
+        "only the tracker asks: {:?}",
+        waiting.iter().map(|a| a.target.clone()).collect::<Vec<_>>()
+    );
+    assert!(
+        waiting.len() < outcome.actions,
+        "the local report must not be waiting with it: {} of {}",
+        waiting.len(),
+        outcome.actions
+    );
+
     // §11.6: the fingerprint is in the key, so re-reviewing this change reuses the
     // issue rather than filing a second one.
     assert!(waiting[0].idempotency_key.starts_with("andare-"));

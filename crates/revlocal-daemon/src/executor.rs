@@ -862,20 +862,27 @@ async fn queue_actions(
             continue;
         }
 
-        let gated = gating::gate(
-            ActionIntent::CreateIssue,
-            Some(finding.confidence),
-            seasoned,
-            gating::GateContext {
-                mode,
-                run_degraded: outcome.report.degraded.is_some(),
-                actions_in_last_hour: recent,
-                burst_threshold: config.global.burst_threshold,
-            },
-        );
-
-        let Some(status) = gated.initial_status() else {
-            continue;
+        // Gated per target rather than once per finding, because where an action
+        // goes is part of how risky it is: writing a file on this machine and
+        // filing into a shared tracker are the same intent and not the same
+        // decision (RL-1519).
+        let base = gating::GateContext {
+            mode,
+            destination: revlocal_core::Destination::External,
+            run_degraded: outcome.report.degraded.is_some(),
+            actions_in_last_hour: recent,
+            burst_threshold: config.global.burst_threshold,
+        };
+        let gate_for = |destination| {
+            gating::gate(
+                ActionIntent::CreateIssue,
+                Some(finding.confidence),
+                seasoned,
+                gating::GateContext {
+                    destination,
+                    ..base
+                },
+            )
         };
 
         let context = revlocal_publish::IssueContext::default();
@@ -883,7 +890,7 @@ async fn queue_actions(
         // One finding can owe work to several targets, and they fail
         // independently: a missing Andare project must not stop the local report
         // that needs no configuration at all.
-        let mut payloads: Vec<(&str, String)> = Vec::new();
+        let mut payloads: Vec<(&str, revlocal_core::Destination, String)> = Vec::new();
 
         if wants_andare {
             if let Some(project) = project.clone() {
@@ -896,7 +903,11 @@ async fn queue_actions(
                     draft: revlocal_publish::compose_issue(finding, &context, &options),
                     context: context.clone(),
                 };
-                payloads.push(("andare", encode(&payload, "Andare issue")?));
+                payloads.push((
+                    "andare",
+                    revlocal_core::Destination::External,
+                    encode(&payload, "Andare issue")?,
+                ));
             }
         }
 
@@ -907,7 +918,11 @@ async fn queue_actions(
                 body: revlocal_publish::compose_body(finding, &context),
                 fingerprint: finding.fingerprint.clone(),
             };
-            payloads.push(("github", encode(&payload, "GitHub issue")?));
+            payloads.push((
+                "github",
+                revlocal_core::Destination::External,
+                encode(&payload, "GitHub issue")?,
+            ));
         }
 
         if wants_report {
@@ -919,11 +934,18 @@ async fn queue_actions(
             };
             payloads.push((
                 revlocal_publish::REPORT_TARGET,
+                // The whole point of this target: it never leaves the machine.
+                revlocal_core::Destination::Local,
                 encode(&payload, "local report")?,
             ));
         }
 
-        for (target, payload_json) in payloads {
+        for (target, destination, payload_json) in payloads {
+            let gated = gate_for(destination);
+            let Some(status) = gated.initial_status() else {
+                continue;
+            };
+
             // §11.6: the fingerprint makes a re-reviewed change *reuse* its issue
             // rather than file a second one — so a finding that is still there on
             // the next commit already has an action, and inserting again is a

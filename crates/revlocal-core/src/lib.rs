@@ -59,7 +59,7 @@ pub use publish::{payload_digest, CapabilitySet, PublishAction, PublishReceipt, 
 pub use redact::{is_sensitive_field, redact, redact_field, REDACTED};
 pub use repo::{Cursor, Repo};
 pub use risk::{
-    classify, ActionIntent, CheckConclusion, RiskAssessment, RiskInputs, RiskReason,
+    classify, ActionIntent, CheckConclusion, Destination, RiskAssessment, RiskInputs, RiskReason,
     DEFAULT_BURST_THRESHOLD,
 };
 pub use run::{IllegalTransition, Run, Usage};

@@ -538,6 +538,7 @@ async fn approvals_a_settled_action_cannot_be_approved_again() {
 fn approvals_an_inbox_item_names_its_target_explicitly() {
     let context = GateContext {
         mode: AutonomyMode::AutoLowAskHigh,
+        destination: revlocal_core::Destination::External,
         run_degraded: false,
         actions_in_last_hour: 0,
         burst_threshold: DEFAULT_BURST_THRESHOLD,

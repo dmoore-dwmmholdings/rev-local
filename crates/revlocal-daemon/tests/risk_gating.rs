@@ -13,6 +13,7 @@ use revlocal_daemon::{gate, Disposition, GateContext};
 fn settled(mode: AutonomyMode) -> GateContext {
     GateContext {
         mode,
+        destination: revlocal_core::Destination::External,
         run_degraded: false,
         actions_in_last_hour: 0,
         burst_threshold: DEFAULT_BURST_THRESHOLD,
@@ -401,7 +402,7 @@ fn action_for(
         payload_json: "{}".to_owned(),
         status: gated
             .initial_status()
-            .unwrap_or(revlocal_core::PublishActionStatus::Pending),
+            .unwrap_or(PublishActionStatus::Pending),
         attempts: 0,
         response_json: None,
         external_ref: None,
@@ -417,6 +418,7 @@ async fn risk_gating_the_queue_dispatches_the_comment_and_leaves_the_issue_waiti
 
     let context = GateContext {
         mode: Mode::AutoLowAskHigh,
+        destination: revlocal_core::Destination::External,
         run_degraded: false,
         actions_in_last_hour: 0,
         burst_threshold: DEFAULT_BURST_THRESHOLD,
@@ -485,4 +487,73 @@ async fn risk_gating_the_queue_dispatches_the_comment_and_leaves_the_issue_waiti
         revlocal_core::PublishActionStatus::AwaitingApproval,
         "and it is still waiting afterwards, not quietly failed"
     );
+}
+
+// --- where an action goes is part of how risky it is (RL-1519) --------------
+
+#[test]
+fn writing_a_file_on_this_machine_is_not_high_risk() {
+    // Found by running the app: a smoke install at default settings reviewed two
+    // commits and wrote no reports, because `create_issue` is high risk whatever
+    // the destination and `auto_low_ask_high` holds high risk for a human. The
+    // one output that needs no configuration produced nothing.
+    let local = GateContext {
+        destination: revlocal_core::Destination::Local,
+        ..settled(AutonomyMode::AutoLowAskHigh)
+    };
+
+    let action = gate(ActionIntent::CreateIssue, Some(0.99), false, local);
+
+    assert_eq!(action.assessment.class, RiskClass::Low);
+    assert!(
+        action.assessment.reasons.is_empty(),
+        "a local write has nothing to explain: {:?}",
+        action.assessment.reasons
+    );
+}
+
+#[test]
+fn the_same_intent_to_somebody_elses_system_still_asks() {
+    // The other half. Nothing about this change loosens filing into a tracker.
+    let external = GateContext {
+        destination: revlocal_core::Destination::External,
+        ..settled(AutonomyMode::AutoLowAskHigh)
+    };
+
+    let action = gate(ActionIntent::CreateIssue, Some(0.99), true, external);
+
+    assert_eq!(action.assessment.class, RiskClass::High);
+}
+
+#[test]
+fn a_local_write_is_not_escalated_by_a_degraded_run_or_a_burst() {
+    // Every escalation in §12.3 is there because an action is visible to other
+    // people or hard to take back. A wrong file is read by the person who asked
+    // for it and deleted by them, however it was produced.
+    let awkward = GateContext {
+        destination: revlocal_core::Destination::Local,
+        run_degraded: true,
+        actions_in_last_hour: 10_000,
+        ..settled(AutonomyMode::AutoLowAskHigh)
+    };
+
+    let action = gate(ActionIntent::CreateIssue, Some(0.0), false, awkward);
+
+    assert_eq!(action.assessment.class, RiskClass::Low);
+}
+
+#[test]
+fn a_local_write_goes_ahead_under_the_default_mode() {
+    // The behaviour the bug was actually about: `auto_low_ask_high` is the
+    // default, and it must not hold a local report.
+    let local = GateContext {
+        mode: AutonomyMode::AutoLowAskHigh,
+        destination: revlocal_core::Destination::Local,
+        ..settled(AutonomyMode::AutoLowAskHigh)
+    };
+
+    let action = gate(ActionIntent::CreateIssue, Some(0.99), false, local);
+
+    assert!(!action.needs_approval(), "{:?}", action.disposition);
+    assert_eq!(action.initial_status(), Some(PublishActionStatus::Pending));
 }

@@ -148,11 +148,33 @@ string_enum! {
     }
 }
 
+/// Where an action's effect lands.
+///
+/// §12.3's table classifies by intent alone, and every escalation in it exists
+/// for one of two reasons: other people can see the result, or undoing it is
+/// awkward. Neither is true of a file in rev-local's own data directory, and
+/// classifying a local report exactly like filing into somebody's tracker meant
+/// the one output needing no configuration produced nothing at default settings
+/// — found by running the app, not by a test (RL-1519).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Destination {
+    /// This machine only. A file the person running rev-local can read and delete.
+    Local,
+    /// Somebody else's system: a tracker, a pull request, a wiki.
+    External,
+}
+
 /// Everything [`classify`] needs. Values only — no lookups, no I/O.
 #[derive(Debug, Clone, Copy)]
 pub struct RiskInputs {
     /// What the action does.
     pub intent: ActionIntent,
+    /// Where its effect lands.
+    ///
+    /// Not derived from `intent`: the same intent means different things at
+    /// different targets. Filing an issue into a shared tracker and writing the
+    /// same finding to a local file are both `CreateIssue`.
+    pub destination: Destination,
     /// Whether this `(target, capability)` pair has ever succeeded before.
     ///
     /// `false` makes the action high risk unconditionally — the decision of record
@@ -179,6 +201,10 @@ impl RiskInputs {
     pub const fn new(intent: ActionIntent, pair_previously_succeeded: bool) -> Self {
         Self {
             intent,
+            // The cautious end, for the same reason `pair_previously_succeeded`
+            // has no default: assuming an action stays on this machine is the
+            // assumption that quietly publishes something.
+            destination: Destination::External,
             pair_previously_succeeded,
             run_degraded: false,
             finding_confidence: None,
@@ -221,6 +247,18 @@ impl RiskAssessment {
 /// that applies is recorded, so a low-risk comment on a degraded run is high risk
 /// and says so.
 pub fn classify(inputs: &RiskInputs) -> RiskAssessment {
+    // Every reason below escalates because an action is visible to other people
+    // or hard to take back. A file in rev-local's own directory is neither: a
+    // wrong one is read by the person who asked for it and deleted by them.
+    // Asking permission to write it is asking permission to do the thing they
+    // switched on.
+    if inputs.destination == Destination::Local {
+        return RiskAssessment {
+            class: RiskClass::Low,
+            reasons: Vec::new(),
+        };
+    }
+
     let mut reasons = Vec::new();
 
     if inputs.intent.baseline_risk() == RiskClass::High {
@@ -494,6 +532,7 @@ mod tests {
         // inbox unable to explain what is actually wrong.
         let inputs = RiskInputs {
             intent: ActionIntent::CreateIssue,
+            destination: Destination::External,
             pair_previously_succeeded: false,
             run_degraded: true,
             finding_confidence: Some(0.1),
@@ -586,6 +625,7 @@ mod tests {
                     for confidence in [None, Some(0.0), Some(1.0), Some(f64::NAN)] {
                         let inputs = RiskInputs {
                             intent,
+                            destination: Destination::External,
                             pair_previously_succeeded: seen_before,
                             run_degraded: degraded,
                             finding_confidence: confidence,
