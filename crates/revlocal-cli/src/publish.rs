@@ -68,11 +68,16 @@ pub async fn replay(
 ) -> Result<(), PublishCommandError> {
     let pool = revlocal_store::open(database).await?;
 
-    // No targets are registered here yet — the GitHub, Andare and Trama targets
-    // are RL-703 through RL-707. Requeuing still does the useful half: the failed
-    // actions become pending again, and the daemon's next dispatch pass sends
-    // them. Reporting that plainly beats implying something was delivered.
-    let queue = PublishQueue::new(pool.clone(), QueueConfig::default());
+    // The local report is the one target this process can build with no
+    // configuration, so a replay of one is actually delivered here. GitHub,
+    // Andare and Trama need credentials this command does not read: requeuing
+    // still does the useful half — the failed actions become pending again and
+    // the daemon's next dispatch pass sends them — and the report says which
+    // happened rather than implying a delivery.
+    let mut queue = PublishQueue::new(pool.clone(), QueueConfig::default());
+    queue.register(std::sync::Arc::new(revlocal_publish::ReportTarget::beside(
+        database.parent().unwrap_or(Path::new(".")),
+    )));
     let (requeued, dispatch) = queue
         .replay(RunId::new(run), target, chrono::Utc::now())
         .await?;

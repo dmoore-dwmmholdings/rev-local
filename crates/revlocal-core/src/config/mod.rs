@@ -132,7 +132,7 @@ url = "https://trama.example.com/mcp"
   "deep_file_limit": 150,
   "deep_labels": [],
   "convention_files": ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md"],
-  "targets": ["github", "andare", "trama"],
+  "targets": ["github", "andare", "trama", "report"],
   "andare_min_severity": "high",
   "andare_key_regex": "[A-Z][A-Z0-9]+-\\d+",
   "trama_publish": false,

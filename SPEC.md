@@ -763,7 +763,7 @@ independent**, so the same defect surviving a rebase dedupes correctly.
 ```rust
 #[async_trait]
 pub trait PublishTarget: Send + Sync {
-    fn id(&self) -> &str;                              // "github" | "andare" | "trama"
+    fn id(&self) -> &str;                              // "github" | "andare" | "trama" | "report"
     async fn discover(&self) -> Result<CapabilitySet>; // what can this target do?
     async fn execute(&self, action: &PublishAction) -> Result<PublishReceipt>;
     async fn health(&self) -> Result<TargetHealth>;
@@ -779,6 +779,13 @@ pub enum Capability {
     LinkDocToIssue, // cross-link (Trama <-> Andare)
 }
 ```
+
+**The local report target (`report`)** writes each finding to disk as markdown —
+`<data_dir>/reports/<repository>/<fingerprint>.md` — and offers `CreateIssue` and
+nothing else. It is in the default `targets` list because it needs no
+configuration: an install with no tracker still has to produce findings a person
+or another agent can read, and until it existed it did not. The fingerprint is the
+filename, so §11.6's idempotency is the filesystem's rather than a search's.
 
 ### 11.2 MCP client (`revlocal-mcp`)
 
@@ -1005,7 +1012,7 @@ Secrets are **never** in this file. Tokens for MCP servers come from the OS keyc
   "deep_file_limit": 150,               // §9.3
   "deep_labels": [],                    // §9.3
   "convention_files": ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md"],
-  "targets": ["github", "andare", "trama"],
+  "targets": ["github", "andare", "trama", "report"],   // §11.1
   "andare_project": "PLAT",
   "andare_min_severity": "high",
   "andare_key_regex": "[A-Z][A-Z0-9]+-\\d+",

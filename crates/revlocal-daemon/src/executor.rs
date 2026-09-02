@@ -71,6 +71,20 @@ pub enum ExecutorError {
         #[source]
         source: engines::EngineError,
     },
+
+    /// An explicitly requested review was held before it could start.
+    #[error("{detail}")]
+    ManualHeld {
+        /// Why the selected run could not begin.
+        detail: String,
+    },
+
+    /// Publishing cannot be configured safely for this repository.
+    #[error("{detail}")]
+    PublishConfig {
+        /// The setting that must be corrected.
+        detail: String,
+    },
 }
 
 fn boxed(source: revlocal_store::StoreError) -> ExecutorError {
@@ -144,6 +158,97 @@ pub async fn enqueue(
         queued,
         more_waiting,
     })
+}
+
+/// Queue one explicitly requested review, without running it.
+///
+/// Queueing and executing are separate because the caller is a UI. A manual
+/// review takes as long as the engine takes, and a command that only returns
+/// once the engine has finished gives the person who clicked no run to look at,
+/// no stage events, and a window that appears to have hung. This returns the run
+/// as soon as it exists; [`execute_run`] is what the caller then drives in the
+/// background.
+///
+/// A manual request must not be coalesced with discovery: the caller named this
+/// revision, and `enqueue` deliberately skips changes that already have a run.
+/// Reusing it would make a second click review nothing at all.
+pub async fn enqueue_manual(
+    pool: &Pool,
+    repo: &Repo,
+    change: &Change,
+    at: Timestamp,
+) -> Result<Run, ExecutorError> {
+    let change = ChangeStore::new(pool).upsert(change).await.map_err(boxed)?;
+    let runs = RunStore::new(pool);
+    let attempt = runs
+        .list_for_change(change.id)
+        .await
+        .map_err(boxed)?
+        .iter()
+        .map(|run| run.attempt)
+        .max()
+        .unwrap_or_default()
+        .checked_add(1)
+        .ok_or_else(|| ExecutorError::ManualHeld {
+            detail: format!(
+                "change {} has exhausted its run-attempt counter",
+                change.external_id
+            ),
+        })?;
+    runs.insert(&Run {
+        id: RunId::new(0),
+        change_id: change.id,
+        attempt,
+        status: RunStatus::Queued,
+        engine: repo.engine,
+        depth: Depth::Standard,
+        trigger: TriggerSource::Manual,
+        skip_reason: None,
+        error: None,
+        degraded: None,
+        usage: Usage::default(),
+        started_at: None,
+        finished_at: None,
+        transcript_path: None,
+        truncated: false,
+        omitted_files: Vec::new(),
+        verdict: None,
+        summary: None,
+        created_at: at,
+    })
+    .await
+    .map_err(boxed)
+}
+
+/// Run one already-queued run, by id.
+///
+/// [`drain`] takes whatever is at the head of the queue; this takes the one the
+/// caller named. The desktop needs the second: somebody who asked to review
+/// *this* commit is owed that commit's run, not the next one in line.
+///
+/// The nested `Result` matches [`drain`]'s: the outer is "the executor broke",
+/// the inner is "this run did not go ahead, and here is why".
+pub async fn execute_run(
+    pool: &Pool,
+    config: &GlobalConfig,
+    sink: &dyn RunEventSink,
+    data_dir: &Path,
+    run_id: RunId,
+    at: Timestamp,
+    cancel: &CancellationToken,
+) -> Result<Result<RunOutcome, String>, ExecutorError> {
+    if SettingStore::new(pool).is_paused().await.map_err(boxed)? {
+        // §12.1: the kill switch holds work rather than failing it. The run stays
+        // queued, which is what makes resuming it a matter of un-pausing.
+        return Ok(Err(format!(
+            "run #{}: the kill switch is engaged, so it stays queued",
+            run_id.get()
+        )));
+    }
+
+    let run = RunStore::new(pool).get(run_id).await.map_err(boxed)?;
+
+    execute_one(pool, config, sink, data_dir, &run, at, cancel).await
 }
 
 /// What happened to one run.
@@ -328,6 +433,7 @@ async fn execute_one(
                     "could not create a scratch directory under {}: {error}",
                     data_dir.display()
                 ),
+                None,
             )
             .await?));
         }
@@ -337,9 +443,15 @@ async fn execute_one(
         Ok(context) => context,
         Err(detail) => {
             scratch.mark_failed();
-            return Ok(Err(
-                fail(pool, sink, run.id, RunStatus::Preparing, &detail).await?
-            ));
+            return Ok(Err(fail(
+                pool,
+                sink,
+                run.id,
+                RunStatus::Preparing,
+                &detail,
+                None,
+            )
+            .await?));
         }
     };
 
@@ -352,6 +464,22 @@ async fn execute_one(
     )
     .await
     .map_err(boxed)?;
+
+    // Point the run at the live file before starting the engine. It is later
+    // copied out of scratch, but while reviewing this is what the UI tails.
+    let live_transcript = scratch
+        .path()
+        .join("engine-out")
+        .join(revlocal_engine::TRANSCRIPT_FILE);
+    if let Some(parent) = live_transcript.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::File::create(&live_transcript);
+    let live_transcript = live_transcript.display().to_string();
+    RunStore::new(pool)
+        .set_transcript_path(run.id, Some(&live_transcript))
+        .await
+        .map_err(boxed)?;
 
     let repo_config = serde_json::from_str::<RepoConfig>(&repo.config_json).unwrap_or_default();
     let suppressions = SuppressionStore::new(pool)
@@ -386,6 +514,8 @@ async fn execute_one(
     )
     .await;
 
+    let transcript = retain_transcript(data_dir, run.id, scratch.path());
+
     let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -396,6 +526,7 @@ async fn execute_one(
                 run.id,
                 RunStatus::Reviewing,
                 &error.to_string(),
+                transcript.as_deref(),
             )
             .await?));
         }
@@ -439,6 +570,7 @@ async fn execute_one(
     .map_err(boxed)?;
 
     let actions = queue_actions(pool, config, &repo, run.id, &stored, &outcome, at).await?;
+    let statuses = actions.statuses;
 
     // The run's own record, before the terminal transition: a run that says `done`
     // and carries no usage would make §13's budget ledger disagree with itself.
@@ -458,6 +590,7 @@ async fn execute_one(
         .as_deref()
         .and_then(|v| v.parse().ok());
     finished.summary = Some(outcome.report.summary.clone());
+    finished.transcript_path = transcript;
     finished.truncated = outcome.report.truncated;
     finished
         .omitted_files
@@ -474,7 +607,7 @@ async fn execute_one(
         .await
         .map_err(boxed)?;
 
-    let awaiting = actions.contains(&revlocal_core::PublishActionStatus::AwaitingApproval);
+    let awaiting = statuses.contains(&revlocal_core::PublishActionStatus::AwaitingApproval);
     let terminal = match outcome.report.status {
         // §8.2: an engine that could not produce a usable review is a failed run,
         // not an empty one. The two look identical in a findings count and mean
@@ -496,14 +629,17 @@ async fn execute_one(
         engine: outcome.report.engine.clone(),
         verdict: outcome.report.verdict.clone(),
         findings: stored.len(),
-        actions: actions.len(),
+        actions: statuses.len(),
         // The failure first: a run that failed and a run that was salvaged are
-        // both worth a line, and only one of them produced a review.
+        // both worth a line, and only one of them produced a review. A publish
+        // that was held comes last, because it is the least serious of the three
+        // and the only one that leaves a usable review behind.
         detail: outcome
             .report
             .failure
             .clone()
-            .or_else(|| outcome.report.degraded.clone()),
+            .or_else(|| outcome.report.degraded.clone())
+            .or(actions.held),
     }))
 }
 
@@ -517,11 +653,13 @@ async fn fail(
     run: RunId,
     from: RunStatus,
     detail: &str,
+    transcript_path: Option<&str>,
 ) -> Result<String, ExecutorError> {
-    RunStore::new(pool)
-        .mark_interrupted(run, detail)
+    let runs = RunStore::new(pool);
+    runs.set_transcript_path(run, transcript_path)
         .await
         .map_err(boxed)?;
+    runs.mark_interrupted(run, detail).await.map_err(boxed)?;
     // The store already moved it; the event is what the UI needs.
     sink.emit(crate::state_machine::RunEvent::StageChanged {
         run,
@@ -529,6 +667,19 @@ async fn fail(
         to: RunStatus::Failed,
     });
     Ok(format!("run #{}: {detail}", run.get()))
+}
+
+/// Copy the engine's raw output out of the disposable scratch directory.
+fn retain_transcript(data_dir: &Path, run: RunId, scratch: &Path) -> Option<String> {
+    let source = scratch
+        .join("engine-out")
+        .join(revlocal_engine::TRANSCRIPT_FILE);
+    let text = std::fs::read(&source).ok()?;
+    let directory = data_dir.join("transcripts");
+    std::fs::create_dir_all(&directory).ok()?;
+    let path = directory.join(format!("{}.log", run.get()));
+    std::fs::write(&path, text).ok()?;
+    Some(path.display().to_string())
 }
 
 /// Materialize the change with the adapter its repository kind needs (§6).
@@ -556,6 +707,19 @@ async fn materialize(
     }
 }
 
+/// What queueing this run's publish actions produced.
+struct QueuedActions {
+    /// The status each queued action was given.
+    statuses: Vec<revlocal_core::PublishActionStatus>,
+    /// Why nothing was queued, when the review itself was fine.
+    ///
+    /// §18: nothing is dropped in silence. A repository missing a setting is not
+    /// a failed review, and returning it as one used to leave the run stuck in
+    /// `publishing` and abort the whole executor pass — one repository's missing
+    /// `andare_project` stopped every other repository's queue.
+    held: Option<String>,
+}
+
 /// Turn publishable findings into gated publish actions (§11, §12).
 ///
 /// The gate is `gating::gate`, the same one every other path uses. This module
@@ -568,33 +732,84 @@ async fn queue_actions(
     stored: &[(revlocal_core::Finding, bool)],
     outcome: &pipeline::ReviewOutcome,
     at: Timestamp,
-) -> Result<Vec<revlocal_core::PublishActionStatus>, ExecutorError> {
+) -> Result<QueuedActions, ExecutorError> {
     let mode = AutonomyMode::effective(config.global.mode, repo.autonomy);
     if mode == AutonomyMode::Off {
         // Not an error and not a silent drop: `off` means no actions, and the
         // findings are still stored for somebody to read.
-        return Ok(Vec::new());
+        return Ok(QueuedActions {
+            statuses: Vec::new(),
+            held: None,
+        });
     }
 
     let store = PublishActionStore::new(pool);
     let mut statuses = Vec::new();
+    // Findings this run saw that are already filed, so nothing new is queued.
+    let mut recurring = 0_usize;
+    let repo_config = serde_json::from_str::<RepoConfig>(&repo.config_json).unwrap_or_default();
+    let project = repo_config
+        .andare_project
+        .clone()
+        .filter(|project| !project.trim().is_empty());
 
-    for (finding, publishable) in stored {
-        if !publishable {
+    // §12.3's first-use rule is about history, and reading it is the whole point:
+    // hardcoding `false` here meant every filing was forever treated as a first
+    // filing, so `auto_low_ask_high` asked about every issue it would ever create
+    // and the inbox was the only way anything ever reached Andare (RL-1504).
+    //
+    // Both facts are gathered once per run — neither varies between the findings of
+    // one run, and looking them up per finding is a round trip per finding.
+    let seasoned = store
+        .pair_has_succeeded("andare", Capability::CreateIssue)
+        .await
+        .map_err(boxed)?;
+    let recent = store
+        .actions_sent_since(repo.id, at - chrono::Duration::hours(1))
+        .await
+        .map_err(boxed)?;
+
+    // Which targets this repository actually publishes to (§13.2's `targets`).
+    // The field has existed since the first config; nothing read it, so a
+    // repository with `targets = []` still had Andare actions queued for it.
+    let wants_andare = repo_config.targets_include("andare");
+    let wants_report = repo_config.targets_include(revlocal_publish::REPORT_TARGET);
+    let publishable = stored.iter().filter(|(_, ok)| *ok).count();
+
+    // Reported and skipped, not raised: the review ran and its findings are
+    // stored. What cannot happen is filing them into a project nobody named — or
+    // into no target at all.
+    let mut held = if publishable == 0 {
+        None
+    } else if !wants_andare && !wants_report {
+        Some(format!(
+            "run #{}: {publishable} finding(s) were not published — `{}` has no publish targets enabled\n  try: add `report` to that repository's `targets` to write them to disk",
+            run.get(),
+            repo.name
+        ))
+    } else if wants_andare && project.is_none() {
+        Some(format!(
+            "run #{}: {publishable} finding(s) were not filed to Andare — `{}` has no Andare project set\n  try: set the project key under \u{201c}Where findings go\u{201d} on that repository's screen",
+            run.get(),
+            repo.name
+        ))
+    } else {
+        None
+    };
+
+    for (finding, filable) in stored {
+        if !filable {
             continue;
         }
 
         let gated = gating::gate(
             ActionIntent::CreateIssue,
             Some(finding.confidence),
-            // §12.3's first-use rule needs history this pass does not yet read;
-            // `false` is the cautious end of it — a first filing is treated as a
-            // first filing, which raises the risk rather than lowering it.
-            false,
+            seasoned,
             gating::GateContext {
                 mode,
                 run_degraded: outcome.report.degraded.is_some(),
-                actions_in_last_hour: 0,
+                actions_in_last_hour: recent,
                 burst_threshold: config.global.burst_threshold,
             },
         );
@@ -603,37 +818,107 @@ async fn queue_actions(
             continue;
         };
 
-        let payload = serde_json::json!({
-            "title": finding.title,
-            "body": finding.body,
-            "rev-local-fingerprint": finding.fingerprint,
-        });
+        let context = revlocal_publish::IssueContext::default();
 
-        store
-            .insert(&PublishAction {
-                id: PublishActionId::new(0),
-                run_id: run,
-                finding_id: Some(finding.id),
-                target: "andare".to_owned(),
-                capability: Capability::CreateIssue,
-                risk: gated.assessment.class,
-                // §11.6: the fingerprint makes redelivery safe, and makes a
-                // re-reviewed change reuse the issue rather than file a second.
-                idempotency_key: format!("andare-{}", finding.fingerprint),
-                payload_json: payload.to_string(),
-                status,
-                attempts: 0,
-                response_json: None,
-                external_ref: None,
-                error: None,
-                created_at: at,
-                sent_at: None,
-            })
-            .await
-            .map_err(boxed)?;
+        // One finding can owe work to several targets, and they fail
+        // independently: a missing Andare project must not stop the local report
+        // that needs no configuration at all.
+        let mut payloads: Vec<(&str, String)> = Vec::new();
 
-        statuses.push(status);
+        if wants_andare {
+            if let Some(project) = project.clone() {
+                let options = revlocal_publish::AndareOptions {
+                    project,
+                    min_severity: repo_config.andare_min_severity,
+                };
+                let payload = revlocal_publish::AndarePayload {
+                    recurrence_body: revlocal_publish::recurrence_comment(finding, &context),
+                    draft: revlocal_publish::compose_issue(finding, &context, &options),
+                    context: context.clone(),
+                };
+                payloads.push(("andare", encode(&payload, "Andare issue")?));
+            }
+        }
+
+        if wants_report {
+            let payload = revlocal_publish::ReportPayload {
+                repo: repo.name.clone(),
+                title: finding.title.clone(),
+                body: revlocal_publish::compose_body(finding, &context),
+                fingerprint: finding.fingerprint.clone(),
+            };
+            payloads.push((
+                revlocal_publish::REPORT_TARGET,
+                encode(&payload, "local report")?,
+            ));
+        }
+
+        for (target, payload_json) in payloads {
+            // §11.6: the fingerprint makes a re-reviewed change *reuse* its issue
+            // rather than file a second one — so a finding that is still there on
+            // the next commit already has an action, and inserting again is a
+            // unique constraint failure.
+            //
+            // This was a hard error, and it took the whole run down with it: the
+            // executor pass returned, the run never left `publishing`, and the
+            // loop stopped on the first finding that survived two commits. Which
+            // is every finding worth having.
+            let key = format!("{target}-{}", finding.fingerprint);
+            if store
+                .find_by_idempotency_key(target, &key)
+                .await
+                .map_err(boxed)?
+                .is_some()
+            {
+                recurring += 1;
+                continue;
+            }
+
+            store
+                .insert(&PublishAction {
+                    id: PublishActionId::new(0),
+                    run_id: run,
+                    finding_id: Some(finding.id),
+                    target: target.to_owned(),
+                    capability: Capability::CreateIssue,
+                    risk: gated.assessment.class,
+                    idempotency_key: key,
+                    payload_json,
+                    status,
+                    attempts: 0,
+                    response_json: None,
+                    external_ref: None,
+                    error: None,
+                    created_at: at,
+                    sent_at: None,
+                })
+                .await
+                .map_err(boxed)?;
+
+            statuses.push(status);
+        }
     }
 
-    Ok(statuses)
+    // Not silence. A finding that was already filed is the system working, but a
+    // run that queued nothing and said nothing is indistinguishable from one that
+    // found nothing (§18).
+    if held.is_none() && recurring > 0 {
+        held = Some(format!(
+            "run #{}: {recurring} finding(s) are already filed, so nothing new was queued",
+            run.get()
+        ));
+    }
+
+    Ok(QueuedActions { statuses, held })
+}
+
+/// Serialise one target's payload, naming what failed to encode.
+///
+/// A `serde_json` error here means a payload type changed shape, and the message
+/// somebody sees should name which target's payload rather than leaving them to
+/// guess from a line number.
+fn encode<T: serde::Serialize>(payload: &T, what: &str) -> Result<String, ExecutorError> {
+    serde_json::to_string(payload).map_err(|error| ExecutorError::PublishConfig {
+        detail: format!("could not encode the {what} payload: {error}"),
+    })
 }

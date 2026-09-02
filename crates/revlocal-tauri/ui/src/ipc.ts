@@ -79,6 +79,54 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
   return api.invoke(command, args) as Promise<T>;
 }
 
+// --- the autopilot (RL-1501, RL-1506) ---------------------------------------
+
+/** The channel the background loop reports itself on. */
+export const AUTOPILOT_EVENT = 'revlocal://autopilot';
+
+/**
+ * What the background loop is doing.
+ *
+ * `last_line` is a whole sentence, written by the daemon, and is meant to be
+ * rendered as-is. Reassembling it here from the counts would be a second opinion
+ * about what happened, and the two would disagree the first time either changed.
+ */
+export type Autopilot = {
+  /** Whether the loop is switched on. */
+  enabled: boolean;
+  /** Whether a pass is executing right now. */
+  ticking: boolean;
+  /** Seconds between passes. */
+  interval_secs: number;
+  /** When the last pass started, RFC 3339. */
+  last_tick_at: string | null;
+  /** What the last pass did, in one sentence. */
+  last_line: string;
+  /** Why the last pass could not run at all. */
+  last_error: string | null;
+  /** Everything the last pass did not do, and why. */
+  notes: string[];
+};
+
+export function fetchAutopilot(): Promise<Autopilot> {
+  return invoke<Autopilot>('autopilot_status');
+}
+
+export function setAutopilot(enabled: boolean): Promise<Autopilot> {
+  return invoke<Autopilot>('set_autopilot', { enabled });
+}
+
+export function autopilotNow(): Promise<void> {
+  return invoke<void>('autopilot_now');
+}
+
+/** Subscribe to autopilot status. Returns an unsubscribe function. */
+export async function onAutopilot(handler: (state: Autopilot) => void): Promise<() => void> {
+  const api = tauri()?.event;
+  if (!api) return () => {};
+  return api.listen(AUTOPILOT_EVENT, (msg) => handler(msg.payload as Autopilot));
+}
+
 // --- dashboard (RL-1105, SPEC §15 screen 1) ---------------------------------
 
 /** One repository's polling health, as `revlocal repo show` reports it. */
@@ -107,6 +155,8 @@ export type LastRun = {
   run_id: number;
   status: string;
   verdict?: string;
+  summary?: string;
+  error?: string;
   finished_at?: string;
 };
 
@@ -146,8 +196,11 @@ export type Mode = (typeof MODES)[number];
 export const MODE_LABELS: Record<string, string> = {
   off: 'Off — nothing runs',
   dry_run: 'Dry run — review, publish nothing',
-  auto_low_ask_high: 'Auto (low risk) — ask before anything high-risk',
-  auto: 'Auto — publish without asking',
+  // Filing an issue is high risk by §12.3's own list, so this mode asks about
+  // every issue rev-local would ever create. Saying only "low risk runs" led to
+  // an inbox of 3 and a tracker of 0 for a week — the label now says so.
+  auto_low_ask_high: 'Auto (low risk) — asks before filing any issue',
+  auto: 'Auto — files issues without asking',
 };
 
 export function fetchDashboard(): Promise<Dashboard> {
@@ -156,6 +209,98 @@ export function fetchDashboard(): Promise<Dashboard> {
 
 export function setMode(mode: Mode): Promise<void> {
   return invoke<void>('set_mode', { mode });
+}
+
+// --- the queue (SPEC §15 screen 1) -------------------------------------------
+
+/** One run as the queue panel shows it. `status` is the run's, not its trigger's. */
+export type QueueItem = {
+  run_id: number;
+  repo: string;
+  repo_id: number;
+  change: string;
+  title?: string;
+  status: string;
+  trigger: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  verdict?: string;
+  error?: string;
+};
+
+export type QueueStatus = {
+  /** A review is executing — read from the runs, not from a local flag. */
+  running: boolean;
+  /** This window is working through the queue. */
+  draining: boolean;
+  paused: boolean;
+  queued_total: number;
+  active: QueueItem[];
+  /** The head of the queue, in the order it will run. */
+  waiting: QueueItem[];
+  /** Waiting runs past the ones listed. */
+  waiting_hidden: number;
+  recent: QueueItem[];
+};
+
+export function fetchQueueStatus(): Promise<QueueStatus> {
+  return invoke<QueueStatus>('queue_status');
+}
+
+export function startQueuedRuns(): Promise<void> {
+  return invoke<void>('start_queued_runs');
+}
+
+/**
+ * A timestamp as an operator reads it: how long ago, then the clock time.
+ *
+ * The raw RFC 3339 string is what the backend stores and the wrong thing to put
+ * in a table — "2026-09-01T04:12:44.918273Z" takes a column and a second of
+ * arithmetic to answer "is this recent?", which is the only question being asked
+ * of it.
+ */
+export function ago(iso: string | undefined | null, now = Date.now()): string {
+  if (!iso) return '—';
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return iso;
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** The clock time, for the title attribute where the exact moment matters. */
+export function exactly(iso: string | undefined | null): string {
+  if (!iso) return 'not recorded';
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? iso : new Date(at).toLocaleString();
+}
+
+/**
+ * How a run's status should read, and how much weight it deserves.
+ *
+ * `done` is not the same as `interrupted`, and a table that renders both in the
+ * same grey is one somebody has to read every row of to find the failure.
+ */
+export const RUN_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'active' | 'idle'> = {
+  queued: 'idle',
+  preparing: 'active',
+  reviewing: 'active',
+  synthesizing: 'active',
+  publishing: 'active',
+  done: 'ok',
+  skipped: 'idle',
+  interrupted: 'bad',
+  failed: 'bad',
+  cancelled: 'warn',
+};
+
+export function toneOf(status: string): 'ok' | 'warn' | 'bad' | 'active' | 'idle' {
+  return RUN_TONE[status] ?? 'idle';
 }
 
 // --- run detail (RL-1107, SPEC §15 screen 3) --------------------------------
@@ -197,6 +342,8 @@ export type RunView = {
   engine: string;
   depth: string;
   verdict?: string;
+  summary?: string;
+  error?: string;
   degraded?: string;
   tokens: number;
   tokens_known: boolean;
@@ -222,6 +369,50 @@ export function retryTarget(runId: number, target: string): Promise<void> {
   return invoke<void>('retry_target', { runId, target });
 }
 
+// --- starting a review by hand (SPEC §15 screen 2) ---------------------------
+
+/**
+ * Git's empty tree. Reviewing a commit against it is what "the whole repository"
+ * means expressed as a diff, so a whole-repository review needs no separate mode
+ * on either side of the boundary.
+ */
+export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+export type ReviewBranch = { name: string; head: string; current: boolean };
+export type BranchList = {
+  branches: ReviewBranch[];
+  suggested_base?: string;
+  current?: string;
+};
+export type ReviewCommit = { sha: string; subject: string; author: string; authored_at: string };
+
+/** What was queued, and enough to say so: `scope` is the request in words. */
+export type StartedReview = { run_id: number; status: string; scope: string };
+
+/** `base` turns a commit review into a range: a branch's own work, or everything. */
+export type ReviewRequest = {
+  branch?: string;
+  revision: string;
+  base?: string;
+};
+
+export function fetchReviewBranches(repoId: number): Promise<BranchList> {
+  return invoke<BranchList>('review_branches', { repoId });
+}
+
+export function fetchReviewCommits(repoId: number, branch: string): Promise<ReviewCommit[]> {
+  return invoke<ReviewCommit[]>('review_commits', { repoId, branch });
+}
+
+export function startReview(repoId: number, request: ReviewRequest): Promise<StartedReview> {
+  return invoke<StartedReview>('start_review', {
+    repoId,
+    branch: request.branch ?? null,
+    revision: request.revision,
+    base: request.base ?? null,
+  });
+}
+
 // --- approvals (RL-1109, SPEC §12.4, §15 screen 5) --------------------------
 
 export type QueuedAction = {
@@ -240,11 +431,19 @@ export type ApprovalsView = { waiting: QueuedAction[] };
 export function fetchApprovals(): Promise<ApprovalsView> {
   return invoke<ApprovalsView>('list_approvals');
 }
-export function approveAction(id: number): Promise<void> {
-  return invoke<void>('approve_action', { id });
+/**
+ * Approve one action. Resolves with a delivery note, or `''` when it was sent.
+ *
+ * Approving and delivering are separate: an approval that could not be delivered
+ * is still an approval, and the queue redelivers it. Rejecting the whole call
+ * because Andare is unconfigured used to report "could not approve", which sent
+ * people to look at the approval instead of at Settings.
+ */
+export function approveAction(id: number): Promise<string> {
+  return invoke<string>('approve_action', { id });
 }
-export function approveRun(runId: number): Promise<void> {
-  return invoke<void>('approve_run', { runId });
+export function approveRun(runId: number): Promise<string> {
+  return invoke<string>('approve_run', { runId });
 }
 export function rejectAction(id: number, suppress: boolean): Promise<void> {
   return invoke<void>('reject_action', { id, suppress });
@@ -514,8 +713,8 @@ export function runDoctor(): Promise<SettingsView> {
 }
 
 /** Configure the built-in Andare and Trama HTTP endpoints with Keychain bearers. */
-export function configureMcp(andareBearer: string, tramaBearer: string): Promise<void> {
-  return invoke<void>('configure_mcp', { andareBearer, tramaBearer });
+export function configureMcp(suiteBearer: string): Promise<void> {
+  return invoke<void>('configure_mcp', { suiteBearer });
 }
 
 export function setOverride(

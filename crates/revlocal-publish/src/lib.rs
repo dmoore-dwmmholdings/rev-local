@@ -9,6 +9,7 @@
 pub mod andare;
 pub mod check;
 pub mod github;
+pub mod local;
 pub mod queue;
 pub mod report;
 pub mod retry;
@@ -17,9 +18,10 @@ pub mod trama;
 pub mod work_item;
 
 pub use andare::{
-    compose_issue, filing_candidates, is_filable, plan, recurrence_comment, search_query,
-    AndareOptions, AndarePayload, AndareTarget, AndareWriter, FilingPlan, IssueContext, IssueDraft,
-    OutcomePayload, SearchOutcome, FINGERPRINT_TRAILER,
+    compose_body, compose_issue, filing_candidates, is_filable, plan, recurrence_comment,
+    search_query, AndareOptions, AndarePayload, AndareTarget, AndareToolNames, AndareWriter,
+    FilingPlan, IssueContext, IssueDraft, McpAndareWriter, OutcomePayload, SearchOutcome,
+    FINGERPRINT_TRAILER,
 };
 pub use check::{
     conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckPayload, CheckStatus,
@@ -32,6 +34,7 @@ pub use github::{
 pub use github::{
     find_own_review, gh_create_review, gh_list_reviews, gh_update_review, GhRequest, REVIEW_MARKER,
 };
+pub use local::{ReportPayload, ReportTarget, TARGET_ID as REPORT_TARGET};
 pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_CONCURRENCY};
 pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};

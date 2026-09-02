@@ -102,7 +102,12 @@ async fn discovered(autonomy: AutonomyMode) -> Result<Fixture, Box<dyn std::erro
             engine: EngineKind::Mock,
             autonomy,
             enabled: true,
-            config_json: "{}".to_owned(),
+            // Andare needs a project to file into, and a repository that files
+            // without naming one is a configuration error rather than a review
+            // failure — `a_repository_with_no_andare_project_still_completes_its_review`
+            // covers that case. These tests are about the gate, so they configure
+            // the repository the way a real one filing issues has to be.
+            config_json: r#"{"andare_project": "ENG"}"#.to_owned(),
             created_at: at(0),
             updated_at: at(0),
         })
@@ -481,4 +486,196 @@ async fn the_workspace_root_fixture_is_reachable() {
     // Guards the helper above rather than the executor: a test suite whose fixture
     // path is wrong fails in a way that looks like the product is broken.
     assert!(workspace_root().join("SPEC.md").exists());
+}
+
+/// A manually requested change is queued for review, and a second request for the
+/// same revision queues a second attempt rather than being coalesced away.
+#[tokio::test]
+async fn a_manual_request_is_queued_even_for_a_change_that_already_has_a_run() {
+    // `enqueue` deliberately skips changes that already have a run — that is what
+    // stops discovery re-queueing everything each tick. Routing a manual request
+    // through it would make the second press of "Review" do nothing at all.
+    let fixture = discovered(AutonomyMode::DryRun).await.expect("fixture");
+    let change = ChangeStore::new(&fixture.pool)
+        .without_runs(fixture.repo.id, 10)
+        .await
+        .expect("changes")
+        .pop()
+        .expect("a discovered change");
+
+    let first = executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(2))
+        .await
+        .expect("first manual request");
+    let second = executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(3))
+        .await
+        .expect("second manual request");
+
+    assert_ne!(first.id, second.id, "the second request queued nothing");
+    assert_eq!(second.attempt, first.attempt + 1);
+    assert_eq!(first.status, RunStatus::Queued);
+    assert_eq!(first.trigger, revlocal_core::TriggerSource::Manual);
+}
+
+/// Queueing returns before the engine runs, and the named run is the one executed.
+#[tokio::test]
+async fn a_manual_run_is_executed_by_id_rather_than_by_queue_position() {
+    // Somebody who asked to review *this* commit is owed that commit's run. Using
+    // `drain` would give them whatever was at the head of the queue.
+    let fixture = discovered(AutonomyMode::DryRun).await.expect("fixture");
+    let change = ChangeStore::new(&fixture.pool)
+        .without_runs(fixture.repo.id, 10)
+        .await
+        .expect("changes")
+        .pop()
+        .expect("a discovered change");
+
+    // An older run is already waiting, so "the head of the queue" and "the run I
+    // asked for" are different runs.
+    let older = executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(2))
+        .await
+        .expect("older");
+    let mine = executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(3))
+        .await
+        .expect("mine");
+
+    let outcome = executor::execute_run(
+        &fixture.pool,
+        &config(AutonomyMode::DryRun),
+        &NullSink,
+        &fixture.data_dir(),
+        mine.id,
+        at(4),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("execute")
+    .expect("the run went ahead");
+
+    assert_eq!(outcome.run_id, mine.id.get());
+
+    let runs = RunStore::new(&fixture.pool);
+    assert_eq!(
+        runs.get(older.id).await.expect("older run").status,
+        RunStatus::Queued,
+        "executing one run must not execute the rest of the queue"
+    );
+}
+
+/// The kill switch holds a named run rather than failing it.
+#[tokio::test]
+async fn a_manual_run_is_held_by_the_kill_switch_and_stays_queued() {
+    let fixture = discovered(AutonomyMode::DryRun).await.expect("fixture");
+    let change = ChangeStore::new(&fixture.pool)
+        .without_runs(fixture.repo.id, 10)
+        .await
+        .expect("changes")
+        .pop()
+        .expect("a discovered change");
+    let run = executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(2))
+        .await
+        .expect("queued");
+
+    revlocal_store::SettingStore::new(&fixture.pool)
+        .set_paused(true, at(3))
+        .await
+        .expect("pause");
+
+    let held = executor::execute_run(
+        &fixture.pool,
+        &config(AutonomyMode::DryRun),
+        &NullSink,
+        &fixture.data_dir(),
+        run.id,
+        at(4),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("execute")
+    .expect_err("a paused daemon must not review");
+
+    assert!(held.contains("kill switch"), "{held}");
+    assert_eq!(
+        RunStore::new(&fixture.pool)
+            .get(run.id)
+            .await
+            .expect("run")
+            .status,
+        RunStatus::Queued,
+        "a held run must stay queued so releasing the switch resumes it"
+    );
+}
+
+/// A repository missing its Andare project holds the filing, not the review.
+#[tokio::test]
+async fn a_repository_with_no_andare_project_still_completes_its_review() {
+    // This used to abort the whole executor pass with an outer error: the run was
+    // left stuck in `publishing`, and one repository's missing setting stopped
+    // every other repository's queue. §18 — the fact is reported, not raised.
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+
+    // The one thing this test is about: the setting the fixture normally carries,
+    // taken away.
+    let unconfigured = revlocal_core::Repo {
+        config_json: "{}".to_owned(),
+        ..fixture.repo.clone()
+    };
+    RepoStore::new(&fixture.pool)
+        .update(&unconfigured)
+        .await
+        .expect("clear the andare project");
+
+    executor::enqueue(&fixture.pool, &unconfigured, at(2))
+        .await
+        .expect("enqueue");
+
+    let report = executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::Auto),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain must not fail because a repository is missing a setting");
+
+    let outcome = report.finished.first().expect("a finished run");
+    assert!(outcome.findings > 0, "the findings are still stored");
+
+    // Targets fail independently (RL-1507). Andare gets nothing, because there is
+    // no project to file into; the local report needs no configuration and is
+    // written anyway, which is the whole reason it exists.
+    let actions = revlocal_store::PublishActionStore::new(&fixture.pool)
+        .list_for_run(revlocal_core::RunId::new(outcome.run_id))
+        .await
+        .expect("actions");
+    assert!(
+        actions.iter().all(|action| action.target == "report"),
+        "nothing may be filed into no project: {:?}",
+        actions.iter().map(|a| a.target.clone()).collect::<Vec<_>>()
+    );
+    assert!(
+        !actions.is_empty(),
+        "the local report is written with nothing configured"
+    );
+
+    let detail = outcome.detail.clone().unwrap_or_default();
+    assert!(
+        detail.contains("Andare project"),
+        "the reason must name the setting to fix: {detail:?}"
+    );
+
+    let run = RunStore::new(&fixture.pool)
+        .list_recent(Some(fixture.repo.id), None, 10)
+        .await
+        .expect("runs")
+        .into_iter()
+        .next()
+        .expect("a run");
+    assert!(
+        matches!(run.status, RunStatus::Done | RunStatus::AwaitingApproval),
+        "the run must reach a terminal status, not sit in publishing: {:?}",
+        run.status
+    );
 }

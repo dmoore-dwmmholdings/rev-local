@@ -18,6 +18,14 @@ use serde::{Deserialize, Serialize};
 /// discriminant is in the payload anyway.
 pub const RUN_EVENT: &str = "revlocal://run-event";
 
+/// The Tauri event name the autopilot's status arrives on.
+///
+/// Separate from [`RUN_EVENT`] because it answers a different question. A run
+/// event says what one review is doing; this says whether rev-local is awake at
+/// all, when it last looked, and what it found — which is the thing that is
+/// missing when somebody says they cannot tell what the app is doing.
+pub const AUTOPILOT_EVENT: &str = "revlocal://autopilot";
+
 /// One run event, in the shape the front end receives it.
 ///
 /// Deliberately a separate type from [`RunEvent`] rather than serialising that

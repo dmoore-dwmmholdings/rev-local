@@ -66,16 +66,55 @@ $ revlocal watch --once --database ~/rl.db
   acme — 2 discovered, 1 recorded, 1 skipped
       skipped: dd1c97f — all 1 path(s) match ignore_globs
 
-Discovery only: reviews are not executed yet. `revlocal review --repo <path> --rev <ref>` reviews one change today.
+  queued 1 run(s)
+  reviewed acme a1b2c3d — comment (3 finding(s), 0 action(s), claude)
 ```
+
+Each tick discovers, queues and reviews: a run left over from an earlier tick is
+executed even when this tick found nothing new to discover.
 
 Discovery is persistent: every change is recorded with its skip reason, and the
 cursor advances past skipped changes, so a second pass over a quiet repository
 finds nothing rather than rediscovering the same commits forever.
 
-**It does not run reviews yet, and says so on every tick.** A `watch` that
-silently reviewed nothing would be indistinguishable from one whose repositories
-are quiet.
+A tick that reviewed nothing says why rather than printing nothing — "the kill
+switch is engaged", "over today's budget", "that repository is disabled". A
+`watch` that silently reviewed nothing would be indistinguishable from one whose
+repositories are quiet.
+
+## Leaving the app running
+
+The desktop app runs the same pass on a timer. Turn **Autopilot** on at the top of
+the dashboard; it then checks every enabled repository once a minute, reviews what
+it finds, and delivers whatever is ready to go — no button presses.
+
+The panel says what the last pass did in one sentence, and lists anything that did
+*not* happen and why. Two things it will tell you about, because they are the two
+that quietly stop findings reaching a tracker:
+
+- **A repository with no Andare project.** Set it under *Where findings go* on the
+  repository screen. Until it is set, nothing reaches Andare — though the local
+  report below still gets written.
+- **A mode that cannot file.** Filing an issue is high risk (§12.3), so every mode
+  below `auto` holds every issue for your approval. `auto_low_ask_high` will ask
+  about all of them. Choose `auto` on the dashboard for a hands-off loop.
+
+### Local reports
+
+Every repository writes its findings to disk as markdown, one file per finding:
+
+```
+~/.local/share/rev-local/reports/<repository>/<fingerprint>.md
+```
+
+This target needs no configuration and is on by default, so a machine with no
+tracker configured still produces something you — or another agent — can read.
+The filename is the finding's fingerprint, so re-reviewing a change that still has
+the same problem rewrites one file rather than accumulating duplicates. Drop
+`report` from a repository's `targets` to turn it off.
+
+`revlocal watch` runs the identical pass from a terminal and writes the same local
+reports; `revlocal publish` is what delivers to a tracker there.
 
 ## Reviewing a change
 
@@ -90,13 +129,17 @@ modified.
 
 ```
 $ revlocal review --repo ~/code/myproject --rev HEAD
-revlocal: reviewing with the mock engine (live engine selection is not wired yet)
+revlocal: reviewing with the mock engine, which spends nothing and invents its
+findings. Pass --engine claude or --engine codex for a real review.
 ...
 ```
 
-**The mock engine is what runs today.** Selecting `claude` or `codex` from the CLI
-is not wired up yet, so this exercises the pipeline rather than producing a real
-review.
+**`--engine` defaults to `mock`, and that default is deliberate.** This command
+takes a *path* rather than a configured repository, so there is no stored engine
+choice to honour — and a command that started spending your tokens because you
+typed a directory name would be the wrong way for a default to be wrong. Pass
+`--engine claude` or `--engine codex` for a real review. `revlocal watch` and the
+desktop app use each repository's own configured engine and need no flag.
 
 ### Machine-readable output
 

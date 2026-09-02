@@ -10,10 +10,12 @@
 //! one; if a decision needs making it belongs in the daemon, where the CLI can
 //! reach it too.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use revlocal_tauri::events::{UiEvent, UiEventSink, RUN_EVENT};
 use revlocal_tauri::lifecycle::{on_close, CloseAction, CloseCause, TrayItem};
+use revlocal_tauri::review;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WindowEvent};
@@ -24,6 +26,9 @@ use tauri::{Emitter, Manager, WindowEvent};
 /// screen: two callers each with their own budget would show twice as many.
 static NOTIFIER: std::sync::Mutex<revlocal_daemon::notify::Notifier> =
     std::sync::Mutex::new(revlocal_daemon::notify::Notifier::new());
+
+/// Prevent two dashboard clicks from running the same queue concurrently.
+static QUEUE_DRAINING: AtomicBool = AtomicBool::new(false);
 
 /// Printed once the window and tray exist, when `REVLOCAL_SMOKE` is set.
 ///
@@ -101,6 +106,69 @@ fn global_config() -> revlocal_core::GlobalConfig {
         )
 }
 
+/// Build the real Andare target from the configured HTTP MCP endpoint.
+///
+/// The bearer remains a deferred Keychain reference until `HttpClient` connects;
+/// this wiring never reads or logs it itself.
+fn andare_target(
+    config: &revlocal_core::GlobalConfig,
+) -> Result<Arc<dyn revlocal_publish::PublishTarget>, String> {
+    let server = config.mcp_servers.get("andare").ok_or_else(|| {
+        "Andare MCP is not configured; add the suite bearer in Settings".to_owned()
+    })?;
+    if server.transport != "http" {
+        return Err("Andare MCP must use the HTTP transport".to_owned());
+    }
+    let url = server
+        .url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| "Andare MCP has no endpoint URL".to_owned())?;
+    let endpoint = revlocal_mcp::HttpEndpoint {
+        id: "andare".to_owned(),
+        url: url.to_owned(),
+        headers: server.headers.clone(),
+    };
+    let client = revlocal_mcp::HttpClient::new(endpoint).map_err(|error| error.to_string())?;
+    let writer = revlocal_publish::McpAndareWriter::new(
+        revlocal_mcp::McpClient::from(client),
+        Arc::new(revlocal_mcp::MacKeychain),
+        revlocal_publish::AndareToolNames::default(),
+    );
+    Ok(Arc::new(revlocal_publish::AndareTarget::new(writer)))
+}
+
+/// Deliver pending and approved Andare actions, leaving durable receipts/errors
+/// on their individual queue rows.
+async fn dispatch_andare(
+    pool: revlocal_store::Pool,
+    config: &revlocal_core::GlobalConfig,
+) -> Result<revlocal_publish::DispatchReport, String> {
+    let mut queue =
+        revlocal_publish::PublishQueue::new(pool, revlocal_publish::QueueConfig::default());
+    queue.register(andare_target(config)?);
+    queue
+        .dispatch_pending(chrono::Utc::now())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Try to deliver, and say what happened — without turning a delivery problem
+/// into a failed approval.
+///
+/// Approving and delivering are two things, and they fail for unrelated reasons.
+/// Reporting a missing Andare bearer as "could not approve #12" was wrong twice
+/// over: the approval had already been recorded, and the person reading it went
+/// looking at the approval rather than at Settings. The action stays approved and
+/// the queue redelivers it (§11.6 makes that safe), so the honest report is that
+/// it is approved and not yet sent.
+async fn deliver_note(pool: &revlocal_store::Pool, what: &str) -> String {
+    match dispatch_andare(pool.clone(), &global_config()).await {
+        Ok(_) => String::new(),
+        Err(error) => format!("{what}, but not delivered yet — {error}"),
+    }
+}
+
 /// The dashboard snapshot (§15 screen 1).
 ///
 /// One line of delegation past opening the store: the composition is
@@ -120,6 +188,244 @@ async fn dashboard() -> Result<serde_json::Value, String> {
     pool.close().await;
 
     serde_json::to_value(snapshot.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// One run as the queue panel shows it.
+///
+/// `status` is the run's own status rather than a re-used trigger field: a panel
+/// that labelled a *reviewing* run with the word `poll` told somebody watching it
+/// what started the run and nothing about what it is doing now.
+#[derive(serde::Serialize)]
+struct QueueItem {
+    run_id: i64,
+    repo: String,
+    repo_id: i64,
+    change: String,
+    title: Option<String>,
+    status: String,
+    trigger: String,
+    created_at: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    verdict: Option<String>,
+    error: Option<String>,
+}
+
+/// What the queue is doing, as opposed to what this window last asked it to do.
+#[derive(serde::Serialize)]
+struct QueueStatus {
+    /// A review is executing — read from the runs, not from a local flag.
+    running: bool,
+    /// This window is driving the queue right now.
+    draining: bool,
+    /// The kill switch is engaged, so nothing will start.
+    paused: bool,
+    queued_total: u32,
+    active: Vec<QueueItem>,
+    /// The head of the queue, oldest first — the order they will run in.
+    waiting: Vec<QueueItem>,
+    /// Waiting runs past the ones listed, so a short list never reads as the whole queue.
+    waiting_hidden: u32,
+    /// The most recently finished runs, so "nothing is running" is not the only thing said.
+    recent: Vec<QueueItem>,
+}
+
+/// Statuses that mean a run is being worked on right now.
+const ACTIVE_STATUSES: [revlocal_core::RunStatus; 4] = [
+    revlocal_core::RunStatus::Preparing,
+    revlocal_core::RunStatus::Reviewing,
+    revlocal_core::RunStatus::Synthesizing,
+    revlocal_core::RunStatus::Publishing,
+];
+
+/// Resolve runs into panel rows, reading each change and repository once.
+///
+/// The obvious loop re-opens `ChangeStore` per run and re-scans the repository
+/// list per run; at a hundred queued runs that is the difference between a panel
+/// that appears and one that people assume is broken.
+async fn queue_items(
+    pool: &revlocal_store::Pool,
+    repos: &[revlocal_core::Repo],
+    runs: &[revlocal_core::Run],
+    changes: &mut std::collections::HashMap<i64, revlocal_core::Change>,
+) -> Result<Vec<QueueItem>, String> {
+    let mut items = Vec::with_capacity(runs.len());
+    for run in runs {
+        let key = run.change_id.get();
+        if let std::collections::hash_map::Entry::Vacant(slot) = changes.entry(key) {
+            let change = revlocal_store::ChangeStore::new(pool)
+                .get(run.change_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            slot.insert(change);
+        }
+        // Inserted immediately above when absent.
+        let Some(change) = changes.get(&key) else {
+            continue;
+        };
+        let repo = repos.iter().find(|repo| repo.id == change.repo_id);
+        items.push(QueueItem {
+            run_id: run.id.get(),
+            // Named rather than omitted: a blank cell reads as a panel that failed
+            // to load, and a repository can genuinely have been removed.
+            repo: repo.map_or_else(|| "removed repository".to_owned(), |repo| repo.name.clone()),
+            repo_id: repo.map_or(0, |repo| repo.id.get()),
+            change: change.external_id.clone(),
+            title: change.title.clone(),
+            status: run.status.as_str().to_owned(),
+            trigger: run.trigger.as_str().to_owned(),
+            created_at: run.created_at.to_rfc3339(),
+            started_at: run.started_at.map(|at| at.to_rfc3339()),
+            finished_at: run.finished_at.map(|at| at.to_rfc3339()),
+            verdict: run.verdict.map(|v| v.as_str().to_owned()),
+            error: run.error.clone(),
+        });
+    }
+    Ok(items)
+}
+
+/// Read what the queue is actually doing (§15 screen 1).
+#[tauri::command]
+async fn queue_status() -> Result<serde_json::Value, String> {
+    /// How many waiting runs the panel lists before it starts counting instead.
+    const SHOW_WAITING: usize = 8;
+    /// How many finished runs the panel keeps in view.
+    const SHOW_RECENT: usize = 8;
+
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+
+    let result = async {
+        let runs = revlocal_store::RunStore::new(&pool);
+        let repos = revlocal_store::RepoStore::new(&pool)
+            .list()
+            .await
+            .map_err(|e| e.to_string())?;
+        let paused = revlocal_store::SettingStore::new(&pool)
+            .is_paused()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let queued_total = runs
+            .count_matching(None, Some(revlocal_core::RunStatus::Queued))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // The same 200-run window the executor drains, so the head of this list is
+        // genuinely the run that goes next — the newest 8 queued runs would be the
+        // 8 that go *last*.
+        let mut queued = runs
+            .list_recent(None, Some(revlocal_core::RunStatus::Queued), 200)
+            .await
+            .map_err(|e| e.to_string())?;
+        queued.reverse();
+        queued.truncate(SHOW_WAITING);
+
+        // A bounded window, because this is re-read on every run event and the
+        // store fetches each row individually. Wide enough to hold the active
+        // runs and the last few finished ones; a queue long enough to push a
+        // finished run past it is one where the queue itself is the news.
+        let latest = runs
+            .list_recent(None, None, 50)
+            .await
+            .map_err(|e| e.to_string())?;
+        let active: Vec<_> = latest
+            .iter()
+            .filter(|run| ACTIVE_STATUSES.contains(&run.status))
+            .cloned()
+            .collect();
+        let recent: Vec<_> = latest
+            .iter()
+            .filter(|run| run.finished_at.is_some())
+            .take(SHOW_RECENT)
+            .cloned()
+            .collect();
+
+        let mut changes = std::collections::HashMap::new();
+        let status = QueueStatus {
+            running: !active.is_empty(),
+            draining: QUEUE_DRAINING.load(Ordering::Acquire),
+            paused,
+            queued_total,
+            waiting_hidden: queued_total
+                .saturating_sub(u32::try_from(queued.len()).unwrap_or(u32::MAX)),
+            active: queue_items(&pool, &repos, &active, &mut changes).await?,
+            waiting: queue_items(&pool, &repos, &queued, &mut changes).await?,
+            recent: queue_items(&pool, &repos, &recent, &mut changes).await?,
+        };
+        serde_json::to_value(status).map_err(|e| e.to_string())
+    }
+    .await;
+
+    pool.close().await;
+    result
+}
+
+/// Work through the queued runs in the background, keeping the window responsive.
+///
+/// Runs until the queue stops making progress rather than stopping after one: a
+/// button that emptied the queue one press at a time would need pressing once per
+/// queued review, and the queue is what the person pressing it wants cleared.
+#[tauri::command]
+async fn start_queued_runs(app: tauri::AppHandle) -> Result<(), String> {
+    if QUEUE_DRAINING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("this window is already working through the queue".to_owned());
+    }
+
+    let db = database_path();
+    let config = global_config();
+    let data = data_dir();
+    tauri::async_runtime::spawn(async move {
+        let result = async {
+            let pool = revlocal_store::open(&db).await.map_err(|e| e.to_string())?;
+            // The database setting is the operational global ceiling selected in
+            // the UI. The file supplies every other configuration default.
+            let mut config = config;
+            config.global.mode = revlocal_daemon::dashboard::global_mode(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            let sink = revlocal_tauri::events::EventBridge::new(Arc::new(WindowSink { app }));
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let result: Result<(), String> = loop {
+                let before = revlocal_store::RunStore::new(&pool)
+                    .count_matching(None, Some(revlocal_core::RunStatus::Queued))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let report = revlocal_daemon::executor::drain(
+                    &pool,
+                    &config,
+                    &sink,
+                    &data,
+                    1,
+                    chrono::Utc::now(),
+                    &cancel,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let after = revlocal_store::RunStore::new(&pool)
+                    .count_matching(None, Some(revlocal_core::RunStatus::Queued))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                // Stop only when there is no immediately runnable item. A held
+                // budget/disabled run must not make a background task spin.
+                if report.paused || after == 0 || after >= before {
+                    break Ok(());
+                }
+            };
+            pool.close().await;
+            result
+        }
+        .await;
+        if let Err(error) = result {
+            eprintln!("rev-local: queued review could not run: {error}");
+        }
+        QUEUE_DRAINING.store(false, Ordering::Release);
+    });
+    Ok(())
 }
 
 /// Set the global autonomy ceiling (§12.2, §15's mode selector).
@@ -230,7 +536,7 @@ async fn list_approvals() -> Result<serde_json::Value, String> {
 /// and the queue re-checks it at dispatch. That is what makes "an edit after
 /// approval is impossible" a mechanism rather than a promise.
 #[tauri::command]
-async fn approve_action(id: i64) -> Result<(), String> {
+async fn approve_action(id: i64) -> Result<String, String> {
     with_store(|pool| async move {
         let store = revlocal_store::PublishActionStore::new(&pool);
         let waiting = store
@@ -248,12 +554,18 @@ async fn approve_action(id: i64) -> Result<(), String> {
             .await
             .map_err(|e| e.to_string())
     })
-    .await
+    .await?;
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let note = deliver_note(&pool, &format!("Action #{id} is approved")).await;
+    pool.close().await;
+    Ok(note)
 }
 
 /// Approve everything queued for one run (§12.4's "approve all for this run").
 #[tauri::command]
-async fn approve_run(run_id: i64) -> Result<(), String> {
+async fn approve_run(run_id: i64) -> Result<String, String> {
     with_store(|pool| async move {
         let ids =
             revlocal_daemon::approvals_view::for_run(&pool, revlocal_core::RunId::new(run_id))
@@ -278,7 +590,17 @@ async fn approve_run(run_id: i64) -> Result<(), String> {
         }
         Ok(())
     })
-    .await
+    .await?;
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let note = deliver_note(
+        &pool,
+        &format!("Run #{run_id}\u{2019}s actions are approved"),
+    )
+    .await;
+    pool.close().await;
+    Ok(note)
 }
 
 /// Reject one action, optionally suppressing its finding (§12.4).
@@ -533,25 +855,24 @@ async fn run_doctor() -> Result<serde_json::Value, String> {
 /// Endpoint locations are product defaults discovered from this machine's existing
 /// MCP configuration. The config file stores only deferred Keychain references.
 #[tauri::command]
-fn configure_mcp(andare_bearer: String, trama_bearer: String) -> Result<(), String> {
-    if andare_bearer.trim().is_empty() || trama_bearer.trim().is_empty() {
-        return Err("enter a bearer token for both Andare and Trama".to_owned());
+fn configure_mcp(suite_bearer: String) -> Result<(), String> {
+    if suite_bearer.trim().is_empty() {
+        return Err("enter the suite MCP bearer token".to_owned());
     }
 
-    store_keychain_bearer("andare-bearer", &andare_bearer)?;
-    store_keychain_bearer("trama-bearer", &trama_bearer)?;
+    store_keychain_bearer("suite-mcp-bearer", &suite_bearer)?;
 
     let mut config = global_config();
     for (id, url, keychain_entry) in [
         (
             "andare",
             "https://us-central1-business-suite-7996a.cloudfunctions.net/claudemcp",
-            "andare-bearer",
+            "suite-mcp-bearer",
         ),
         (
             "trama",
             "https://us-central1-business-suite-7996a.cloudfunctions.net/tramamcp",
-            "trama-bearer",
+            "suite-mcp-bearer",
         ),
     ] {
         let mut headers = std::collections::BTreeMap::new();
@@ -583,6 +904,81 @@ fn configure_mcp(andare_bearer: String, trama_bearer: String) -> Result<(), Stri
         .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
+/// Let the platform's folder chooser select a repository directory.
+///
+/// Returns an empty string when the chooser was dismissed — that is a decision,
+/// not a failure, and reporting it as an error would put "could not open the
+/// folder picker" on screen every time somebody changed their mind.
+///
+/// Each platform's chooser is a separate program that may not be installed. When
+/// none is found the error says so and says what to do instead, because the path
+/// field beside the button still works.
+#[tauri::command]
+fn pick_repository() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    let attempts: [(&str, Vec<String>); 1] = [(
+        "osascript",
+        vec![
+            "-e".to_owned(),
+            "POSIX path of (choose folder with prompt \"Choose a repository\")".to_owned(),
+        ],
+    )];
+
+    #[cfg(target_os = "windows")]
+    let attempts: [(&str, Vec<String>); 1] = [(
+        "powershell",
+        vec![
+            "-NoProfile".to_owned(),
+            "-Command".to_owned(),
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+             $d.Description = 'Choose a repository'; \
+             if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }"
+                .to_owned(),
+        ],
+    )];
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let attempts: [(&str, Vec<String>); 2] = [
+        (
+            "zenity",
+            vec![
+                "--file-selection".to_owned(),
+                "--directory".to_owned(),
+                "--title=Choose a repository".to_owned(),
+            ],
+        ),
+        (
+            "kdialog",
+            vec![
+                "--getexistingdirectory".to_owned(),
+                ".".to_owned(),
+                "--title".to_owned(),
+                "Choose a repository".to_owned(),
+            ],
+        ),
+    ];
+
+    let mut missing = Vec::new();
+    for (program, args) in attempts {
+        match std::process::Command::new(program).args(&args).output() {
+            Ok(output) if output.status.success() => {
+                return String::from_utf8(output.stdout)
+                    .map(|path| path.trim().to_owned())
+                    .map_err(|_| "the folder picker returned a non-text path".to_owned());
+            }
+            // A non-zero exit is the chooser being dismissed.
+            Ok(_) => return Ok(String::new()),
+            Err(_) => missing.push(program),
+        }
+    }
+
+    Err(format!(
+        "no folder chooser is available ({} not found)\n  try: type or paste the repository path into the field instead",
+        missing.join(", ")
+    ))
+}
+
 /// Put a bearer into the login Keychain through stdin, never an argument.
 #[cfg(target_os = "macos")]
 fn store_keychain_bearer(account: &str, bearer: &str) -> Result<(), String> {
@@ -610,6 +1006,9 @@ fn store_keychain_bearer(account: &str, bearer: &str) -> Result<(), String> {
     stdin
         .write_all(bearer.as_bytes())
         .map_err(|error| format!("could not save the bearer in Keychain: {error}"))?;
+    // `security -w` reads until EOF. Waiting while this handle is alive leaves
+    // the setup action spinning forever, with no configuration ever written.
+    drop(stdin);
     let status = child
         .wait()
         .map_err(|error| format!("could not finish the Keychain update: {error}"))?;
@@ -693,6 +1092,218 @@ async fn get_repository(repo_id: i64) -> Result<serde_json::Value, String> {
     serde_json::to_value(view.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+async fn git_for_repo(repo_id: i64) -> Result<(revlocal_core::Repo, std::path::PathBuf), String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let repo = revlocal_store::RepoStore::new(&pool)
+        .list()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|repo| repo.id.get() == repo_id)
+        .ok_or_else(|| format!("no repository with id {repo_id}"));
+    pool.close().await;
+    let repo = repo?;
+    if !matches!(
+        repo.kind,
+        revlocal_core::RepoKind::Git | revlocal_core::RepoKind::GitHub
+    ) {
+        return Err(
+            "starting a review by hand is currently available for Git repositories".to_owned(),
+        );
+    }
+    let path = repo
+        .local_path
+        .as_deref()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "this repository has no local checkout to review".to_owned())?;
+    Ok((repo, path))
+}
+
+/// Run one read-only git command against the repository under review.
+///
+/// Through `GitRunner`, never by spawning the binary here. The choke point is what
+/// supplies the timeout and the non-interactive environment, and both matter
+/// here specifically: this runs on a Tauri command, so a `git` that sat waiting
+/// for a credential prompt would hang the window with nothing on screen to say
+/// why. `git/cmd.rs` has a test that enforces this.
+async fn git_text(path: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    revlocal_vcs::GitRunner::new()
+        .run(path, args)
+        .await
+        .map(|output| output.stdout)
+        .map_err(|error| error.to_string())
+}
+
+/// Branch heads in a local Git repository, without changing that repository.
+#[tauri::command]
+async fn review_branches(repo_id: i64) -> Result<serde_json::Value, String> {
+    let (_, path) = git_for_repo(repo_id).await?;
+    // `--show-current` is empty on a detached HEAD, which is a state and not an
+    // error: the branch list is still worth showing.
+    let current = git_text(&path, &["branch", "--show-current"])
+        .await
+        .map(|name| name.trim().to_owned())
+        .ok()
+        .filter(|name| !name.is_empty());
+
+    let text = git_text(
+        &path,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            &format!("--format={}", review::BRANCH_FORMAT),
+            "refs/heads",
+        ],
+    )
+    .await?;
+
+    serde_json::to_value(review::branch_list(&text, current.as_deref()))
+        .map_err(|error| error.to_string())
+}
+
+/// Recent commits on one selected branch. The fixed limit is declared in the UI.
+#[tauri::command]
+async fn review_commits(repo_id: i64, branch: String) -> Result<serde_json::Value, String> {
+    let (_, path) = git_for_repo(repo_id).await?;
+    let text = git_text(
+        &path,
+        &[
+            "log",
+            "--max-count=100",
+            &format!("--format={}", review::COMMIT_FORMAT),
+            "--no-decorate",
+            &branch,
+        ],
+    )
+    .await?;
+    serde_json::to_value(review::parse_commits(&text)).map_err(|error| error.to_string())
+}
+
+/// Resolve a ref to the commit it names right now.
+async fn resolve(path: &std::path::Path, revision: &str) -> Result<String, String> {
+    // Named in the error, because git's own is "fatal: Needed a single revision",
+    // which says nothing about which revision or where it came from.
+    git_text(
+        path,
+        &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
+    )
+    .await
+    .map(|sha| sha.trim().to_owned())
+    .map_err(|error| format!("could not resolve `{revision}` in this repository: {error}"))
+}
+
+/// Queue a review the user asked for, and start it in the background.
+///
+/// Returns as soon as the run exists. The review itself takes as long as the
+/// engine takes, and a command that only answered once the engine had finished
+/// left the window looking hung with no run to open — which is the opposite of
+/// what "start a review now" is for.
+///
+/// `revision` is the commit to review. `base` turns it into a range: a branch's
+/// own work when it is another branch, and the whole repository when it is git's
+/// empty tree.
+#[tauri::command]
+async fn start_review(
+    app: tauri::AppHandle,
+    repo_id: i64,
+    branch: Option<String>,
+    revision: String,
+    base: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (repo, path) = git_for_repo(repo_id).await?;
+
+    let sha = resolve(&path, &revision).await?;
+    // Resolved here rather than at review time so a branch moving between the
+    // click and the run cannot change what was asked for. The empty tree is not a
+    // ref and resolves to itself.
+    let base = match base.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+        None => None,
+        Some(review::EMPTY_TREE) => Some(review::EMPTY_TREE.to_owned()),
+        Some(other) => Some(resolve(&path, other).await?),
+    };
+
+    let subject = git_text(&path, &["log", "-1", "--format=%s", &sha])
+        .await
+        .unwrap_or_default();
+    let author = git_text(&path, &["log", "-1", "--format=%an%x1f%ae%x1f%aI", &sha])
+        .await
+        .unwrap_or_default();
+    let mut fields = author.trim().split('\u{1f}');
+    let author = (
+        fields.next().map(str::to_owned).filter(|a| !a.is_empty()),
+        fields.next().map(str::to_owned).filter(|a| !a.is_empty()),
+        fields.next().and_then(|at| {
+            chrono::DateTime::parse_from_rfc3339(at)
+                .ok()
+                .map(|at| at.with_timezone(&chrono::Utc))
+        }),
+    );
+
+    let branch = branch.filter(|branch| !branch.trim().is_empty());
+    let scope = review::scope_of(base.as_deref(), branch.as_deref(), &sha);
+    let change = review::change_for(&review::ResolvedRequest {
+        repo_id: repo.id,
+        sha: &sha,
+        subject: subject.trim(),
+        branch: branch.as_deref(),
+        base: base.as_deref(),
+        author,
+        at: chrono::Utc::now(),
+    });
+
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let queued =
+        revlocal_daemon::executor::enqueue_manual(&pool, &repo, &change, chrono::Utc::now()).await;
+    pool.close().await;
+    let run_id = queued.map_err(|error| error.to_string())?.id;
+
+    let db = database_path();
+    let config = global_config();
+    let data = data_dir();
+    tauri::async_runtime::spawn(async move {
+        let result = async {
+            let pool = revlocal_store::open(&db).await.map_err(|e| e.to_string())?;
+            let mut config = config;
+            config.global.mode = revlocal_daemon::dashboard::global_mode(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            let sink = revlocal_tauri::events::EventBridge::new(Arc::new(WindowSink { app }));
+            let outcome = revlocal_daemon::executor::execute_run(
+                &pool,
+                &config,
+                &sink,
+                &data,
+                run_id,
+                chrono::Utc::now(),
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .map_err(|error| error.to_string());
+            pool.close().await;
+            outcome
+        }
+        .await;
+        // The run row carries the outcome either way — this is for a terminal, not
+        // for the screen, which reads the run.
+        match result {
+            Err(error) => eprintln!("rev-local: run #{} could not run: {error}", run_id.get()),
+            Ok(Err(held)) => eprintln!("rev-local: {held}"),
+            Ok(Ok(_)) => {}
+        }
+    });
+
+    serde_json::to_value(review::StartedReview {
+        run_id: run_id.get(),
+        status: revlocal_core::RunStatus::Queued.as_str().to_owned(),
+        scope,
+    })
+    .map_err(|error| error.to_string())
+}
+
 /// Validate and store a repository's config (§13.2, §15 screen 2).
 ///
 /// The error crosses the boundary as the message the editor shows inline, line
@@ -768,6 +1379,19 @@ async fn file_to_andare(id: i64) -> Result<String, String> {
                 .map_err(|e| e.to_string())
         }
         Err(error) => Err(error.to_string()),
+    };
+    // A `pending` action is safe to send under the selected autonomy mode. The
+    // queue records its receipt or failure; a network problem therefore never
+    // turns into a lost finding, and never turns into an error about the filing
+    // — which succeeded.
+    let status = match status {
+        Ok(status) => {
+            if status == revlocal_core::PublishActionStatus::Pending {
+                let _ = dispatch_andare(pool.clone(), &global_config()).await;
+            }
+            Ok(status)
+        }
+        Err(error) => Err(error),
     };
     pool.close().await;
 
@@ -975,6 +1599,247 @@ fn tray_menu(app: &tauri::AppHandle<tauri::Wry>) -> tauri::Result<Menu<tauri::Wr
     Ok(menu)
 }
 
+// --- the autopilot (RL-1501, RL-1506) ---------------------------------------
+
+/// The database key holding whether the loop runs.
+///
+/// In the database rather than in memory so it survives a restart: an app that
+/// forgets it was switched off is one you switch off twice.
+const SETTING_AUTOPILOT: &str = "autopilot";
+
+/// What the loop is doing, as a screen needs to read it at any moment.
+///
+/// §15 says live updates arrive as events, and they do — but a screen that opens
+/// *between* two ticks would otherwise have nothing to show for a minute, which
+/// reads exactly like an app that is not running. So the last tick is kept here
+/// and served on demand as well as pushed.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AutopilotState {
+    /// Whether the loop is switched on.
+    enabled: bool,
+    /// Whether a tick is executing right now.
+    ticking: bool,
+    /// How long between ticks.
+    interval_secs: u64,
+    /// When the last tick started, RFC 3339.
+    last_tick_at: Option<String>,
+    /// One sentence of plain English about the last tick.
+    last_line: String,
+    /// Why the last tick could not run at all, if it could not.
+    last_error: Option<String>,
+    /// Everything the last tick did not do, and why (§18).
+    notes: Vec<String>,
+}
+
+impl AutopilotState {
+    /// Off until the database says otherwise.
+    ///
+    /// The reverse default would have a first launch start reviewing before the
+    /// window has finished asking which repositories to watch.
+    const fn new() -> Self {
+        Self {
+            enabled: false,
+            ticking: false,
+            interval_secs: revlocal_daemon::autopilot::DEFAULT_INTERVAL_SECS,
+            last_tick_at: None,
+            last_line: String::new(),
+            last_error: None,
+            notes: Vec::new(),
+        }
+    }
+}
+
+static AUTOPILOT: std::sync::Mutex<AutopilotState> = std::sync::Mutex::new(AutopilotState::new());
+
+/// Held for the duration of a pass, so two never overlap.
+///
+/// Separate from `AutopilotState::ticking`, which is what a screen reads. A flag
+/// somebody reads and then acts on is a race: the timer and the "check now"
+/// button both looked, both saw `false`, and both drained the same queue. The
+/// executor would have run one queued review twice.
+static AUTOPILOT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Change the shared state and return the new value.
+///
+/// A poisoned lock is recovered from rather than propagated: the state is a
+/// status line, and refusing to report status because a previous reporter
+/// panicked is the worst possible time to go quiet.
+fn update_autopilot(change: impl FnOnce(&mut AutopilotState)) -> AutopilotState {
+    let mut state = AUTOPILOT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    change(&mut state);
+    state.clone()
+}
+
+/// Push the current state to the window.
+fn publish_autopilot(app: &tauri::AppHandle, state: &AutopilotState) {
+    if let Err(error) = app.emit(revlocal_tauri::events::AUTOPILOT_EVENT, state) {
+        eprintln!("revlocal: no window to deliver autopilot status to: {error}");
+    }
+}
+
+/// Run one pass of the loop and record what it did.
+///
+/// Everything that decides lives in `revlocal_daemon::autopilot::tick`, which
+/// `revlocal watch` runs too. This opens the store, builds the publish target and
+/// reports the result — the three things that need the app's own configuration.
+async fn autopilot_tick(app: &tauri::AppHandle) {
+    if AUTOPILOT_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    publish_autopilot(app, &update_autopilot(|state| state.ticking = true));
+
+    let outcome = async {
+        let pool = revlocal_store::open(&database_path())
+            .await
+            .map_err(|e| format!("could not open the database: {e}"))?;
+
+        // The database setting is the operational ceiling chosen in the UI; the
+        // file supplies every other default. Same resolution the manual drain
+        // uses, so a run started by the loop and one started by a button are
+        // governed identically.
+        let mut config = global_config();
+        config.global.mode = revlocal_daemon::dashboard::global_mode(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // A missing bearer is not a reason to skip reviewing, or to skip
+        // publishing: the local report target needs no configuration and is
+        // registered by the tick itself. This adds Andare when it can be built,
+        // and the pass reports any action it could not route.
+        let targets: Vec<Arc<dyn revlocal_publish::PublishTarget>> =
+            andare_target(&config).into_iter().collect();
+
+        let sink =
+            revlocal_tauri::events::EventBridge::new(Arc::new(WindowSink { app: app.clone() }));
+        let report = revlocal_daemon::autopilot::tick(
+            &pool,
+            &config,
+            &sink,
+            &data_dir(),
+            &targets,
+            chrono::Utc::now(),
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        pool.close().await;
+        report
+    }
+    .await;
+
+    AUTOPILOT_RUNNING.store(false, Ordering::Release);
+    let state = update_autopilot(|state| {
+        state.ticking = false;
+        state.last_tick_at = Some(chrono::Utc::now().to_rfc3339());
+        match &outcome {
+            Ok(report) => {
+                state.last_line = report.line();
+                state.notes.clone_from(&report.notes);
+                state.last_error = None;
+            }
+            Err(error) => {
+                state.last_error = Some(error.clone());
+                state.last_line = "The last pass could not run.".to_owned();
+            }
+        }
+    });
+    publish_autopilot(app, &state);
+}
+
+/// Start the loop. Called once, from `setup`.
+///
+/// The task lives as long as the process and checks the switch each time round
+/// rather than being started and stopped: a task that is torn down and rebuilt
+/// has a window in which "off" and "starting" are indistinguishable, and this is
+/// the one part of the app whose whole job is to be unambiguous about whether it
+/// is running.
+fn spawn_autopilot(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // Read the stored switch before the first tick, so a restart resumes
+        // whatever was chosen rather than the default.
+        if let Ok(pool) = revlocal_store::open(&database_path()).await {
+            let stored = revlocal_store::SettingStore::new(&pool)
+                .get(SETTING_AUTOPILOT)
+                .await
+                .ok()
+                .flatten();
+            pool.close().await;
+            let enabled = stored.as_deref() == Some("on");
+            publish_autopilot(&app, &update_autopilot(|state| state.enabled = enabled));
+        }
+
+        let interval =
+            std::time::Duration::from_secs(revlocal_daemon::autopilot::DEFAULT_INTERVAL_SECS);
+        loop {
+            let enabled = AUTOPILOT
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .enabled;
+            if enabled {
+                autopilot_tick(&app).await;
+            }
+            tokio::time::sleep(interval).await;
+        }
+    });
+}
+
+/// What the loop is doing (§15's "what is it doing right now").
+#[tauri::command]
+fn autopilot_status() -> Result<serde_json::Value, String> {
+    let state = AUTOPILOT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    serde_json::to_value(state).map_err(|e| e.to_string())
+}
+
+/// Switch the loop on or off, and remember which.
+#[tauri::command]
+async fn set_autopilot(enabled: bool, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let pool = revlocal_store::open(&database_path())
+        .await
+        .map_err(|e| format!("could not open the database: {e}"))?;
+    let stored = revlocal_store::SettingStore::new(&pool)
+        .set(
+            SETTING_AUTOPILOT,
+            if enabled { "on" } else { "off" },
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|e| e.to_string());
+    pool.close().await;
+    stored?;
+
+    let state = update_autopilot(|state| state.enabled = enabled);
+    publish_autopilot(&app, &state);
+
+    // Switching it on and then waiting a minute for the first pass is the
+    // difference between "it works" and "nothing happened".
+    if enabled {
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move { autopilot_tick(&handle).await });
+    }
+
+    serde_json::to_value(state).map_err(|e| e.to_string())
+}
+
+/// Run one pass now, without waiting for the interval.
+#[tauri::command]
+async fn autopilot_now(app: tauri::AppHandle) -> Result<(), String> {
+    if AUTOPILOT_RUNNING.load(Ordering::Acquire) {
+        return Err("a pass is already running".to_owned());
+    }
+    // The check above is for the message; `autopilot_tick` holds the real guard.
+    tauri::async_runtime::spawn(async move { autopilot_tick(&app).await });
+    Ok(())
+}
+
 /// Exit code, not a panic (ADR 0003).
 ///
 /// A window that fails to start is the one moment a desktop user has no window to
@@ -995,6 +1860,8 @@ fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             kill_switch,
             dashboard,
+            queue_status,
+            start_queued_runs,
             set_mode,
             get_run,
             get_transcript,
@@ -1012,9 +1879,13 @@ fn run() -> tauri::Result<()> {
             settings,
             run_doctor,
             configure_mcp,
+            pick_repository,
             set_override,
             clear_override,
             get_repository,
+            review_branches,
+            review_commits,
+            start_review,
             save_repo_config,
             list_findings,
             suppress_finding,
@@ -1023,7 +1894,10 @@ fn run() -> tauri::Result<()> {
             initial_repo,
             initial_run,
             initial_onboarding_step,
-            flow_step
+            flow_step,
+            autopilot_status,
+            set_autopilot,
+            autopilot_now
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -1034,6 +1908,11 @@ fn run() -> tauri::Result<()> {
             // The bridge is what the daemon will be handed as its RunEventSink.
             // Held in Tauri's state so it lives as long as the app does.
             app.manage(revlocal_tauri::EventBridge::new(sink));
+
+            // §4.2: the daemon runs in-process, so "the app is open" has to be
+            // the same thing as "rev-local is watching". Until this existed it
+            // was not — discovery and the queue both waited for a button.
+            spawn_autopilot(handle.clone());
 
             // §15: the kill switch is reachable from every screen and from the
             // tray. The tray is also what makes closing the window survivable —

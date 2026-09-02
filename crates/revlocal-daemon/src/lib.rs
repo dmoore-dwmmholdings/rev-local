@@ -5,6 +5,7 @@
 pub mod approvals;
 pub mod approvals_view;
 pub mod autonomy;
+pub mod autopilot;
 pub mod backfill;
 pub mod budgets;
 pub mod dashboard;

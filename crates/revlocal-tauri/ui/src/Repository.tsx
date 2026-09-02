@@ -1,5 +1,17 @@
-import { useEffect, useState } from 'react';
-import type { RepositoryView, TriggerStatus, Watching } from './ipc';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ago,
+  EMPTY_TREE,
+  exactly,
+  toneOf,
+  type BranchList,
+  type RepositoryView,
+  type ReviewCommit,
+  type ReviewRequest,
+  type StartedReview,
+  type TriggerStatus,
+  type Watching,
+} from './ipc';
 
 /**
  * §15 screen 2 — one repository: what it watches, what can trigger it, what it
@@ -80,19 +92,341 @@ function Watched({ watching }: { watching: Watching }) {
   );
 }
 
+/** Whether this repository kind can have a review started against a local branch. */
+function reviewableByHand(kind: string): boolean {
+  return kind === 'git' || kind === 'github';
+}
+
+/** Read something a rejected promise threw, without assuming it is an Error. */
+function messageOf(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  return String((error as { message?: string })?.message ?? error);
+}
+
+
+/**
+ * The one configuration field that decides whether anything is ever filed
+ * (RL-1503).
+ *
+ * `andare_project` has always been settable — in the raw JSON box below, if you
+ * knew the key existed. Nothing named it anywhere in the app, so three
+ * repositories ran for a week with `{}` and every finding was held with
+ * "no `andare_project` set" in a report nobody was shown.
+ *
+ * It edits the same draft the textarea does rather than saving on its own, so
+ * there is one Save button and one validation path. A form that wrote directly
+ * would silently discard whatever was half-typed below it.
+ */
+function FilingConfig({
+  draft,
+  onChange,
+}: {
+  draft: string;
+  onChange: (next: string) => void;
+}) {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const value: unknown = JSON.parse(draft || '{}');
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      parsed = value as Record<string, unknown>;
+    }
+  } catch {
+    parsed = null;
+  }
+
+  // While the JSON below does not parse there is nothing coherent to edit, and
+  // guessing would overwrite what is being typed.
+  if (!parsed) {
+    return (
+      <section className="config">
+        <h3>Where findings go</h3>
+        <p className="dim">
+          Fix the configuration below first — it does not parse, so this cannot show
+          what is set.
+        </p>
+      </section>
+    );
+  }
+
+  const project = typeof parsed.andare_project === 'string' ? parsed.andare_project : '';
+  const severity =
+    typeof parsed.andare_min_severity === 'string' ? parsed.andare_min_severity : 'medium';
+
+  function set(key: string, value: string | null) {
+    const next = { ...(parsed as Record<string, unknown>) };
+    if (value === null || value === '') {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+    onChange(`${JSON.stringify(next, null, 2)}\n`);
+  }
+
+  return (
+    <section className="config">
+      <h3>Where findings go</h3>
+      <label className="field">
+        <span>Andare project key</span>
+        <input
+          value={project}
+          placeholder="e.g. REVL"
+          aria-label="andare project key"
+          onChange={(e) => set('andare_project', e.target.value.trim().toUpperCase())}
+        />
+      </label>
+      <label className="field">
+        <span>File findings at or above</span>
+        <select
+          aria-label="minimum severity to file"
+          value={severity}
+          onChange={(e) => set('andare_min_severity', e.target.value)}
+        >
+          {['critical', 'high', 'medium', 'low', 'info'].map((level) => (
+            <option key={level} value={level}>
+              {level}
+            </option>
+          ))}
+        </select>
+      </label>
+      {project === '' && (
+        <p className="hedge">
+          Nothing is filed while this is empty. Reviews still run and findings are
+          still stored — they just stay here.
+        </p>
+      )}
+      <p className="dim">Saved with the configuration below.</p>
+    </section>
+  );
+}
+
+/**
+ * Start a review now, without waiting for a trigger (§15 screen 2).
+ *
+ * Three scopes, because they answer three different questions and collapsing
+ * them would make two of the answers wrong:
+ *
+ * - **A branch** against what it forked from. This is the one people mean by
+ *   "review my branch": the branch's own work, not everything that has landed on
+ *   the base since it was cut.
+ * - **A single commit**, for going back to something specific.
+ * - **The whole repository**, expressed as a diff against the empty tree, so
+ *   depth selection and truncation apply to it like any other review — a
+ *   whole-repository review that only saw part of the tree still says so.
+ *
+ * Starting a review queues it and returns. The engine takes as long as it takes;
+ * a button that stayed pressed until it finished would look like a hang, and the
+ * run it created is exactly the thing worth looking at in the meantime.
+ */
+function ReviewNow({
+  branches,
+  branch,
+  base,
+  commits,
+  starting,
+  started,
+  error,
+  onBranch,
+  onBase,
+  onReview,
+  onOpenRun,
+}: {
+  branches: BranchList | null;
+  branch: string;
+  base: string;
+  commits: ReviewCommit[] | null;
+  starting: boolean;
+  started: StartedReview | null;
+  error: string | null;
+  onBranch: (next: string) => void;
+  onBase: (next: string) => void;
+  onReview: (request: ReviewRequest) => void;
+  onOpenRun: (runId: number) => void;
+}) {
+  const head = branches?.branches.find((item) => item.name === branch);
+  // A branch cannot be reviewed against itself, and a repository with one branch
+  // has nothing to compare it to. Both are said rather than left as a control
+  // that does nothing when pressed.
+  const comparable = base !== '' && base !== branch;
+
+  return (
+    <section className="review-now">
+      <h3>Review now</h3>
+      <p className="dim">
+        Start a review whenever you want one, without waiting for a trigger. It is queued
+        immediately and runs in the background — this window stays usable, and the run appears in
+        live activity on the dashboard.
+      </p>
+
+      {branches === null ? (
+        <p className="dim">Reading branches…</p>
+      ) : branches.branches.length === 0 ? (
+        <p className="empty">This repository has no local branches to review.</p>
+      ) : (
+        <>
+          <div className="review-controls">
+            <label className="filter">
+              Branch
+              <select value={branch} onChange={(event) => onBranch(event.target.value)}>
+                {branches.branches.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name}
+                    {item.current ? ' (checked out)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="filter">
+              Compared against
+              <select value={base} onChange={(event) => onBase(event.target.value)}>
+                <option value="">— nothing; review its head commit only —</option>
+                {branches.branches
+                  .filter((item) => item.name !== branch)
+                  .map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            <div className="review-actions">
+              <button
+                disabled={starting || !head || !comparable}
+                title={
+                  comparable
+                    ? `Review everything on ${branch} since it diverged from ${base}`
+                    : 'Choose a different branch to compare against'
+                }
+                onClick={() => head && onReview({ branch, revision: head.head, base })}
+              >
+                Review branch
+              </button>
+              <button
+                disabled={starting || !head}
+                title={`Review every tracked file on ${branch}, not just a change`}
+                onClick={() =>
+                  head && onReview({ branch, revision: head.head, base: EMPTY_TREE })
+                }
+              >
+                Review whole repository
+              </button>
+            </div>
+          </div>
+
+          {/* Said rather than left to be inferred from a disabled button. */}
+          {!comparable && (
+            <p className="dim">
+              {branches.branches.length < 2
+                ? 'There is only one branch, so there is nothing to compare it against — a whole-repository review is the alternative.'
+                : 'Choose a branch to compare against to review a branch\u2019s own work.'}
+            </p>
+          )}
+
+          {/* Brief, but not nothing: the buttons going grey is the only other
+              signal, and a grey button reads as "not allowed" as easily as
+              "working". */}
+          {starting && <p className="dim">Queueing the review…</p>}
+          {started && (
+            <p className="review-started" role="status">
+              Queued run #{started.run_id} — {started.scope}.{' '}
+              <button className="link" onClick={() => onOpenRun(started.run_id)}>
+                open it
+              </button>
+            </p>
+          )}
+          {error && (
+            <p className="config-error" role="alert">
+              {error}
+            </p>
+          )}
+
+          <h4>Or review one commit</h4>
+          {commits === null ? (
+            <p className="dim">Reading commits on {branch}…</p>
+          ) : commits.length === 0 ? (
+            <p className="empty">No commits on {branch}.</p>
+          ) : (
+            <table className="commits">
+              <thead>
+                <tr>
+                  <th>Commit</th>
+                  <th>Subject</th>
+                  <th>Author</th>
+                  <th>Authored</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {commits.map((commit) => (
+                  <tr key={commit.sha}>
+                    <td className="mono">{commit.sha.slice(0, 12)}</td>
+                    <td>{commit.subject || '(no commit subject)'}</td>
+                    <td className="dim">{commit.author}</td>
+                    <td className="dim" title={exactly(commit.authored_at)}>
+                      {ago(commit.authored_at)}
+                    </td>
+                    <td className="row-actions">
+                      <button
+                        disabled={starting}
+                        onClick={() => onReview({ branch, revision: commit.sha })}
+                      >
+                        Review
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {/* §18: "the last hundred" and "all there have ever been" must not look
+              the same. */}
+          {commits !== null && commits.length === 100 && (
+            <p className="dim">The most recent 100 commits on {branch}.</p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Repository({
   view,
   onOpenRun,
   onSave,
+  onLoadBranches,
+  onLoadCommits,
+  onReview,
 }: {
   view: RepositoryView | null;
   onOpenRun: (runId: number) => void;
   /** Resolves when saved; rejects with the validation error to show inline. */
   onSave: (configJson: string) => Promise<void>;
+  onLoadBranches?: (repoId: number) => Promise<BranchList>;
+  onLoadCommits?: (repoId: number, branch: string) => Promise<ReviewCommit[]>;
+  /** Resolves once the run exists — not once the review has finished. */
+  onReview?: (repoId: number, request: ReviewRequest) => Promise<StartedReview>;
 }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [branches, setBranches] = useState<BranchList | null>(null);
+  const [branch, setBranch] = useState('');
+  const [base, setBase] = useState('');
+  const [commits, setCommits] = useState<ReviewCommit[] | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [started, setStarted] = useState<StartedReview | null>(null);
+
+  // The callbacks are held in a ref rather than named in the effect's dependency
+  // list. A caller that passes an inline arrow — or leaves the prop off and takes
+  // the default — hands this component a new function identity on every render,
+  // and an effect that depended on it would load branches, set state, re-render,
+  // and load branches again, forever. The effect depends on the repository,
+  // because the repository is the only thing that changes what it should fetch.
+  const load = useRef({ onLoadBranches, onLoadCommits });
+  load.current = { onLoadBranches, onLoadCommits };
 
   // Reset the editor when the repository changes, so an unsaved draft cannot be
   // saved onto a different repository than the one it was typed against.
@@ -102,7 +436,51 @@ export function Repository({
     setSaved(false);
   }, [view?.repo.id, view?.config_json]);
 
+  const repoId = view?.repo.id;
+  const repoKind = view?.repo.kind;
+
+  useEffect(() => {
+    if (repoId === undefined || !repoKind || !reviewableByHand(repoKind)) return;
+    const fetchBranches = load.current.onLoadBranches;
+    const fetchCommits = load.current.onLoadCommits;
+    if (!fetchBranches) return;
+
+    // Nothing from the previous repository may stay on screen while the next
+    // one loads: a branch list belonging to another repository is worse than no
+    // branch list, because it can be clicked.
+    let current = true;
+    setBranches(null);
+    setCommits(null);
+    setStarted(null);
+    setReviewError(null);
+
+    fetchBranches(repoId)
+      .then((loaded) => {
+        if (!current) return;
+        setBranches(loaded);
+        const initial = loaded.current ?? loaded.branches[0]?.name ?? '';
+        setBranch(initial);
+        setBase(loaded.suggested_base ?? '');
+        if (!initial || !fetchCommits) {
+          setCommits([]);
+          return;
+        }
+        return fetchCommits(repoId, initial).then((rows) => {
+          if (current) setCommits(rows);
+        });
+      })
+      .catch((error: unknown) => {
+        if (current) setReviewError(messageOf(error));
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [repoId, repoKind]);
+
   if (!view) return <p className="empty">Loading the repository.</p>;
+
+  const selectedRepoId = view.repo.id;
 
   async function save() {
     setSaved(false);
@@ -121,6 +499,39 @@ export function Repository({
   }
 
   const budget = view.budget;
+
+  async function selectBranch(next: string) {
+    setBranch(next);
+    // A branch cannot be compared against itself, and the base list hides the
+    // selected branch — leaving it set would show an empty base box while the
+    // state still held a name.
+    if (next === base) setBase('');
+    setCommits(null);
+    setReviewError(null);
+    if (!onLoadCommits) {
+      setCommits([]);
+      return;
+    }
+    try {
+      setCommits(await onLoadCommits(selectedRepoId, next));
+    } catch (error: unknown) {
+      setReviewError(messageOf(error));
+    }
+  }
+
+  async function review(request: ReviewRequest) {
+    if (!onReview) return;
+    setStarting(true);
+    setReviewError(null);
+    setStarted(null);
+    try {
+      setStarted(await onReview(selectedRepoId, request));
+    } catch (error: unknown) {
+      setReviewError(messageOf(error));
+    } finally {
+      setStarting(false);
+    }
+  }
 
   return (
     <section className="repository">
@@ -151,6 +562,25 @@ export function Repository({
       </section>
 
       <Watched watching={view.watching} />
+
+      {/* Rendered only when the screen was actually given the means to start a
+          review. A panel that can list nothing and start nothing is worse than
+          no panel: it sits there saying "Reading branches…" forever. */}
+      {reviewableByHand(view.repo.kind) && onLoadBranches && onReview && (
+        <ReviewNow
+          branches={branches}
+          branch={branch}
+          base={base}
+          commits={commits}
+          starting={starting}
+          started={started}
+          error={reviewError}
+          onBranch={selectBranch}
+          onBase={setBase}
+          onReview={review}
+          onOpenRun={onOpenRun}
+        />
+      )}
 
       <section className="repo-budget">
         <h3>Today</h3>
@@ -191,9 +621,11 @@ export function Repository({
                     </button>
                   </td>
                   <td>{r.trigger}</td>
-                  <td>{r.status}</td>
+                  <td className={`run-status run-${toneOf(r.status)}`}>{r.status}</td>
                   <td>{r.verdict ?? '—'}</td>
-                  <td className="dim">{r.started_at ?? '—'}</td>
+                  <td className="dim" title={exactly(r.started_at)}>
+                    {r.started_at ? ago(r.started_at) : 'not started'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -205,6 +637,15 @@ export function Repository({
           <p className="dim">Older runs exist — this is the most recent {view.recent_runs.length}.</p>
         )}
       </section>
+
+      <FilingConfig
+        draft={draft}
+        onChange={(next) => {
+          setDraft(next);
+          setError(null);
+          setSaved(false);
+        }}
+      />
 
       <section className="config">
         <h3>Configuration</h3>

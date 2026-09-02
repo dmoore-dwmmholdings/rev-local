@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { Dashboard } from './Dashboard';
-import type { RepoCard } from './ipc';
+import type { Autopilot, QueueItem, QueueStatus, RepoCard } from './ipc';
 
 /** A card with everything present, which tests then vary one field of. */
 function card(overrides: Partial<RepoCard> = {}): RepoCard {
@@ -166,5 +166,267 @@ describe('dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'acme' }));
 
     expect(onOpenRepo).toHaveBeenCalledWith(1);
+  });
+});
+
+/** A queue with nothing in it, which tests then vary one field of. */
+function queue(overrides: Partial<QueueStatus> = {}): QueueStatus {
+  return {
+    running: false,
+    draining: false,
+    paused: false,
+    queued_total: 0,
+    active: [],
+    waiting: [],
+    waiting_hidden: 0,
+    recent: [],
+    ...overrides,
+  };
+}
+
+function item(overrides: Partial<QueueItem> = {}): QueueItem {
+  return {
+    run_id: 11,
+    repo: 'acme',
+    repo_id: 1,
+    change: 'abcdef0123456789',
+    status: 'queued',
+    trigger: 'manual',
+    created_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+describe('the queue panel', () => {
+  const dash = { repos: [card()], mode: 'dry_run', paused: false };
+
+  function mount(q: QueueStatus | null, props: { paused?: boolean; onStartQueue?: () => void; onOpenRun?: (id: number) => void } = {}) {
+    return render(
+      <Dashboard
+        dashboard={{ ...dash, paused: props.paused ?? false }}
+        queue={q}
+        onStartQueue={props.onStartQueue ?? noop}
+        onMode={noop}
+        onOpenRun={props.onOpenRun ?? noop}
+        onOpenRepo={noop}
+      />,
+    );
+  }
+
+  it('says each section is empty rather than omitting it', () => {
+    // A heading that disappears with its rows is indistinguishable from one that
+    // failed to load, and "is anything running?" is the question this panel is on
+    // screen to answer.
+    mount(queue());
+
+    expect(screen.getByText(/Nothing is running and nothing is waiting/)).toBeDefined();
+    expect(screen.getByText(/No reviews are waiting to run/)).toBeDefined();
+    expect(screen.getByText(/No review has finished yet/)).toBeDefined();
+  });
+
+  it('reports a run in flight even when this window did not start it', () => {
+    // `running` is read from the runs. A review started from the command line, or
+    // by a previous session, is still a review that is running.
+    mount(queue({ running: true, active: [item({ status: 'reviewing' })] }));
+
+    expect(screen.getByText('1 running')).toBeDefined();
+    expect(screen.getByText('reviewing')).toBeDefined();
+  });
+
+  it('labels a run with its status, not with its trigger', () => {
+    // The panel used to put the trigger in the status column, which told somebody
+    // watching a run what had started it and nothing about what it was doing.
+    const { container } = mount(queue({ running: true, active: [item({ status: 'synthesizing', trigger: 'poll' })] }));
+
+    // Scoped to the table: the header's "1 running" count carries the same tone.
+    expect(container.querySelector('.queue-table .run-active')?.textContent).toBe('synthesizing');
+    expect(screen.getByText('poll')).toBeDefined();
+  });
+
+  it('says how many waiting runs it is not showing', () => {
+    // §18: a page of a queue must not read as the queue.
+    mount(queue({ queued_total: 30, waiting: [item()], waiting_hidden: 29 }));
+
+    expect(screen.getByText(/Showing the next 1 of 30/)).toBeDefined();
+    expect(screen.getByText(/29 more are waiting/)).toBeDefined();
+  });
+
+  it('cannot start queued work while the kill switch is engaged', () => {
+    const onStartQueue = vi.fn();
+    mount(queue({ queued_total: 3, waiting: [item()], paused: true }), { paused: true, onStartQueue });
+
+    const button = screen.getByRole('button', { name: /Start queued reviews/ });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Held by the kill switch/)).toBeDefined();
+  });
+
+  it('will not offer to start an empty queue', () => {
+    mount(queue());
+
+    expect((screen.getByRole('button', { name: /Start queued reviews/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('starts queued work, and reports busy from the runs rather than the click', () => {
+    // A window-local "I pressed it" flag is cleared after the last run's event has
+    // been delivered, so a queue that stopped with work still in it would leave
+    // this button disabled and claiming to work, with nothing left to correct it.
+    const onStartQueue = vi.fn();
+    const { rerender } = mount(queue({ queued_total: 1, waiting: [item()] }), { onStartQueue });
+
+    fireEvent.click(screen.getByRole('button', { name: /Start queued reviews/ }));
+    expect(onStartQueue).toHaveBeenCalled();
+
+    rerender(
+      <Dashboard
+        dashboard={dash}
+        queue={queue({ queued_total: 1, running: true, active: [item({ run_id: 9, status: 'reviewing' })] })}
+        onStartQueue={onStartQueue}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={noop}
+      />,
+    );
+    expect((screen.getByRole('button', { name: /Reviewing…/ }) as HTMLButtonElement).disabled).toBe(true);
+
+    // And it comes back the moment the runs say nothing is active — even if this
+    // window's own drain flag is still set.
+    rerender(
+      <Dashboard
+        dashboard={dash}
+        queue={queue({ queued_total: 1, waiting: [item()], draining: true })}
+        onStartQueue={onStartQueue}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={noop}
+      />,
+    );
+    expect((screen.getByRole('button', { name: /Start queued reviews/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('opens a run from any of the three sections', () => {
+    const onOpenRun = vi.fn();
+    mount(
+      queue({
+        running: true,
+        active: [item({ run_id: 1, status: 'reviewing' })],
+        waiting: [item({ run_id: 2 })],
+        recent: [item({ run_id: 3, status: 'done', finished_at: new Date().toISOString() })],
+      }),
+      { onOpenRun },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '#3' }));
+    expect(onOpenRun).toHaveBeenCalledWith(3);
+  });
+
+  it('says it is still reading rather than showing an empty queue', () => {
+    // `null` is "not read yet" and is not the same as "nothing queued". Rendering
+    // them the same way says "nothing is running" before anything has been asked.
+    mount(null);
+
+    expect(screen.getByText(/Reading the queue/)).toBeDefined();
+    expect(screen.queryByText(/No reviews are waiting/)).toBeNull();
+  });
+});
+
+// --- the autopilot panel (RL-1501, RL-1506) ---------------------------------
+
+describe('autopilot panel', () => {
+  function state(overrides: Partial<Autopilot> = {}): Autopilot {
+    return {
+      enabled: true,
+      ticking: false,
+      interval_secs: 60,
+      last_tick_at: new Date().toISOString(),
+      last_line: 'Found 2 new change(s), reviewed 2, filed 1.',
+      last_error: null,
+      notes: [],
+      ...overrides,
+    };
+  }
+
+  function mount(autopilot: Autopilot | null, mode = 'auto', handlers = {}) {
+    render(
+      <Dashboard
+        dashboard={{ repos: [card()], mode, paused: false }}
+        autopilot={autopilot}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={noop}
+        {...handlers}
+      />,
+    );
+  }
+
+  it('says whether it is on, and how often it looks', () => {
+    // The first question anybody has about this app, and until RL-1506 no screen
+    // answered it.
+    mount(state());
+
+    expect(screen.getByText(/On — checking every 60 seconds/)).toBeDefined();
+  });
+
+  it('shows the last pass in the daemon’s own words', () => {
+    // Not reassembled from counts here: two renderings of one pass disagree the
+    // first time either changes.
+    mount(state());
+
+    expect(screen.getByText(/Found 2 new change\(s\), reviewed 2, filed 1\./)).toBeDefined();
+  });
+
+  it('warns that findings will wait when the mode cannot file', () => {
+    // Filing an issue is high risk by §12.3's list, so every mode below `auto`
+    // holds every issue. Somebody who switched the loop on and got an inbox
+    // instead of a tracker has to be told why.
+    mount(state(), 'auto_low_ask_high');
+
+    expect(screen.getByText(/wait for your approval/)).toBeDefined();
+  });
+
+  it('does not warn about approvals when the mode files on its own', () => {
+    mount(state(), 'auto');
+
+    expect(screen.queryByText(/wait for your approval/)).toBeNull();
+  });
+
+  it('shows the notes a pass left, so held work is not silent', () => {
+    // §18: work that did not happen is reported with its reason.
+    mount(state({ notes: ['acme: no `andare_project` set'] }));
+
+    expect(screen.getByText(/no `andare_project` set/)).toBeDefined();
+  });
+
+  it('reports a pass that could not run at all as an alert', () => {
+    mount(state({ last_error: 'could not open the database' }));
+
+    expect(screen.getByRole('alert').textContent).toMatch(/could not open the database/);
+  });
+
+  it('says nothing has happened yet rather than showing a stale line', () => {
+    mount(state({ last_tick_at: null, last_line: '' }));
+
+    expect(screen.getByText(/Waiting for the first pass/)).toBeDefined();
+  });
+
+  it('can be switched off, and asks the app rather than deciding itself', () => {
+    const onToggleAutopilot = vi.fn();
+    mount(state(), 'auto', { onToggleAutopilot });
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onToggleAutopilot).toHaveBeenCalledWith(false);
+  });
+
+  it('will not ask for a second pass while one is running', () => {
+    mount(state({ ticking: true }));
+
+    expect(screen.getByRole('button', { name: /checking/ }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('renders nothing at all before the status has been read', () => {
+    // `null` is "not asked yet". Drawing an "Off" switch then would be a lie
+    // somebody acts on by clicking it.
+    mount(null);
+
+    expect(screen.queryByLabelText('autopilot')).toBeNull();
   });
 });

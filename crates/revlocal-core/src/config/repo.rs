@@ -178,7 +178,17 @@ impl Default for RepoConfig {
                 "AGENTS.md".to_owned(),
                 "CONTRIBUTING.md".to_owned(),
             ],
-            targets: vec!["github".to_owned(), "andare".to_owned(), "trama".to_owned()],
+            // `report` is in the default list and the other three are not
+            // *conditional* on configuration — a target with nothing configured
+            // simply has no work queued for it. The local report needs nothing,
+            // so a fresh install with no tracker still produces findings somebody
+            // (or some other agent) can read (RL-1507).
+            targets: vec![
+                "github".to_owned(),
+                "andare".to_owned(),
+                "trama".to_owned(),
+                "report".to_owned(),
+            ],
             andare_project: None,
             andare_min_severity: Severity::High,
             andare_key_regex: r"[A-Z][A-Z0-9]+-\d+".to_owned(),

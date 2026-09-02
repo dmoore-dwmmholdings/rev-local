@@ -21,6 +21,7 @@
 //! no-silent-caps rule is the same rule seen from the publishing end.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use revlocal_core::{
@@ -29,6 +30,8 @@ use revlocal_core::{
 use serde::{Deserialize, Serialize};
 
 use crate::target::{PublishError, PublishTarget};
+use revlocal_mcp::{McpClient, SecretResolver};
+use tokio::sync::Mutex;
 
 /// The trailer that makes an issue findable again.
 pub const FINGERPRINT_TRAILER: &str = "rev-local-fingerprint:";
@@ -109,6 +112,21 @@ pub fn compose_issue(
     context: &IssueContext,
     options: &AndareOptions,
 ) -> IssueDraft {
+    IssueDraft {
+        project: options.project.clone(),
+        summary: finding.title.clone(),
+        description: compose_body(finding, context),
+        fingerprint: finding.fingerprint.clone(),
+    }
+}
+
+/// The body of one finding, without anything tracker-specific.
+///
+/// Split out of [`compose_issue`] so a local report is the same text an issue
+/// would have carried. Two renderings of one finding would drift, and the whole
+/// value of the local report is that it says what the tracker would have said
+/// for somebody who has no tracker configured.
+pub fn compose_body(finding: &Finding, context: &IssueContext) -> String {
     let mut description = String::new();
 
     let _ = writeln!(description, "{}\n", finding.body.trim());
@@ -161,12 +179,7 @@ pub fn compose_issue(
         finding.fingerprint
     );
 
-    IssueDraft {
-        project: options.project.clone(),
-        summary: finding.title.clone(),
-        description,
-        fingerprint: finding.fingerprint.clone(),
-    }
+    description
 }
 
 /// `path:line`, `path`, or a note that the finding is not file-scoped.
@@ -299,6 +312,155 @@ pub trait AndareWriter: Send + Sync {
     /// every other; a refusal is an ordinary answer and comes back as
     /// [`PublishError::Rejected`].
     async fn set_status(&self, key: &str, status: &str) -> Result<(), PublishError>;
+}
+
+/// The concrete MCP tool names used by Andare.
+///
+/// These defaults are the live surface captured in ADR 0028. They are kept in
+/// one value so a deployment with a manually mapped tool can supply its real
+/// names without changing how issues are composed or deduplicated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AndareToolNames {
+    /// Find issues by AQL.
+    pub search: String,
+    /// Create an issue.
+    pub create_issue: String,
+    /// Add a comment to an issue.
+    pub comment: String,
+    /// Move an issue in its workflow.
+    pub set_status: String,
+}
+
+impl Default for AndareToolNames {
+    fn default() -> Self {
+        Self {
+            search: "search_issues".to_owned(),
+            create_issue: "create_issue".to_owned(),
+            comment: "comment_on_issue".to_owned(),
+            set_status: "set_issue_status".to_owned(),
+        }
+    }
+}
+
+/// An [`AndareWriter`] that delivers through the configured MCP server.
+///
+/// The client is serialized because an MCP session is stateful. The publish
+/// queue still runs other targets concurrently; only calls sharing this Andare
+/// session wait for each other.
+pub struct McpAndareWriter {
+    client: Mutex<McpClient>,
+    resolver: Arc<dyn SecretResolver>,
+    tools: AndareToolNames,
+}
+
+impl std::fmt::Debug for McpAndareWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpAndareWriter")
+            .field("tools", &self.tools)
+            .finish_non_exhaustive()
+    }
+}
+
+impl McpAndareWriter {
+    /// Build a writer over an MCP client and a deferred-secret resolver.
+    pub fn new(
+        client: McpClient,
+        resolver: Arc<dyn SecretResolver>,
+        tools: AndareToolNames,
+    ) -> Self {
+        Self {
+            client: Mutex::new(client),
+            resolver,
+            tools,
+        }
+    }
+
+    async fn call(&self, tool: &str, args: serde_json::Value) -> Result<String, PublishError> {
+        let mut client = self.client.lock().await;
+        let result = client
+            .call_tool(tool, args, self.resolver.as_ref())
+            .await
+            .map_err(|error| PublishError::Transport {
+                target: "andare".to_owned(),
+                detail: error.to_string(),
+            })?;
+        if result.is_error {
+            return Err(PublishError::Rejected {
+                target: "andare".to_owned(),
+                status: None,
+                detail: result.text(),
+            });
+        }
+        Ok(result.text())
+    }
+}
+
+/// A conservative Andare issue-key extractor for MCP text responses.
+///
+/// Andare tools return human-readable content rather than a shared result
+/// schema. A tracker key is still an unambiguous receipt, whereas treating an
+/// arbitrary sentence as a key would corrupt later dedupe comments.
+fn issue_key(text: &str) -> Option<String> {
+    regex::Regex::new(r"(?m)\b[A-Z][A-Z0-9]+-[0-9]+\b")
+        .ok()
+        .and_then(|pattern| {
+            pattern
+                .find(text)
+                .map(|matched| matched.as_str().to_owned())
+        })
+}
+
+#[async_trait]
+impl AndareWriter for McpAndareWriter {
+    fn can_search(&self) -> bool {
+        !self.tools.search.is_empty()
+    }
+
+    async fn search(&self, query: &str) -> Result<Option<String>, PublishError> {
+        let text = self
+            .call(
+                &self.tools.search,
+                serde_json::json!({ "aql": query, "limit": 1 }),
+            )
+            .await?;
+        Ok(issue_key(&text))
+    }
+
+    async fn create_issue(&self, draft: &IssueDraft) -> Result<String, PublishError> {
+        let text = self
+            .call(
+                &self.tools.create_issue,
+                serde_json::json!({
+                    "project": draft.project,
+                    "summary": draft.summary,
+                    "description": draft.description,
+                }),
+            )
+            .await?;
+        issue_key(&text).ok_or_else(|| PublishError::Rejected {
+            target: "andare".to_owned(),
+            status: None,
+            detail: "create_issue succeeded but did not return an Andare issue key".to_owned(),
+        })
+    }
+
+    async fn comment(&self, key: &str, body: &str) -> Result<(), PublishError> {
+        self.call(
+            &self.tools.comment,
+            serde_json::json!({ "key": key, "body": body }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn set_status(&self, key: &str, status: &str) -> Result<(), PublishError> {
+        self.call(
+            &self.tools.set_status,
+            serde_json::json!({ "key": key, "status": status }),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 /// What a `SetStatus` action carries: the outcome to report onto one work item.
@@ -457,5 +619,19 @@ impl<W: AndareWriter> PublishTarget for AndareTarget<W> {
             }),
             capabilities,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::issue_key;
+
+    #[test]
+    fn issue_key_reads_a_tracker_key_without_accepting_words() {
+        assert_eq!(
+            issue_key("created REVL-42 successfully"),
+            Some("REVL-42".to_owned())
+        );
+        assert_eq!(issue_key("created a work item"), None);
     }
 }

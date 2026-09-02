@@ -6,6 +6,11 @@ import {
   editPayload,
   fetchApprovals,
   fetchDashboard,
+  fetchQueueStatus,
+  fetchAutopilot,
+  setAutopilot,
+  autopilotNow,
+  onAutopilot,
   fetchFindings,
   emptyDraft,
   fetchFlowStep,
@@ -15,6 +20,8 @@ import {
   fetchInitialRun,
   fetchInitialScreen,
   fetchRepository,
+  fetchReviewBranches,
+  fetchReviewCommits,
   fetchSettings,
   notify,
   onboardAddRepo,
@@ -29,6 +36,8 @@ import {
   runDoctor,
   configureMcp,
   saveRepoConfig,
+  startReview,
+  startQueuedRuns,
   setOverride,
   clearOverride,
   suppressFinding,
@@ -38,6 +47,9 @@ import {
   setMode,
   severityOf,
   type Dashboard as DashboardData,
+  type QueueStatus,
+  type Autopilot,
+  type ReviewRequest,
   type ApprovalsView as ApprovalsData,
   type FindingFilter,
   type FindingRow,
@@ -79,6 +91,8 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [queue, setQueue] = useState<QueueStatus | null>(null);
+  const [autopilot, setAutopilotState] = useState<Autopilot | null>(null);
   const [screen, setScreen] = useState<Screen>('dashboard');
   const [run, setRun] = useState<RunViewData | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
@@ -149,7 +163,46 @@ export function App() {
     fetchDashboard()
       .then(setDashboard)
       .catch((error: unknown) => setNotice(`Could not load the dashboard — ${messageOf(error)}`));
+    fetchQueueStatus()
+      .then(setQueue)
+      .catch((error: unknown) => setNotice(`Could not load the global queue — ${messageOf(error)}`));
   }, []);
+
+  // The loop pushes its status, and is also asked once on mount: a window opened
+  // between two passes would otherwise show nothing for a minute, which reads
+  // exactly like an app that is not running (RL-1506).
+  useEffect(() => {
+    if (!inTauri()) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    fetchAutopilot()
+      .then((state) => {
+        if (!cancelled) setAutopilotState(state);
+      })
+      .catch(() => {});
+
+    onAutopilot((state) => {
+      setAutopilotState(state);
+      // A pass that reviewed something has changed every number on this screen.
+      // Re-reading here is what makes the cards and the queue move on their own,
+      // which is the whole difference between a loop and a button.
+      if (!state.ticking) reload();
+    })
+      .then((off) => {
+        if (cancelled) {
+          off();
+          return;
+        }
+        unsubscribe = off;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [reload]);
 
   // Asked once, on mount. Only a capture harness ever sets it.
   useEffect(() => {
@@ -246,12 +299,68 @@ export function App() {
     if (entries.length > 0) reload();
   }, [entries.length, reload]);
 
+  // Whether the transcript panel is open, as a ref rather than a dependency.
+  //
+  // The effect below both reads this and calls `setTranscript`. Naming
+  // `transcript` in its dependency list made every fetch schedule the next one —
+  // a tight refetch loop for exactly the case it was written for, a transcript
+  // growing while the engine runs. A ref is read without being depended on.
+  const transcriptOpen = useRef(false);
+  transcriptOpen.current = transcript !== null;
+
+  // A run detail is a live view, not a snapshot taken when it was opened. Stage
+  // events are the trigger — no timer is needed, and stale "reviewing" text is
+  // never left on screen after findings or an approval have been recorded.
+  useEffect(() => {
+    const latest = entries[0]?.event;
+    if (!latest || !run || latest.run_id !== run.run_id) return;
+    const runId = run.run_id;
+    fetchRun(runId).then(setRun).catch(() => {});
+    if (transcriptOpen.current) fetchTranscript(runId).then(setTranscript).catch(() => {});
+  }, [entries.length, run?.run_id]);
+
   async function changeMode(next: Mode) {
     try {
       await setMode(next);
       reload();
     } catch (error: unknown) {
       setNotice(`Could not change the mode — ${messageOf(error)}`);
+    }
+  }
+
+  /** Switch the loop on or off. */
+  async function toggleAutopilot(enabled: boolean) {
+    try {
+      setAutopilotState(await setAutopilot(enabled));
+      setNotice(
+        enabled
+          ? 'Autopilot on. It checks every repository on a timer and reviews what it finds.'
+          : 'Autopilot off. Nothing will be reviewed until you turn it back on.',
+      );
+    } catch (error: unknown) {
+      setNotice(`Could not change the autopilot — ${messageOf(error)}`);
+    }
+  }
+
+  /** Run one pass now rather than waiting for the timer. */
+  async function runAutopilotNow() {
+    try {
+      await autopilotNow();
+    } catch (error: unknown) {
+      setNotice(`Could not start a pass — ${messageOf(error)}`);
+    }
+  }
+
+  async function startQueuedReviews() {
+    try {
+      await startQueuedRuns();
+      setNotice('Working through the queue. Each run\u2019s stages appear in live activity below.');
+      // No optimistic queue state. The panel reads what the runs say, and the
+      // first stage event is a moment away — guessing here would put "reviewing"
+      // on screen for a run that had not started, and be wrong for as long as it
+      // took the guess to be corrected.
+    } catch (error: unknown) {
+      setNotice(`Could not start queued work — ${messageOf(error)}`);
     }
   }
 
@@ -316,8 +425,11 @@ export function App() {
     );
     if (!ok) return;
     try {
-      await approveAction(action.id);
+      const note = await approveAction(action.id);
       reloadApprovals();
+      // Empty means it went out. Anything else is an approval that has been
+      // recorded and not yet delivered — worth saying, and not an error.
+      if (note) setNotice(note);
     } catch (error: unknown) {
       setNotice(`Could not approve #${action.id} — ${messageOf(error)}`);
     }
@@ -332,8 +444,9 @@ export function App() {
     );
     if (!ok) return;
     try {
-      await approveRun(runId);
+      const note = await approveRun(runId);
       reloadApprovals();
+      if (note) setNotice(note);
     } catch (error: unknown) {
       setNotice(`Could not approve run #${runId} — ${messageOf(error)}`);
     }
@@ -388,9 +501,12 @@ export function App() {
     [],
   );
 
+  // Re-read when the screen opens, when the filter changes, and when an event says
+  // something happened. One effect: the second copy of this differed only by also
+  // depending on `entries.length`, so opening the screen fetched twice.
   useEffect(() => {
     if (screen === 'findings') reloadFindings(filter);
-  }, [screen, filter, reloadFindings]);
+  }, [screen, entries.length, filter, reloadFindings]);
 
   async function suppressOne(row: FindingRow) {
     // §15: a destructive action names its scope. Suppressing from here is scoped
@@ -464,6 +580,15 @@ export function App() {
     reloadRepository(repoId);
   }
 
+  // Resolves once the run exists, not once the review has finished. The screen
+  // that called this shows the run it created; the stages arrive as events.
+  async function beginReview(repo: number, request: ReviewRequest) {
+    const started = await startReview(repo, request);
+    reload();
+    reloadRepository(repo);
+    return started;
+  }
+
   // Read when the screen opens. Contacting every MCP server is a real cost, so
   // it happens on demand rather than on a timer — and §15 forbids polling anyway.
   const reloadSettings = useCallback(() => {
@@ -491,19 +616,14 @@ export function App() {
     }
   }
 
-  async function setUpMcp() {
+  async function setUpMcp(suiteBearer: string) {
     // These are deliberately local variables, not React state: retaining a bearer
     // after the Keychain write would keep it alive in the page for no benefit.
-    const andareBearer = window.prompt('Enter the Andare bearer token');
-    if (andareBearer === null) return;
-    const tramaBearer = window.prompt('Enter the Trama bearer token');
-    if (tramaBearer === null) return;
-
     setDoctorRunning(true);
     try {
-      await configureMcp(andareBearer, tramaBearer);
+      await configureMcp(suiteBearer);
       await rerunDoctor();
-      setNotice('Andare and Trama are configured. Their bearer tokens are stored in Keychain.');
+      setNotice('Andare and Trama are configured with the suite bearer in Keychain.');
     } catch (error: unknown) {
       setNotice(`Could not configure MCP servers — ${messageOf(error)}`);
     } finally {
@@ -609,6 +729,15 @@ export function App() {
     rerunDoctor().catch(() => {});
   }
 
+  async function pickRepository() {
+    try {
+      const path = await invoke<string>('pick_repository');
+      if (path) setDraft((previous) => ({ ...previous, path }));
+    } catch (error: unknown) {
+      setOnboardError(`Could not open the folder picker — ${messageOf(error)}`);
+    }
+  }
+
   async function advanceOnboarding() {
     setOnboardError(null);
     const index = STEPS.indexOf(step);
@@ -706,6 +835,7 @@ export function App() {
             busy={onboardBusy || doctorRunning}
             error={onboardError}
             onDraft={setDraft}
+            onPickRepository={pickRepository}
             onBack={() => {
               const index = STEPS.indexOf(step);
               const previous = STEPS[index - 1];
@@ -719,6 +849,11 @@ export function App() {
         {!onboarding && screen === 'dashboard' && (
           <Dashboard
             dashboard={dashboard}
+            queue={queue}
+            autopilot={autopilot}
+            onStartQueue={startQueuedReviews}
+            onToggleAutopilot={toggleAutopilot}
+            onAutopilotNow={runAutopilotNow}
             onMode={changeMode}
             onOpenRun={openRun}
             onOpenRepo={openRepository}
@@ -741,7 +876,14 @@ export function App() {
             // an empty panel would read as one. It says where to choose.
             <p className="empty">Choose a repository from the dashboard.</p>
           ) : (
-            <Repository view={repository} onOpenRun={openRun} onSave={saveConfig} />
+            <Repository
+              view={repository}
+              onOpenRun={openRun}
+              onSave={saveConfig}
+              onLoadBranches={fetchReviewBranches}
+              onLoadCommits={fetchReviewCommits}
+              onReview={beginReview}
+            />
           ))}
 
         {!onboarding && screen === 'findings' && (

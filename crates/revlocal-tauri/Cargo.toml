@@ -11,6 +11,7 @@ chrono = { workspace = true }
 revlocal-core = { workspace = true }
 revlocal-daemon = { workspace = true }
 revlocal-mcp = { workspace = true }
+revlocal-publish = { workspace = true }
 revlocal-store = { workspace = true }
 # Onboarding discovers a repository's changes before its first review (§15).
 revlocal-vcs = { workspace = true }
@@ -34,12 +35,13 @@ tauri = { workspace = true, optional = true }
 # the decision about *what* to notify is plain Rust and testable without one.
 tauri-plugin-notification = { workspace = true, optional = true }
 # The window binary owns the runtime (§4.2: the daemon runs in-process).
-tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"], optional = true }
+tokio-util = { workspace = true, optional = true }
 
 [features]
 default = []
 # The actual desktop application. Enabled by the bundler, not by CI.
-desktop = ["dep:tauri", "dep:tauri-build", "dep:tokio", "dep:tauri-plugin-notification"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tokio", "dep:tokio-util", "dep:tauri-plugin-notification"]
 
 # The window binary only exists with a webview to put in it.
 [[bin]]
