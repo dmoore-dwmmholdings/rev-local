@@ -22,6 +22,8 @@
 //! section is appended and the existing body kept, because the alternative — treat
 //! an unmarked page as ours — is exactly the clobber this design exists to avoid.
 
+use std::fmt::Write as _;
+
 use async_trait::async_trait;
 use revlocal_core::{Capability, CapabilitySet, PublishAction, PublishReceipt, TargetHealth};
 use serde::{Deserialize, Serialize};
@@ -563,6 +565,74 @@ pub fn render_index(repo: &str, entries: &[IndexEntry], limit: usize) -> String 
 /// The link a review page carries back to its index (§11.5).
 pub fn index_backlink(repo: &str) -> String {
     format!("[[{}]]", index_page_title(repo))
+}
+
+/// One finding, as a review page lists it.
+///
+/// A summary line rather than the whole finding: the page is the review, and a
+/// reader scanning it wants what was found and where. The issue carries the
+/// detail, and duplicating it here means two copies that drift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageFinding {
+    /// `critical` | `high` | `medium` | `low` | `info`.
+    pub severity: String,
+    /// What it is.
+    pub title: String,
+    /// Where, when the finding is file-scoped.
+    pub location: Option<String>,
+}
+
+/// The body of a review page (§11.5).
+///
+/// Deliberately not the same text as the issue. An issue is one problem, argued;
+/// a review page is what one run concluded about one change, and its job is to be
+/// scannable — verdict, a sentence, then what was found.
+///
+/// A review that found nothing says so. A page that simply omitted the findings
+/// section would be indistinguishable from one whose engine failed, which is the
+/// §18 failure this whole product is organised around.
+pub fn compose_review_page(
+    verdict: Option<&str>,
+    summary: &str,
+    findings: &[PageFinding],
+) -> String {
+    let mut body = String::new();
+
+    let _ = writeln!(
+        body,
+        "**Verdict:** {}\n",
+        verdict.unwrap_or("none recorded")
+    );
+
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        let _ = writeln!(body, "The engine recorded no summary.\n");
+    } else {
+        let _ = writeln!(body, "{trimmed}\n");
+    }
+
+    let _ = writeln!(body, "## Findings\n");
+    if findings.is_empty() {
+        let _ = writeln!(body, "None.");
+        return body;
+    }
+
+    for finding in findings {
+        match &finding.location {
+            Some(location) => {
+                let _ = writeln!(
+                    body,
+                    "- **{}** — {} (`{location}`)",
+                    finding.severity, finding.title
+                );
+            }
+            None => {
+                let _ = writeln!(body, "- **{}** — {}", finding.severity, finding.title);
+            }
+        }
+    }
+
+    body
 }
 
 /// A review page's section, including the backlink §11.5 requires.

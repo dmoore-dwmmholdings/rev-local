@@ -894,22 +894,24 @@ async fn queue_actions(
         }
     }
 
+    // Gated per target rather than once per finding, because where an action goes
+    // is part of how risky it is: writing a file on this machine and filing into a
+    // shared tracker are the same intent and not the same decision (RL-1519).
+    // Hoisted out of the loop because the Trama page below needs it too, and none
+    // of it varies between the findings of one run.
+    let base_context = gating::GateContext {
+        mode,
+        destination: revlocal_core::Destination::External,
+        run_degraded: outcome.report.degraded.is_some(),
+        actions_in_last_hour: recent,
+        burst_threshold: config.global.burst_threshold,
+    };
+
     for (finding, filable) in stored {
         if !filable {
             continue;
         }
 
-        // Gated per target rather than once per finding, because where an action
-        // goes is part of how risky it is: writing a file on this machine and
-        // filing into a shared tracker are the same intent and not the same
-        // decision (RL-1519).
-        let base = gating::GateContext {
-            mode,
-            destination: revlocal_core::Destination::External,
-            run_degraded: outcome.report.degraded.is_some(),
-            actions_in_last_hour: recent,
-            burst_threshold: config.global.burst_threshold,
-        };
         let gate_for = |destination| {
             gating::gate(
                 ActionIntent::CreateIssue,
@@ -917,7 +919,7 @@ async fn queue_actions(
                 seasoned,
                 gating::GateContext {
                     destination,
-                    ..base
+                    ..base_context
                 },
             )
         };
@@ -1028,6 +1030,95 @@ async fn queue_actions(
         }
     }
 
+    // One page per run, not one per finding — the page *is* the review, with its
+    // verdict, summary and findings together. Queued outside the loop above for
+    // that reason, with its own idempotency key (RL-1529).
+    if let Some(space) = repo_config
+        .trama_space
+        .clone()
+        .filter(|space| !space.trim().is_empty())
+        .filter(|_| repo_config.targets_include("trama"))
+    {
+        // §12.3: publishing a page is high risk, leaving it a draft is low, and
+        // `UpsertDoc` already carries that distinction. A repository that has not
+        // opted in gets a draft — the safe half, and still readable.
+        let gated = gating::gate(
+            ActionIntent::UpsertDoc {
+                published: repo_config.trama_publish,
+            },
+            None,
+            store
+                .pair_has_succeeded("trama", Capability::UpsertDoc)
+                .await
+                .map_err(boxed)?,
+            gating::GateContext {
+                destination: revlocal_core::Destination::External,
+                ..base_context
+            },
+        );
+
+        if let Some(status) = gated.initial_status() {
+            let change = &outcome.report.change;
+            let short = change.get(..12).unwrap_or(change);
+            let payload = revlocal_publish::PagePayload {
+                space,
+                title: revlocal_publish::review_page_title(
+                    &repo.name, short,
+                    // The report carries no change title, and `review_page_title`
+                    // falls back to `Review: {repo} {short_id}` rather than
+                    // inventing one.
+                    "",
+                ),
+                parent: Some(revlocal_publish::parent_page_title(&repo.name)),
+                section: revlocal_publish::review_page_section(
+                    &repo.name,
+                    &revlocal_publish::compose_review_page(
+                        outcome.report.verdict.as_deref(),
+                        &outcome.report.summary,
+                        &page_findings(stored),
+                    ),
+                ),
+                publish: repo_config.trama_publish,
+                // §11.5: the key comes from the Andare target's receipt, never
+                // from composing one. A guessed key links this review to somebody
+                // else's ticket and the reader cannot tell it is wrong.
+                issue_key: None,
+            };
+
+            // The run, not a finding: re-reviewing the same change updates the
+            // page it already has rather than creating a second one.
+            let key = format!("trama-run-{}", run.get());
+            if store
+                .find_by_idempotency_key("trama", &key)
+                .await
+                .map_err(boxed)?
+                .is_none()
+            {
+                store
+                    .insert(&PublishAction {
+                        id: PublishActionId::new(0),
+                        run_id: run,
+                        finding_id: None,
+                        target: "trama".to_owned(),
+                        capability: Capability::UpsertDoc,
+                        risk: gated.assessment.class,
+                        idempotency_key: key,
+                        payload_json: encode(&payload, "Trama page")?,
+                        status,
+                        attempts: 0,
+                        response_json: None,
+                        external_ref: None,
+                        error: None,
+                        created_at: at,
+                        sent_at: None,
+                    })
+                    .await
+                    .map_err(boxed)?;
+                statuses.push(status);
+            }
+        }
+    }
+
     // Not silence. A finding that was already filed is the system working, but a
     // run that queued nothing and said nothing is indistinguishable from one that
     // found nothing (§18).
@@ -1039,6 +1130,26 @@ async fn queue_actions(
     }
 
     Ok(QueuedActions { statuses, held })
+}
+
+/// The findings a review page lists.
+///
+/// Publishable ones only, matching what reached a tracker. A page that listed
+/// findings no issue exists for would send a reader looking for tickets that were
+/// never filed.
+fn page_findings(stored: &[(revlocal_core::Finding, bool)]) -> Vec<revlocal_publish::PageFinding> {
+    stored
+        .iter()
+        .filter(|(_, publishable)| *publishable)
+        .map(|(finding, _)| revlocal_publish::PageFinding {
+            severity: finding.severity.as_str().to_owned(),
+            title: finding.title.clone(),
+            location: finding.file.as_ref().map(|file| match finding.line_start {
+                Some(line) => format!("{file}:{line}"),
+                None => file.clone(),
+            }),
+        })
+        .collect()
 }
 
 /// Serialise one target's payload, naming what failed to encode.

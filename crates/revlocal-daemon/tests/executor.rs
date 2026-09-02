@@ -748,3 +748,87 @@ async fn a_queued_run_whose_checkout_vanished_is_held_not_executed() {
         .expect("runs");
     assert!(!runs.is_empty(), "the run stays queued");
 }
+
+/// A repository that wants a wiki page gets one, once per run.
+#[tokio::test]
+async fn a_review_page_is_queued_once_for_the_run_not_once_per_finding() {
+    // Andare, GitHub and the local report are one action per finding. A Trama page
+    // is the review itself — verdict, summary and findings together — so it is one
+    // page per run, and nothing queued it at all before RL-1529.
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+    let wants_trama = revlocal_core::Repo {
+        config_json: r#"{"andare_project": "ENG", "trama_space": "ENG"}"#.to_owned(),
+        ..fixture.repo.clone()
+    };
+    RepoStore::new(&fixture.pool)
+        .update(&wants_trama)
+        .await
+        .expect("configure trama");
+
+    executor::enqueue(&fixture.pool, &wants_trama, at(2))
+        .await
+        .expect("enqueue");
+    let report = executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::Auto),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    let outcome = report.finished.first().expect("a finished run");
+    assert!(outcome.findings > 1, "the fixture finds more than one");
+
+    let actions = revlocal_store::PublishActionStore::new(&fixture.pool)
+        .list_for_run(revlocal_core::RunId::new(outcome.run_id))
+        .await
+        .expect("actions");
+    let pages: Vec<_> = actions.iter().filter(|a| a.target == "trama").collect();
+
+    assert_eq!(
+        pages.len(),
+        1,
+        "one page for the run, whatever the finding count"
+    );
+    assert_eq!(pages[0].capability, revlocal_core::Capability::UpsertDoc);
+    // Keyed by the run, so re-reviewing the change updates the page it already has
+    // rather than creating a second one.
+    assert!(pages[0].idempotency_key.starts_with("trama-run-"));
+}
+
+/// Without a space there is nowhere to put a page, and none is invented.
+#[tokio::test]
+async fn no_trama_space_means_no_page() {
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+    executor::enqueue(&fixture.pool, &fixture.repo, at(2))
+        .await
+        .expect("enqueue");
+
+    let report = executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::Auto),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    let outcome = report.finished.first().expect("a finished run");
+    let actions = revlocal_store::PublishActionStore::new(&fixture.pool)
+        .list_for_run(revlocal_core::RunId::new(outcome.run_id))
+        .await
+        .expect("actions");
+
+    assert!(
+        !actions.iter().any(|a| a.target == "trama"),
+        "no space configured, so no page: {:?}",
+        actions.iter().map(|a| a.target.clone()).collect::<Vec<_>>()
+    );
+}

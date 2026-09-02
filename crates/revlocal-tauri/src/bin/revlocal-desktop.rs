@@ -138,6 +138,40 @@ fn andare_target(
     Ok(Arc::new(revlocal_publish::AndareTarget::new(writer)))
 }
 
+/// Build the Trama target from the configured HTTP MCP endpoint.
+///
+/// Same shape as `andare_target`, and separate for the same reason the two
+/// targets are separate: a repository can want a wiki page and no issue, or the
+/// reverse, and one failing to build must not take the other with it.
+fn trama_target(
+    config: &revlocal_core::GlobalConfig,
+) -> Result<Arc<dyn revlocal_publish::PublishTarget>, String> {
+    let server = config
+        .mcp_servers
+        .get("trama")
+        .ok_or_else(|| "Trama MCP is not configured".to_owned())?;
+    if server.transport != "http" {
+        return Err("Trama MCP must use the HTTP transport".to_owned());
+    }
+    let url = server
+        .url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| "Trama MCP has no endpoint URL".to_owned())?;
+    let endpoint = revlocal_mcp::HttpEndpoint {
+        id: "trama".to_owned(),
+        url: url.to_owned(),
+        headers: server.headers.clone(),
+    };
+    let client = revlocal_mcp::HttpClient::new(endpoint).map_err(|error| error.to_string())?;
+    let writer = revlocal_publish::McpTramaWriter::new(
+        revlocal_mcp::McpClient::from(client),
+        Arc::new(revlocal_mcp::MacKeychain),
+        revlocal_publish::TramaToolNames::default(),
+    );
+    Ok(Arc::new(revlocal_publish::TramaTarget::new(writer)))
+}
+
 /// Deliver pending and approved Andare actions, leaving durable receipts/errors
 /// on their individual queue rows.
 async fn dispatch_andare(
@@ -1781,8 +1815,13 @@ async fn autopilot_tick(app: &tauri::AppHandle) {
         // publishing: the local report target needs no configuration and is
         // registered by the tick itself. This adds Andare when it can be built,
         // and the pass reports any action it could not route.
-        let targets: Vec<Arc<dyn revlocal_publish::PublishTarget>> =
-            andare_target(&config).into_iter().collect();
+        // Each target built independently: one that cannot be configured must not
+        // stop the others delivering. A repository can want a wiki page and no
+        // issue, or the reverse.
+        let targets: Vec<Arc<dyn revlocal_publish::PublishTarget>> = andare_target(&config)
+            .into_iter()
+            .chain(trama_target(&config))
+            .collect();
 
         let sink =
             revlocal_tauri::events::EventBridge::new(Arc::new(WindowSink { app: app.clone() }));
