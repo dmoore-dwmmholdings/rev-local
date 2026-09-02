@@ -10,14 +10,25 @@ review engine is a process you control.
 
 ## Status
 
-**Early development.** The library and its test suite are substantial; reviews are
-not yet run automatically.
+**Early development.** The library and its test suite are substantial.
 
 Working today:
 
+- **The loop, unattended.** Turn on Autopilot and the app checks every enabled
+  repository on a timer, reviews what it finds, and delivers the findings without
+  anybody pressing anything. Optionally starting itself at login, because the
+  daemon runs in-process and reviewing stops when the app does.
+- **Three places findings go.** A local markdown report that needs no
+  configuration at all, an Andare issue, and a GitHub issue — each deduplicated by
+  the finding's fingerprint, so a problem that survives another commit updates
+  what is already there rather than filing again.
 - **The full command line.** Every command in the specification exists except
   `db export`, and each is exercised by a test that reads the specification rather
   than a transcription of it.
+- **Starting a review whenever you want one.** The repository screen reviews a
+  branch against what it forked from, a single commit, or the whole repository —
+  queued immediately, with its stages arriving as live events rather than on a
+  refresh.
 - git discovery, materialization and skip rules — a review never mutates the
   repository under review
 - the review pipeline end to end: depth selection, diff truncation, finding
@@ -28,12 +39,19 @@ Working today:
 - SQLite store, audit log and budget ledger
 - publish queue with idempotent delivery, approval gating and per-target retry
 - triggers: polling, git hooks, and a signature-checked webhook listener
-- a desktop shell that receives live run events without polling
+- a kill switch that stops a review already running, and releases again
+- housekeeping it does on its own: approvals expire, finished runs and their
+  transcripts are cleared, a repository whose checkout has gone is reported
+  rather than retried
 
-**Not wired up yet:** `revlocal review` runs against a mock engine rather than a
-real one, and `revlocal watch` discovers changes and records them but does not run
-reviews. Every command that is not doing the whole job says so when you run it,
-rather than looking like it worked.
+**Defaults worth knowing:** `revlocal review` takes a path rather than a
+configured repository, so it has no stored engine choice to honour and defaults to
+the mock engine — which spends nothing and invents its findings. It says so on
+stderr every time; `--engine claude` or `--engine codex` is what runs a real one.
+`revlocal watch` and the desktop app use the repository's configured engine.
+
+Every command that is not doing the whole job says so when you run it, rather than
+looking like it worked.
 
 See [USAGE.md](USAGE.md) for what you can run right now, and
 [docs/OPERATIONS.md](docs/OPERATIONS.md) for what to do when something goes wrong.
