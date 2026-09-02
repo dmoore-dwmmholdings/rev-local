@@ -1119,16 +1119,47 @@ async fn many_held_runs_are_summarised_rather_than_listed() {
     .await
     .expect("drain");
 
-    assert!(
-        report.held.len() <= 6,
-        "a dozen identical reasons must not become a dozen lines: {}",
-        report.held.len()
+    // One fact, one line, with the count. Twelve lines each naming a different run
+    // id and the same disabled repository is twelve ways of saying one thing, and
+    // a report that is always long is one people stop reading (RL-1535).
+    assert_eq!(
+        report.held.len(),
+        1,
+        "twelve runs held for one reason is one line: {:?}",
+        report.held
     );
     assert!(
-        report
-            .held
-            .iter()
-            .any(|held| held.contains("more run(s) held")),
-        "and the count must say how many were not listed: {report:?}"
+        report.held[0].starts_with("12 runs held"),
+        "the count leads, because it is the news: {:?}",
+        report.held[0]
     );
+    assert!(
+        report.held[0].contains("disabled"),
+        "and the reason is still there: {:?}",
+        report.held[0]
+    );
+}
+
+/// Different reasons stay different lines.
+#[test]
+fn held_reasons_that_differ_are_not_collapsed_together() {
+    let grouped = executor::group_held_for_test(vec![
+        "run #1: acme: the checkout is gone".to_owned(),
+        "run #2: acme: the checkout is gone".to_owned(),
+        "run #3: widgets is disabled".to_owned(),
+    ]);
+
+    assert_eq!(grouped.len(), 2, "{grouped:?}");
+    assert!(grouped[0].starts_with("2 runs held"), "{grouped:?}");
+    // A single occurrence keeps its plain wording — "1 runs held" is noise.
+    assert!(!grouped[1].starts_with('1'), "{grouped:?}");
+}
+
+/// A line this module did not compose is left alone.
+#[test]
+fn a_reason_in_another_shape_is_not_mangled() {
+    // Guessing at somebody else's format is how a fact becomes a fragment.
+    let grouped = executor::group_held_for_test(vec!["something else entirely".to_owned()]);
+
+    assert_eq!(grouped, ["something else entirely"]);
 }

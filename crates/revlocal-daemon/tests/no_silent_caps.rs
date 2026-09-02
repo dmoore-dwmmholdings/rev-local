@@ -82,6 +82,16 @@ const ACCOUNTED_FOR: &[(&str, &str)] = &[
          one, which is the same failure as a partial review looking whole.",
     ),
     (
+        "crates/revlocal-vcs/src/git/materialize.rs",
+        "RANGE_SUBJECT_LIMIT bounds how many commit subjects a branch review's \
+         message carries. It caps a *description*, never the diff: the review \
+         still sees every commit in the range, because the diff is taken from the \
+         merge base rather than assembled from those subjects. When the bound is \
+         hit the message itself ends with \"(the first N commit subjects on this \
+         range)\" — in the text, because the prompt renders it verbatim and a \
+         branch whose log quietly stopped early would read as a shorter branch.",
+    ),
+    (
         "crates/revlocal-core/src/finding.rs",
         "TITLE_MAX_CHARS is enforced at the schema boundary (result.v1.json, \
          maxLength 80), not by truncating here — an over-long title is a rejected \
@@ -206,7 +216,7 @@ fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if text.lines().any(is_cap_shaped) {
+        if text.lines().any(is_cap_shaped) || has_counted_stop(&text) {
             found.push(path);
         }
     }
@@ -229,6 +239,15 @@ fn is_cap_shaped(line: &str) -> bool {
             return true;
         }
     }
+    // A counted stop: `if started >= limit { break; }`.
+    //
+    // Added because a real cap stopped being visible. `drain` capped concurrent
+    // runs with `.take(limit)` until RL-1534 rewrote it to count runs that
+    // actually started — the cap survived the rewrite and the *detector* did not
+    // see it, so this file's registry declared the entry stale. A guard that only
+    // recognises one spelling of a cap goes quiet the first time somebody spells
+    // it differently, which is precisely the §18 failure it exists to prevent.
+
     code.split_whitespace()
         .skip_while(|word| *word != "const")
         .nth(1)
@@ -238,6 +257,38 @@ fn is_cap_shaped(line: &str) -> bool {
                 .iter()
                 .any(|marker| name.contains(marker))
         })
+}
+
+/// A cap expressed as a counted stop: `if started >= limit { break; }`.
+///
+/// Spans lines, which is why it is not part of [`is_cap_shaped`] — rustfmt puts
+/// the `break` on its own line and that check reads one line at a time.
+///
+/// Added because a real cap stopped being visible. `drain` bounded concurrent
+/// runs with `.take(limit)` until RL-1534 rewrote it to count runs that actually
+/// started; the cap survived the rewrite and the detector did not, so the
+/// registry declared a live entry stale. A guard that knows one spelling of a cap
+/// goes quiet the first time somebody spells it differently — which is the §18
+/// failure it exists to prevent, committed by the thing preventing it.
+///
+/// The stop is what distinguishes a cap from a question. `x >= limit` alone is
+/// usually a *predicate about* a limit — `BudgetLedgerEntry::tokens_exhausted`
+/// branches on exactly that shape and returns `Option<bool>` precisely so callers
+/// cannot treat an unmeasured total as "not exhausted". Breaking a loop is a cap;
+/// answering a question is not.
+fn has_counted_stop(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    lines.iter().enumerate().any(|(i, line)| {
+        let code = line.split("//").next().unwrap_or(line);
+        if !(code.contains(">= limit") || code.contains(">= cap")) {
+            return false;
+        }
+        // The stop, on this line or the two after it.
+        lines[i..lines.len().min(i + 3)].iter().any(|near| {
+            let code = near.split("//").next().unwrap_or(near);
+            code.contains("break") || code.contains("continue")
+        })
+    })
 }
 
 fn workspace_root() -> PathBuf {

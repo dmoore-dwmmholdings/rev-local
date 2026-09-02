@@ -372,20 +372,78 @@ pub async fn drain(
     }
 
     // §18 the other way round: a report nobody can read has dropped the thing it
-    // was reporting. Now that a tick walks past held runs, one broken repository
-    // can produce dozens of identical lines and bury everything else — so a few
-    // are shown and the rest are counted, the same shape the queue panel uses for
-    // waiting runs.
-    const SHOW_HELD: usize = 5;
-    if report.held.len() > SHOW_HELD {
-        let hidden = report.held.len() - SHOW_HELD;
-        report.held.truncate(SHOW_HELD);
-        report.held.push(format!(
-            "and {hidden} more run(s) held for the same kinds of reason\n  try: `revlocal runs list --status queued` for all of them"
-        ));
-    }
+    // was reporting.
+    //
+    // Now that a tick walks past held runs rather than stopping on them, one
+    // repository whose checkout has gone produces a line per run — forty-three of
+    // them on the machine this was written for, every minute, saying one thing
+    // forty-three times. Five lines each naming a different run id and the same
+    // missing directory is five ways of stating one fact.
+    //
+    // Grouped by the fact instead. The run ids are not lost — `revlocal runs list
+    // --status queued` has them, and the line says so (RL-1535).
+    report.held = group_held(report.held);
 
     Ok(report)
+}
+
+/// The separator between a held run's id and the fact that held it.
+///
+/// A held reason is composed as `run #12: Claudex Status: the checkout is gone`.
+/// Grouping needs the fact without the id, and splitting on the first `: ` after
+/// the run id is enough — every held reason is built here, by this module, in
+/// that shape.
+const HELD_PREFIX: &str = "run #";
+
+/// [`group_held`], for the tests that assert its shape directly.
+///
+/// The grouping is a pure function of a list of strings, and asserting it through
+/// a database and an engine would test everything except the thing in question.
+#[doc(hidden)]
+pub fn group_held_for_test(held: Vec<String>) -> Vec<String> {
+    group_held(held)
+}
+
+/// Collapse held reasons that say the same thing.
+///
+/// One line per distinct fact, with a count when it applies to more than one run.
+/// Order is preserved so the first thing that went wrong is still the first thing
+/// read.
+fn group_held(held: Vec<String>) -> Vec<String> {
+    let mut order: Vec<String> = Vec::new();
+    // `BTreeMap`, not `HashMap`: `determinism_no_unordered_collection_reaches_the
+    // _output_path` forbids one here, and it is right to. Ordering comes from
+    // `order` below, so a hash map would in fact be safe — and the guard exists
+    // precisely so nobody has to read the function to establish that.
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+
+    for line in held {
+        // Everything after the run id is the fact. A line not in that shape is
+        // kept whole rather than mangled — it is somebody else's format and this
+        // has no business guessing at it.
+        let fact = line
+            .strip_prefix(HELD_PREFIX)
+            .and_then(|rest| rest.split_once(": "))
+            .map_or(line.clone(), |(_, fact)| fact.to_owned());
+
+        if !counts.contains_key(&fact) {
+            order.push(fact.clone());
+        }
+        *counts.entry(fact).or_insert(0) += 1;
+    }
+
+    order
+        .into_iter()
+        .map(|fact| {
+            let n = counts.get(&fact).copied().unwrap_or(1);
+            if n == 1 {
+                fact
+            } else {
+                // The count first: "43 runs" is the news, and the reason follows.
+                format!("{n} runs held — {fact}")
+            }
+        })
+        .collect()
 }
 
 /// Run one queued review, or say why it was held.
