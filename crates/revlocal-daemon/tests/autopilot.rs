@@ -299,3 +299,82 @@ async fn a_finding_is_written_to_disk_with_no_tracker_configured(
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_repository_whose_checkout_is_gone_costs_nothing_and_says_so(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Two of three repositories on a real install had been deleted, were still
+    // enabled, and had 51 runs waiting against them. Every one of those would
+    // have spent an engine to learn what one `exists` call knows (RL-1513).
+    let fixture = install().await?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+    std::fs::remove_dir_all(&fixture.checkout)?;
+
+    let report = tick(&fixture, 1).await?;
+
+    assert!(
+        report.reviewed.is_empty(),
+        "a missing checkout must not be reviewed: {report:?}"
+    );
+    assert_eq!(report.queued, 0, "nor queued: {report:?}");
+    assert!(report.passes.is_empty(), "nor discovered: {report:?}");
+
+    // §18: it must say so, and say what to do. Silence here reads as a quiet
+    // repository, which is the one thing it is not.
+    let note = report.notes.join("\n");
+    assert!(note.contains("checkout is gone"), "{note}");
+    assert!(
+        note.contains("acme"),
+        "the note must name the repository: {note}"
+    );
+    assert!(
+        note.contains("try:"),
+        "a problem with no remedy is a dead end: {note}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn one_missing_checkout_does_not_stop_the_others() -> Result<(), Box<dyn std::error::Error>> {
+    // The rule discovery already follows, applied one step earlier.
+    let fixture = install().await?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    let gone = fixture.dir.path().join("vanished");
+    RepoStore::new(&fixture.pool)
+        .insert(&Repo {
+            id: RepoId::new(0),
+            name: "vanished".to_owned(),
+            kind: RepoKind::Git,
+            local_path: Some(gone.display().to_string()),
+            remote_url: None,
+            default_branch: Some("main".to_owned()),
+            engine: EngineKind::Mock,
+            autonomy: AutonomyMode::Auto,
+            enabled: true,
+            config_json: r#"{"andare_project": "ENG"}"#.to_owned(),
+            created_at: at(0),
+            updated_at: at(0),
+        })
+        .await?;
+
+    let report = tick(&fixture, 1).await?;
+
+    assert!(
+        report.reviewed.iter().any(|outcome| outcome.repo == "acme"),
+        "the reachable repository must still be reviewed: {report:?}"
+    );
+    assert!(
+        report.notes.iter().any(|note| note.contains("vanished")),
+        "and the missing one still reported: {report:?}"
+    );
+    Ok(())
+}

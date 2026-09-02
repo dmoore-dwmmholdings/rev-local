@@ -234,6 +234,22 @@ pub async fn tick(
         .collect();
     report.repos = repos.len();
 
+    // A checkout that is not there cannot be discovered, queued or reviewed, and
+    // every attempt costs engine budget to learn what one `exists` call knows.
+    // Two of the three repositories on the machine this was written for had been
+    // deleted, were still enabled, and had 51 runs waiting against them.
+    let (reachable, missing): (Vec<Repo>, Vec<Repo>) = repos
+        .into_iter()
+        .partition(|repo| repo.local_path.as_deref().is_none_or(path_exists));
+    for repo in &missing {
+        report.notes.push(format!(
+            "{}: the checkout is gone — {}\n  try: put it back, point the repository at its new location, or disable it",
+            repo.name,
+            repo.local_path.as_deref().unwrap_or("no path recorded")
+        ));
+    }
+    let repos = reachable;
+
     if report.paused {
         // The scheduler owns this sentence, including the remedy: `watch` prints
         // it and the app shows it, and two wordings of "we are stopped" is one
@@ -242,7 +258,9 @@ pub async fn tick(
         return Ok(report);
     }
     // Not `stopped`: an install with no repositories yet is somebody halfway
-    // through setting up, not a system that has been halted.
+    // through setting up, not a system that has been halted. A pass where every
+    // repository has vanished is not halted either — the notes above say what
+    // happened, and saying it twice in different words helps nobody.
     if repos.is_empty() {
         return Ok(report);
     }
@@ -345,6 +363,16 @@ pub async fn tick(
         .map_err(boxed)?;
 
     Ok(report)
+}
+
+/// Whether a repository's checkout is still on disk.
+///
+/// A separate function only so the reason is written down once: `Path::exists`
+/// answers `false` for a path that exists but cannot be read, and for this
+/// purpose that is the same answer — rev-local cannot review it either way, and
+/// the note tells somebody to go and look.
+fn path_exists(path: &str) -> bool {
+    !path.is_empty() && Path::new(path).exists()
 }
 
 /// Ask the scheduler whether this tick should poll remotes at all.

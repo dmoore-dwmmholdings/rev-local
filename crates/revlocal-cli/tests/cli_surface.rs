@@ -1333,9 +1333,18 @@ mod watch_loop {
         // The property that decides whether a daemon is usable with eleven
         // repositories. An unreachable remote is recorded against the repository
         // that has it, and the rest are still polled.
+        //
+        // The directories exist and are not git repositories, which is the case
+        // this test is about. Paths that do not exist at all are a *different*
+        // failure with a different remedy — see
+        // `a_checkout_that_is_gone_is_reported_without_being_attempted` — and
+        // using them here conflated the two.
         let (pool, _dir) = store().await?;
-        add_repo(&pool, "broken", "/definitely/not/a/repo", true).await?;
-        add_repo(&pool, "also-broken", "/nor/this/one", true).await?;
+        for name in ["broken", "also-broken"] {
+            let path = _dir.path().join(name);
+            std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+            add_repo(&pool, name, &path.display().to_string(), true).await?;
+        }
 
         let report = tick(&pool, &watch_config(), _dir.path(), now())
             .await
@@ -1350,6 +1359,29 @@ mod watch_loop {
         let human = report.render_human();
         assert!(human.contains("broken — FAILED"), "{human}");
         assert!(human.contains("also-broken — FAILED"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_checkout_that_is_gone_is_reported_without_being_attempted() -> Result<(), String> {
+        // A deleted or moved checkout is not a broken repository — it is not a
+        // repository at all, and attempting it spends an engine to learn what one
+        // `exists` call knows (RL-1513).
+        let (pool, _dir) = store().await?;
+        add_repo(&pool, "vanished", "/definitely/not/a/repo", true).await?;
+
+        let report = tick(&pool, &watch_config(), _dir.path(), now())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert!(report.passes.is_empty(), "nothing may be attempted");
+        assert_eq!(report.queued, 0);
+
+        // §18: it says which repository, and what to do about it.
+        let held = report.held.join("\n");
+        assert!(held.contains("vanished"), "{held}");
+        assert!(held.contains("checkout is gone"), "{held}");
+        assert!(held.contains("try:"), "{held}");
         Ok(())
     }
 
