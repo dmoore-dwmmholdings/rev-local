@@ -389,7 +389,7 @@ async fn start_queued_runs(app: tauri::AppHandle) -> Result<(), String> {
                 .await
                 .map_err(|e| e.to_string())?;
             let sink = revlocal_tauri::events::EventBridge::new(Arc::new(WindowSink { app }));
-            let cancel = tokio_util::sync::CancellationToken::new();
+            let cancel = cancel_token();
             let result: Result<(), String> = loop {
                 let before = revlocal_store::RunStore::new(&pool)
                     .count_matching(None, Some(revlocal_core::RunStatus::Queued))
@@ -1292,7 +1292,7 @@ async fn start_review(
                 &data,
                 run_id,
                 chrono::Utc::now(),
-                &tokio_util::sync::CancellationToken::new(),
+                &cancel_token(),
             )
             .await
             .map_err(|error| error.to_string());
@@ -1587,9 +1587,45 @@ fn initial_run() -> i64 {
 ///
 /// One line of delegation, like every command here.
 #[tauri::command]
-fn kill_switch() -> Result<(), String> {
-    // TODO(RL-1201): hand this to the daemon's KillSwitch once the app owns one.
-    eprintln!("revlocal: kill switch invoked from the UI");
+async fn kill_switch() -> Result<(), String> {
+    // Both halves, and in this order. The database is the source of truth across
+    // restarts and is what stops the *next* pass starting; the token is what
+    // stops the engine running *now*. Doing only the second would leave a paused
+    // app that resumes reviewing a minute later.
+    with_store(|pool| async move {
+        revlocal_store::SettingStore::new(&pool)
+            .set_paused(true, chrono::Utc::now())
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+
+    KILL.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .engage();
+    Ok(())
+}
+
+/// Release the kill switch (§12.1: it has to be reversible).
+///
+/// There was no way to do this from the app at all. A switch that stops
+/// everything and cannot be released is one people fix by deleting the database.
+#[tauri::command]
+async fn resume() -> Result<(), String> {
+    with_store(|pool| async move {
+        revlocal_store::SettingStore::new(&pool)
+            .set_paused(false, chrono::Utc::now())
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+
+    // A fresh token for new work. The old one stays cancelled, so anything still
+    // holding it does not quietly come back to life.
+    let mut switch = KILL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *switch = switch.released();
     Ok(())
 }
 
@@ -1664,6 +1700,27 @@ impl AutopilotState {
 
 static AUTOPILOT: std::sync::Mutex<AutopilotState> = std::sync::Mutex::new(AutopilotState::new());
 
+/// The kill switch this process's work actually watches (§12.1, RL-1522).
+///
+/// One for the whole app. Every drain is handed `token()`, so engaging this
+/// cancels whatever is running — `supervise` watches the token and terminates the
+/// engine's process *group*, which is why stopping a live review needs no pids.
+///
+/// Behind a lock because a cancelled `CancellationToken` cannot be un-cancelled,
+/// and that is the right shape: work told to stop must not silently un-stop.
+/// Resuming installs a fresh one, and anything still holding the old token stays
+/// cancelled.
+static KILL: std::sync::LazyLock<std::sync::Mutex<revlocal_daemon::KillSwitch>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(revlocal_daemon::KillSwitch::new()));
+
+/// The token to hand to work that should stop when the switch is pulled.
+fn cancel_token() -> tokio_util::sync::CancellationToken {
+    KILL.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .token()
+        .clone()
+}
+
 /// Held for the duration of a pass, so two never overlap.
 ///
 /// Separate from `AutopilotState::ticking`, which is what a screen reads. A flag
@@ -1736,7 +1793,7 @@ async fn autopilot_tick(app: &tauri::AppHandle) {
             &data_dir(),
             &targets,
             chrono::Utc::now(),
-            &tokio_util::sync::CancellationToken::new(),
+            &cancel_token(),
         )
         .await
         .map_err(|error| error.to_string());
@@ -1929,6 +1986,7 @@ fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             kill_switch,
+            resume,
             dashboard,
             queue_status,
             start_queued_runs,
@@ -2007,19 +2065,28 @@ fn run() -> tauri::Result<()> {
                             let _ = window.set_focus();
                         }
                     }
-                    Some(TrayItem::KillSwitch) if kill_switch().is_ok() => {
-                        // The tray is where this was pressed, so the tray is
-                        // where the confirmation has to appear. Without it the
-                        // only feedback is that a menu closed.
-                        if let Some(tray) = app.tray_by_id("revlocal") {
-                            let _ = tray.set_tooltip(Some(
-                                revlocal_daemon::notify::TrayStatus::Paused.tooltip(),
-                            ));
-                        }
+                    Some(TrayItem::KillSwitch) => {
+                        // Spawned rather than blocked on: this runs on the menu
+                        // thread, and the tooltip is set from inside so it can
+                        // only say "paused" once something actually paused.
+                        let tray = app.tray_by_id("revlocal");
+                        tauri::async_runtime::spawn(async move {
+                            match kill_switch().await {
+                                Ok(()) => {
+                                    if let Some(tray) = tray {
+                                        let _ = tray.set_tooltip(Some(
+                                            revlocal_daemon::notify::TrayStatus::Paused.tooltip(),
+                                        ));
+                                    }
+                                }
+                                // A kill switch that failed leaves the tray saying
+                                // "reviewing", which is the truth: nothing stopped.
+                                Err(error) => {
+                                    eprintln!("revlocal: the kill switch failed: {error}");
+                                }
+                            }
+                        });
                     }
-                    // A kill switch that failed leaves the tray saying "reviewing",
-                    // which is the truth: nothing was stopped.
-                    Some(TrayItem::KillSwitch) => {}
                     // Quit is a real exit. An app that can only be hidden is one
                     // people force-kill, and a force-killed daemon leaves runs
                     // stuck mid-stage for RL-501's recovery to find.

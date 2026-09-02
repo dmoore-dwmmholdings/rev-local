@@ -454,6 +454,7 @@ export function Dashboard({
   onStartQueue = () => {},
   onToggleAutopilot = () => {},
   onAutopilotNow = () => {},
+  onResume = () => {},
   onMode,
   onOpenRun,
   onOpenRepo,
@@ -464,6 +465,7 @@ export function Dashboard({
   onStartQueue?: () => void;
   onToggleAutopilot?: (enabled: boolean) => void;
   onAutopilotNow?: () => void;
+  onResume?: () => void;
   onMode: (next: Mode) => void;
   onOpenRun: (runId: number) => void;
   onOpenRepo: (repoId: number) => void;
@@ -485,8 +487,14 @@ export function Dashboard({
         <ModeSelector mode={dashboard.mode} onChange={onMode} />
         <p className="dim">The ceiling for every repository. One set higher is held down to this.</p>
         {dashboard.paused && (
+          // §12.1: the kill switch has to be reversible, and until RL-1522 the
+          // only way back was the command line. A banner that states a condition
+          // and offers no way out of it is a dead end.
           <p className="banner" role="status">
-            Paused. Nothing is being reviewed and publish actions are held.
+            Paused. Nothing is being reviewed and publish actions are held.{' '}
+            <button className="link" onClick={onResume}>
+              Resume
+            </button>
           </p>
         )}
       </div>

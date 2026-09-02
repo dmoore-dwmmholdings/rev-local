@@ -47,6 +47,7 @@ import {
   invoke,
   onRunEvent,
   setMode,
+  resume,
   severityOf,
   type Dashboard as DashboardData,
   type QueueStatus,
@@ -380,6 +381,17 @@ export function App() {
       );
     } catch (error: unknown) {
       setNotice(`Could not change that — ${messageOf(error)}`);
+    }
+  }
+
+  /** Release the kill switch, and show what changed. */
+  async function releaseKillSwitch() {
+    try {
+      await resume();
+      setNotice('Resumed. Queued reviews will run again and held actions will be sent.');
+      reload();
+    } catch (error: unknown) {
+      setNotice(`Could not resume — ${messageOf(error)}`);
     }
   }
 
@@ -886,6 +898,7 @@ export function App() {
             onStartQueue={startQueuedReviews}
             onToggleAutopilot={toggleAutopilot}
             onAutopilotNow={runAutopilotNow}
+            onResume={releaseKillSwitch}
             onMode={changeMode}
             onOpenRun={openRun}
             onOpenRepo={openRepository}

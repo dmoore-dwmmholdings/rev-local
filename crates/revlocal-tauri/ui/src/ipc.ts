@@ -207,6 +207,11 @@ export function fetchDashboard(): Promise<Dashboard> {
   return invoke<Dashboard>('dashboard');
 }
 
+/** Release the kill switch (§12.1: stopping has to be reversible). */
+export function resume(): Promise<void> {
+  return invoke<void>('resume');
+}
+
 export function setMode(mode: Mode): Promise<void> {
   return invoke<void>('set_mode', { mode });
 }

@@ -430,3 +430,50 @@ describe('autopilot panel', () => {
     expect(screen.queryByLabelText('autopilot')).toBeNull();
   });
 });
+
+describe('the kill switch', () => {
+  it('offers a way back out of paused', () => {
+    // §12.1 makes stopping reversible. The banner stated the condition and gave
+    // no way out of it, and the only resume was the command line (RL-1522).
+    render(
+      <Dashboard
+        dashboard={{ repos: [card()], mode: 'auto', paused: true }}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={noop}
+      />,
+    );
+
+    expect(screen.getByRole('status').textContent).toMatch(/Paused/);
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeDefined();
+  });
+
+  it('asks the app to resume rather than deciding for itself', () => {
+    const onResume = vi.fn();
+    render(
+      <Dashboard
+        dashboard={{ repos: [card()], mode: 'auto', paused: true }}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={noop}
+        onResume={onResume}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(onResume).toHaveBeenCalled();
+  });
+
+  it('shows no resume button when nothing is paused', () => {
+    render(
+      <Dashboard
+        dashboard={{ repos: [card()], mode: 'auto', paused: false }}
+        onMode={noop}
+        onOpenRun={noop}
+        onOpenRepo={noop}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+});
