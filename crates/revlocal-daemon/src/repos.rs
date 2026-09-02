@@ -274,7 +274,22 @@ pub async fn add(
     }
 
     let local_path = (!looks_like_url(path_or_url)).then(|| path_or_url.to_owned());
-    let remote_url = looks_like_url(path_or_url).then(|| path_or_url.to_owned());
+    // Added by URL, the URL *is* the remote. Added by path — which is how the
+    // desktop app and most people add one — the remote has to be asked for, and
+    // until RL-1514 nobody asked: every repository on the live install had an
+    // empty `remote_url` and the GitHub target could never fire.
+    //
+    // A repository with no `origin`, or one git cannot read, keeps `None`. That
+    // is a normal state for a local-only checkout and not a reason to refuse to
+    // add it.
+    let remote_url = match &local_path {
+        Some(path) if kind == revlocal_core::RepoKind::Git => {
+            revlocal_vcs::origin_url(&revlocal_vcs::GitRunner::new(), std::path::Path::new(path))
+                .await
+                .unwrap_or_default()
+        }
+        _ => looks_like_url(path_or_url).then(|| path_or_url.to_owned()),
+    };
 
     let repo = store
         .insert(&Repo {

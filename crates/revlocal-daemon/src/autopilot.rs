@@ -248,7 +248,44 @@ pub async fn tick(
             repo.local_path.as_deref().unwrap_or("no path recorded")
         ));
     }
-    let repos = reachable;
+    let mut repos = reachable;
+
+    // Backfill a remote nobody recorded (RL-1514). Every repository on the live
+    // install predated `add` asking for one, so the GitHub target held every
+    // finding with "no recognisable GitHub remote" — correct behaviour on data
+    // that was wrong. Done here rather than as a migration because it needs to
+    // read the checkout, and this is the pass that already knows the checkout is
+    // there.
+    for repo in &mut repos {
+        if repo.remote_url.is_some() || repo.kind != revlocal_core::RepoKind::Git {
+            continue;
+        }
+        let Some(path) = repo.local_path.clone() else {
+            continue;
+        };
+        let found = revlocal_vcs::origin_url(&revlocal_vcs::GitRunner::new(), Path::new(&path))
+            .await
+            .unwrap_or_default();
+        let Some(url) = found else { continue };
+
+        // Written down, not just used: the repository screen shows it, and a
+        // value that only existed for the length of one pass would have to be
+        // rediscovered every minute.
+        match RepoStore::new(pool)
+            .update(&Repo {
+                remote_url: Some(url.clone()),
+                updated_at: at,
+                ..repo.clone()
+            })
+            .await
+        {
+            Ok(()) => repo.remote_url = Some(url),
+            Err(error) => report.notes.push(format!(
+                "{}: could not record its remote — {error}",
+                repo.name
+            )),
+        }
+    }
 
     if report.paused {
         // The scheduler owns this sentence, including the remedy: `watch` prints

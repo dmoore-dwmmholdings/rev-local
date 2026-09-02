@@ -200,6 +200,39 @@ pub async fn has_remote(runner: &GitRunner, dir: &Path) -> Result<bool, GitError
     Ok(!output.lines().is_empty())
 }
 
+/// The URL of the repository's `origin` remote (SPEC §6.2, RL-1514).
+///
+/// # Why `origin` specifically, and why absence is not an error
+///
+/// rev-local stores one remote per repository, so it has to pick one, and
+/// `origin` is the one every clone has and every convention means. A repository
+/// whose remote is called something else is not misconfigured — it just does not
+/// get GitHub filing until somebody sets the URL by hand, which is a better
+/// outcome than guessing between several remotes and filing findings against the
+/// wrong one.
+///
+/// A local-only repository has no remote at all. That is a normal state and
+/// returns `None`, exactly as [`has_remote`] treats it: a repository with nothing
+/// to push to still reviews perfectly well.
+pub async fn origin_url(runner: &GitRunner, dir: &Path) -> Result<Option<String>, GitError> {
+    // `--get` rather than `git remote get-url`, because a missing key exits 1 and
+    // is trivially distinguishable from git failing for a reason worth reporting.
+    match runner
+        .run(dir, &["config", "--get", "remote.origin.url"])
+        .await
+    {
+        Ok(output) => Ok(output
+            .lines()
+            .first()
+            .map(|line| line.trim().to_owned())
+            .filter(|url| !url.is_empty())),
+        // Exit 1 from `config --get` is "no such key", which is the local-only
+        // repository above. Anything else is a real failure and is returned.
+        Err(GitError::Failed { code: 1, .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// What a fetch attempt did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchOutcome {

@@ -378,3 +378,61 @@ async fn one_missing_checkout_does_not_stop_the_others() -> Result<(), Box<dyn s
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_repository_added_without_its_remote_gets_one_recorded(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Every repository on the live install had an empty `remote_url`, because
+    // `add` never asked the checkout for one. The GitHub target then held every
+    // finding with "no recognisable GitHub remote" — right behaviour, wrong data
+    // (RL-1514).
+    let fixture = install().await?;
+    git(
+        &fixture.checkout,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    )?;
+    assert!(
+        fixture.repo.remote_url.is_none(),
+        "the fixture starts empty"
+    );
+
+    tick(&fixture, 1).await?;
+
+    let stored = RepoStore::new(&fixture.pool).list().await?;
+    let acme = stored
+        .iter()
+        .find(|repo| repo.name == "acme")
+        .ok_or("the repository")?;
+    assert_eq!(
+        acme.remote_url.as_deref(),
+        Some("https://github.com/acme/widgets.git"),
+        "the remote must be written down, not just read"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_repository_with_no_remote_is_left_alone() -> Result<(), Box<dyn std::error::Error>> {
+    // A local-only checkout is a normal thing to review. Recording an empty
+    // string, or reporting it as a problem, would both be wrong.
+    let fixture = install().await?;
+
+    let report = tick(&fixture, 1).await?;
+
+    let stored = RepoStore::new(&fixture.pool).list().await?;
+    let acme = stored
+        .iter()
+        .find(|repo| repo.name == "acme")
+        .ok_or("the repository")?;
+    assert_eq!(acme.remote_url, None);
+    assert!(
+        !report.notes.iter().any(|note| note.contains("remote")),
+        "having no remote is not worth telling somebody about: {report:?}"
+    );
+    Ok(())
+}

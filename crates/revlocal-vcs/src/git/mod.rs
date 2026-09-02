@@ -10,9 +10,10 @@ pub use adapter::GitAdapter;
 pub use cmd::{non_interactive_env, run, GitError, GitOutput, GitRunner, DEFAULT_TIMEOUT};
 pub use discover::{discover_branch, merge_discoveries, resolve_branches};
 pub use materialize::{
-    is_bare, materialize, prune_worktrees, release_worktree, worktree_path, WORKTREE_SUBDIR,
+    is_bare, materialize, prune_worktrees, release_worktree, worktree_path, EMPTY_TREE,
+    WORKTREE_SUBDIR,
 };
 pub use recover::{
-    classify_cursor, fetch, has_remote, mark_superseded_by_rewrite, patch_ids, CursorState,
-    DiscoveryEvent, FetchOutcome,
+    classify_cursor, fetch, has_remote, mark_superseded_by_rewrite, origin_url, patch_ids,
+    CursorState, DiscoveryEvent, FetchOutcome,
 };
