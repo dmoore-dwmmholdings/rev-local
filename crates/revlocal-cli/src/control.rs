@@ -22,7 +22,7 @@
 
 use revlocal_core::Timestamp;
 use revlocal_daemon::kill_switch::PauseReport;
-use revlocal_store::{Pool, SettingStore};
+use revlocal_store::{Pool, RunStore, SettingStore};
 use serde::{Deserialize, Serialize};
 
 /// Why a control command could not complete.
@@ -131,16 +131,45 @@ pub async fn resume(pool: &Pool, at: Timestamp) -> Result<ControlReport, Control
 pub async fn kill_hard(pool: &Pool, at: Timestamp) -> Result<ControlReport, ControlError> {
     let mut report = pause(pool, at).await?;
 
-    // TODO(RL-1201): the pids come from `run.engine_pid`, which migration 0006
-    // added for exactly this. Wiring it needs the run registry `watch` brings.
-    let reaped = 0_usize;
+    // Migration 0006 added `run.engine_pid` for exactly this, and `orphan_pids`
+    // returns the ones left behind: a pid still recorded against a run that has
+    // already reached a terminal status, which is a process that outlived the
+    // run it belonged to.
+    let orphans =
+        RunStore::new(pool)
+            .orphan_pids()
+            .await
+            .map_err(|source| ControlError::Store {
+                source: Box::new(source),
+            })?;
+
+    let mut reaped = 0_usize;
+    for (run, pid) in orphans {
+        if revlocal_daemon::kill_switch::reap(pid) {
+            reaped += 1;
+        }
+        // Cleared whether or not the signal landed. A pid that is already gone is
+        // the common case, and leaving it recorded means reporting the same dead
+        // process as an orphan on every kill from now on.
+        let _ = RunStore::new(pool).set_engine_pid(run, None).await;
+    }
 
     report.action = "kill".to_owned();
     report.processes_reaped = reaped;
     report.detail = format!(
         "{}. {reaped} engine process(es) reaped; any output they had not written \
-         is lost",
-        report.detail.trim_end_matches('.')
+         is lost.{}",
+        report.detail.trim_end_matches('.'),
+        // §18: this control has one job and it cannot yet do all of it. Saying
+        // "0 reaped" and stopping reads as "there were none", which is the same
+        // sentence as the truth and not the same fact (RL-1521).
+        if reaped == 0 {
+            "\n  note: an engine still mid-review is not reaped — its pid is not \
+             recorded until it exits\n  try: `revlocal runs list` to see what is \
+             still in flight"
+        } else {
+            ""
+        }
     );
     Ok(report)
 }

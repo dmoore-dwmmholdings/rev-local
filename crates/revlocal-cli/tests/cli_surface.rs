@@ -406,6 +406,84 @@ mod control {
         Ok((pool, dir))
     }
 
+    /// A finished run carrying a pid: what a crash between the process dying and
+    /// the row being updated leaves behind.
+    ///
+    /// pid 1 is used deliberately — it always exists and `reap` refuses to signal
+    /// it, so this exercises the clearing path without a test that could kill
+    /// something on the machine running it.
+    async fn a_finished_run_with_a_pid(pool: &Pool) -> Result<revlocal_core::RunId, String> {
+        let repo = revlocal_store::RepoStore::new(pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: "acme".to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                local_path: Some("/nowhere".to_owned()),
+                remote_url: None,
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: now(),
+                updated_at: now(),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let change = revlocal_store::ChangeStore::new(pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id: repo.id,
+                kind: revlocal_core::ChangeKind::Commit,
+                external_id: "abc123".to_owned(),
+                title: None,
+                author_name: None,
+                author_email: None,
+                authored_at: None,
+                branch: Some("main".to_owned()),
+                base_ref: None,
+                head_ref: None,
+                url: None,
+                diff_stat: revlocal_core::DiffStat::default(),
+                detected_at: now(),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let runs = revlocal_store::RunStore::new(pool);
+        let run = runs
+            .insert(&revlocal_core::Run {
+                id: revlocal_core::RunId::new(0),
+                change_id: change.id,
+                attempt: 1,
+                status: revlocal_core::RunStatus::Done,
+                engine: revlocal_core::EngineKind::Mock,
+                depth: revlocal_core::Depth::Summary,
+                trigger: revlocal_core::TriggerSource::Poll,
+                skip_reason: None,
+                error: None,
+                error_detail: None,
+                degraded: None,
+                usage: revlocal_core::Usage::default(),
+                started_at: Some(now()),
+                finished_at: Some(now()),
+                transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
+                created_at: now(),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        runs.set_engine_pid(run.id, Some(1))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(run.id)
+    }
+
     fn now() -> revlocal_core::Timestamp {
         chrono::Utc::now()
     }
@@ -503,6 +581,50 @@ mod control {
             report.detail.contains("is lost"),
             "must say output is lost: {}",
             report.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn kill_hard_does_not_claim_it_stopped_an_engine_it_cannot_reach() -> Result<(), String> {
+        // It used to hardcode `reaped = 0` and report "0 engine process(es)
+        // reaped", which is the same sentence as the truth and a different fact:
+        // a pid is not recorded until the process exits, so an engine mid-review
+        // survives a hard kill (RL-1521).
+        let (pool, _dir) = store().await?;
+
+        let report = kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert_eq!(report.processes_reaped, 0);
+        assert!(
+            report.detail.contains("not reaped"),
+            "a control that cannot do its whole job says so: {}",
+            report.detail
+        );
+        assert!(
+            report.detail.contains("try:"),
+            "and says what to do instead: {}",
+            report.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn kill_hard_clears_a_pid_it_has_dealt_with() -> Result<(), String> {
+        // Left recorded, the same dead process is reported as an orphan on every
+        // kill from then on.
+        let (pool, _dir) = store().await?;
+        let run = a_finished_run_with_a_pid(&pool).await?;
+
+        kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        let left = revlocal_store::RunStore::new(&pool)
+            .orphan_pids()
+            .await
+            .map_err(|e| e.to_string())?;
+        assert!(
+            !left.iter().any(|(id, _)| *id == run),
+            "the pid must be cleared once dealt with: {left:?}"
         );
         Ok(())
     }
