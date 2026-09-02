@@ -314,6 +314,14 @@ async fn findings_reach_the_publish_queue_under_the_repository_autonomy_mode() {
     // §11.6: the fingerprint is in the key, so re-reviewing this change reuses the
     // issue rather than filing a second one.
     assert!(waiting[0].idempotency_key.starts_with("andare-"));
+    // §11.4: the key carries the run as well as the fingerprint, so a later
+    // review that still sees the problem reaches the target and can comment
+    // rather than being dropped here (RL-1530).
+    assert!(
+        waiting[0].idempotency_key.contains("-run"),
+        "the run must be in the key: {}",
+        waiting[0].idempotency_key
+    );
 }
 
 #[tokio::test]
@@ -831,4 +839,93 @@ async fn no_trama_space_means_no_page() {
         "no space configured, so no page: {:?}",
         actions.iter().map(|a| a.target.clone()).collect::<Vec<_>>()
     );
+}
+
+/// A finding still present on a later commit must reach the target again.
+#[tokio::test]
+async fn a_recurring_finding_queues_another_action_so_the_target_can_comment() {
+    // §11.4 and M9: "a re-run for the same fingerprint produces a comment, not a
+    // second issue". The comment is the *target's* decision — it searches for the
+    // trailer and comments when it finds one — and it can only make that decision
+    // if an action reaches it.
+    //
+    // RL-1509 keyed on the fingerprint alone to stop a duplicate-key crash, which
+    // also stopped the second review queueing anything, which made
+    // `recurrence_comment` unreachable (RL-1530).
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+
+    // Two runs over the same change: the mock returns the same findings, so the
+    // fingerprints match, which is exactly the recurrence case.
+    for at_minute in [2, 4] {
+        executor::enqueue_manual(
+            &fixture.pool,
+            &fixture.repo,
+            &a_change(&fixture).await.expect("the discovered change"),
+            at(at_minute),
+        )
+        .await
+        .expect("enqueue");
+
+        executor::drain(
+            &fixture.pool,
+            &config(AutonomyMode::Auto),
+            &NullSink,
+            &fixture.data_dir(),
+            4,
+            at(at_minute + 1),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("drain");
+    }
+
+    let actions = revlocal_store::PublishActionStore::new(&fixture.pool)
+        .list_pending(at(9))
+        .await
+        .expect("actions");
+    let andare: Vec<_> = actions.iter().filter(|a| a.target == "andare").collect();
+
+    assert!(
+        andare.len() > 1,
+        "the second review must queue its own action: {:?}",
+        andare
+            .iter()
+            .map(|a| a.idempotency_key.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // Distinct keys, so the unique constraint RL-1509 tripped over still holds.
+    let keys: std::collections::BTreeSet<_> =
+        andare.iter().map(|a| a.idempotency_key.clone()).collect();
+    assert_eq!(keys.len(), andare.len(), "keys must stay unique");
+}
+
+/// The change the fixture discovered, for a second manual run over it.
+///
+/// Returns `Result` because it is a helper, not a test — ADR 0003, which clippy
+/// enforces: `expect_used` is allowed in `#[test]` functions and nowhere else.
+async fn a_change(fixture: &Fixture) -> Result<revlocal_core::Change, String> {
+    // `without_runs` is empty once the first run exists, so the change is looked
+    // up by the identity the fixture gave it rather than by "not yet reviewed".
+    let path = fixture
+        .repo
+        .local_path
+        .as_deref()
+        .ok_or("the fixture repository has no local path")?;
+
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(path)
+        .output()
+        .map_err(|error| format!("git rev-parse: {error}"))?;
+
+    ChangeStore::new(&fixture.pool)
+        .find(
+            fixture.repo.id,
+            ChangeKind::Commit,
+            String::from_utf8_lossy(&head.stdout).trim(),
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "the discovered change is not in the store".to_owned())
 }

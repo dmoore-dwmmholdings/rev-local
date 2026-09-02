@@ -985,16 +985,26 @@ async fn queue_actions(
                 continue;
             };
 
-            // §11.6: the fingerprint makes a re-reviewed change *reuse* its issue
-            // rather than file a second one — so a finding that is still there on
-            // the next commit already has an action, and inserting again is a
-            // unique constraint failure.
+            // Keyed by fingerprint **and run**, which is the difference between
+            // two dedupes that look alike (RL-1530).
             //
-            // This was a hard error, and it took the whole run down with it: the
-            // executor pass returned, the run never left `publishing`, and the
-            // loop stopped on the first finding that survived two commits. Which
-            // is every finding worth having.
-            let key = format!("{target}-{}", finding.fingerprint);
+            // §11.4 and M9 are explicit: "a re-run for the same fingerprint
+            // produces a comment, not a second issue". The comment is the
+            // target's job — it searches for the trailer and comments when it
+            // finds one — and it can only do that if an action reaches it.
+            //
+            // Keyed on the fingerprint alone, RL-1509 stopped the second run
+            // queueing anything at all. That fixed a real crash: a duplicate key
+            // violated a unique constraint and took the whole executor pass with
+            // it. But it also meant `recurrence_comment` was composed into every
+            // payload and could never be sent, and a finding still present twenty
+            // commits later said nothing.
+            //
+            // With the run in the key, each review that still sees the problem
+            // queues its own action, the constraint still holds, and the remote
+            // dedupe decides between filing and commenting — which is where §11.4
+            // put that decision.
+            let key = format!("{target}-{}-run{}", finding.fingerprint, run.get());
             if store
                 .find_by_idempotency_key(target, &key)
                 .await
