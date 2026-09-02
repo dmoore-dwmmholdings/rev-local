@@ -610,10 +610,23 @@ async fn reject_action(id: i64, suppress: bool) -> Result<(), String> {
 }
 
 /// Replace a payload before approving it (§12.4's "edit body then approve").
+///
+/// Checked before it is stored. Editing a body is the one place a person can
+/// hand rev-local a payload its target cannot read, and the whole point of §12.4
+/// is that approving is the deliberate moment — finding out at dispatch that the
+/// edit broke the shape makes the approval a formality (RL-1516).
 #[tauri::command]
 async fn edit_payload(id: i64, payload_json: String) -> Result<(), String> {
     with_store(|pool| async move {
-        revlocal_store::PublishActionStore::new(&pool)
+        let store = revlocal_store::PublishActionStore::new(&pool);
+        let action = store
+            .get(revlocal_core::PublishActionId::new(id))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        revlocal_publish::validate_payload(&action.target, action.capability, &payload_json)?;
+
+        store
             .edit_payload(revlocal_core::PublishActionId::new(id), &payload_json)
             .await
             .map_err(|e| e.to_string())

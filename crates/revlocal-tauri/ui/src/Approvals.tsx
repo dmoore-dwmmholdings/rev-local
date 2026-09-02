@@ -68,8 +68,24 @@ function Action({
       </button>
       {showRaw && <pre className="payload">{action.payload_json}</pre>}
 
+      {/* An action whose payload its target cannot read will fail terminally the
+          moment it is dispatched. Saying so here, and refusing the approval, is
+          the difference between §12.4's deliberate step and a formality. Reject
+          and Edit stay available: they are the two ways out. */}
+      {action.unsendable && (
+        <p className="banner bad" role="alert">
+          {action.unsendable}
+        </p>
+      )}
+
       <div className="queued-actions">
-        <button onClick={() => onApprove(action)}>Approve</button>
+        <button
+          onClick={() => onApprove(action)}
+          disabled={Boolean(action.unsendable)}
+          title={action.unsendable ?? 'Approve and send this action'}
+        >
+          Approve
+        </button>
         <button onClick={() => onReject(action, false)}>Reject</button>
         {/* Disabled rather than hidden where there is no finding: a suppression
             with nothing to suppress is a row that can never match anything. */}

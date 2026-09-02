@@ -65,6 +65,15 @@ pub struct QueuedAction {
     /// out of this string. One representation, so a preview cannot disagree with
     /// what is sent.
     pub payload_json: String,
+    /// Why this action cannot be sent as it stands, when it cannot (RL-1516).
+    ///
+    /// The payload is a string, and dispatch is where it is parsed. An action
+    /// whose payload the target cannot read used to look exactly like one that
+    /// could, right up to the moment somebody approved it and it failed
+    /// terminally. §12.4's approval is meant to be the deliberate step; finding
+    /// out afterwards makes it a formality.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsendable: Option<String>,
     /// Whether this action carries a finding that could be suppressed.
     ///
     /// §12.4's "reject and suppress this finding" is only meaningful when there is
@@ -119,6 +128,12 @@ pub async fn gather(pool: &Pool) -> Result<ApprovalsView, ApprovalsError> {
             .map(|action| QueuedAction {
                 id: action.id.get(),
                 run_id: action.run_id.get(),
+                unsendable: revlocal_publish::validate_payload(
+                    &action.target,
+                    action.capability,
+                    &action.payload_json,
+                )
+                .err(),
                 target: action.target,
                 capability: action.capability.as_str().to_owned(),
                 risk: action.risk.as_str().to_owned(),
@@ -152,6 +167,7 @@ mod tests {
             capability: "post_review".to_owned(),
             risk: "high".to_owned(),
             payload_json: r#"{"body":"hello"}"#.to_owned(),
+            unsendable: None,
             has_finding,
         }
     }

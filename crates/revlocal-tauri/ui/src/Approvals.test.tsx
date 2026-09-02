@@ -144,3 +144,61 @@ describe('approvals', () => {
     expect(screen.getByText(/Nothing is waiting for approval/)).toBeDefined();
   });
 });
+
+describe('an action that cannot be sent', () => {
+  it('refuses the approval and says why', () => {
+    // The payload is a string, and dispatch is where it used to be parsed first.
+    // Approving one of these marked it failed and did nothing else (RL-1516).
+    render(
+      <Approvals
+        view={{
+          waiting: [
+            action({
+              unsendable: 'this cannot be sent as it stands — it is not an Andare issue',
+            }),
+          ],
+        }}
+        onApprove={noop}
+        onApproveRun={noop}
+        onReject={noop}
+        onEdit={noop}
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toMatch(/cannot be sent/);
+    expect(screen.getByRole('button', { name: 'Approve' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('leaves the two ways out available', () => {
+    // Reject and Edit are how somebody resolves this. Disabling them would leave
+    // the action stuck in the inbox with no move at all.
+    render(
+      <Approvals
+        view={{ waiting: [action({ unsendable: 'nope' })] }}
+        onApprove={noop}
+        onApproveRun={noop}
+        onReject={noop}
+        onEdit={noop}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Reject' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: /Edit body/ }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('approves normally when the payload is fine', () => {
+    const onApprove = vi.fn();
+    render(
+      <Approvals
+        view={{ waiting: [action()] }}
+        onApprove={onApprove}
+        onApproveRun={noop}
+        onReject={noop}
+        onEdit={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(onApprove).toHaveBeenCalled();
+  });
+});

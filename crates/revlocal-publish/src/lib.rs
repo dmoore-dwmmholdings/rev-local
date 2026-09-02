@@ -16,6 +16,7 @@ pub mod report;
 pub mod retry;
 pub mod target;
 pub mod trama;
+pub mod validate;
 pub mod work_item;
 
 pub use andare::{
@@ -48,6 +49,7 @@ pub use trama::{
     render_index, review_page_section, review_page_title, IndexEntry, McpTramaWriter, PagePayload,
     TramaTarget, TramaToolNames, TramaWriter, DEFAULT_INDEX_LIMIT, MARKER_BEGIN, MARKER_END,
 };
+pub use validate::validate_payload;
 pub use work_item::{
     outcome_comment, plan_outcomes, transition_for, KeyPattern, KeyPatternError, OutcomeReport,
 };

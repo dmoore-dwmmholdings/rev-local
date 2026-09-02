@@ -425,6 +425,8 @@ export type QueuedAction = {
   risk: string;
   /** The payload that would be sent, verbatim. Not a rendering of it. */
   payload_json: string;
+  /** Why this cannot be sent as it stands, when it cannot (RL-1516). */
+  unsendable?: string;
   has_finding: boolean;
 };
 
