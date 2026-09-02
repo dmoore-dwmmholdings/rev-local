@@ -839,6 +839,61 @@ async fn no_trama_space_means_no_page() {
         "no space configured, so no page: {:?}",
         actions.iter().map(|a| a.target.clone()).collect::<Vec<_>>()
     );
+
+    // §18: and it says so. `targets` includes `trama` by default, so a repository
+    // that never mentioned Trama is still asking for a page — dropping it in
+    // silence is indistinguishable from writing one (RL-1533).
+    let detail = outcome.detail.clone().unwrap_or_default();
+    assert!(
+        detail.contains("Trama space"),
+        "the missing space must be reported: {detail:?}"
+    );
+    assert!(
+        detail.contains("try:"),
+        "and say what to do about it: {detail:?}"
+    );
+}
+
+/// Not asking for a target is not the same as asking and being unable.
+#[tokio::test]
+async fn a_repository_that_removed_trama_is_not_nagged_about_it() {
+    // The distinction every one of these notes draws. A repository that took
+    // `trama` out of its targets has said what it wants, and repeating it on
+    // every run would be noise about a decision already made.
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+    let no_trama = revlocal_core::Repo {
+        config_json: r#"{"andare_project": "ENG", "targets": ["andare", "report"]}"#.to_owned(),
+        ..fixture.repo.clone()
+    };
+    RepoStore::new(&fixture.pool)
+        .update(&no_trama)
+        .await
+        .expect("configure targets");
+
+    executor::enqueue(&fixture.pool, &no_trama, at(2))
+        .await
+        .expect("enqueue");
+    let report = executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::Auto),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    let detail = report
+        .finished
+        .first()
+        .and_then(|outcome| outcome.detail.clone())
+        .unwrap_or_default();
+    assert!(
+        !detail.contains("Trama"),
+        "a repository that did not ask must not be told: {detail:?}"
+    );
 }
 
 /// A finding still present on a later commit must reach the target again.

@@ -864,6 +864,15 @@ async fn queue_actions(
         })
         .flatten();
     let wants_github = github_repo.is_some();
+    // Resolved once and used twice — by the held note below and by the page
+    // itself — so the report and the behaviour cannot disagree about whether a
+    // space was configured.
+    let trama_space = repo_config
+        .trama_space
+        .clone()
+        .filter(|space| !space.trim().is_empty())
+        .filter(|_| repo_config.targets_include("trama"));
+    let wants_trama = trama_space.is_some();
     let publishable = stored.iter().filter(|(_, ok)| *ok).count();
 
     // Reported and skipped, not raised: the review ran and its findings are
@@ -888,6 +897,17 @@ async fn queue_actions(
         if repo_config.targets_include("github") && !wants_github {
             held.push(format!(
                 "run #{}: {publishable} finding(s) were not filed to GitHub — `{}` has no recognisable GitHub remote\n  try: set the repository's remote URL, or remove `github` from its `targets`",
+                run.get(),
+                repo.name
+            ));
+        }
+        // The same distinction the three above draw: asking for a target and
+        // lacking its configuration is worth saying, not asking for it at all is
+        // not. The page is dropped by a filter chain, and until now silently —
+        // §18 broken in the one place RL-1529 was adding behaviour.
+        if repo_config.targets_include("trama") && !wants_trama {
+            held.push(format!(
+                "run #{}: no review page was written — `{}` has no Trama space set\n  try: set `trama_space` in that repository's configuration, or remove `trama` from its `targets`",
                 run.get(),
                 repo.name
             ));
@@ -1043,12 +1063,7 @@ async fn queue_actions(
     // One page per run, not one per finding — the page *is* the review, with its
     // verdict, summary and findings together. Queued outside the loop above for
     // that reason, with its own idempotency key (RL-1529).
-    if let Some(space) = repo_config
-        .trama_space
-        .clone()
-        .filter(|space| !space.trim().is_empty())
-        .filter(|_| repo_config.targets_include("trama"))
-    {
+    if let Some(space) = trama_space {
         // §12.3: publishing a page is high risk, leaving it a draft is low, and
         // `UpsertDoc` already carries that distinction. A repository that has not
         // opted in gets a draft — the safe half, and still readable.
