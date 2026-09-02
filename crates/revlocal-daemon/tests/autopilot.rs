@@ -436,3 +436,136 @@ async fn a_repository_with_no_remote_is_left_alone() -> Result<(), Box<dyn std::
     );
     Ok(())
 }
+
+// --- housekeeping (RL-1520) -------------------------------------------------
+
+#[tokio::test]
+async fn old_runs_and_their_transcripts_are_cleared() -> Result<(), Box<dyn std::error::Error>> {
+    // `delete_finished_before` existed, was tested, and nothing called it.
+    // `transcript_retention_days` was read in one place — to display it. A loop
+    // reviewing every commit forever accumulated a row and a file per review.
+    let fixture = install().await?;
+
+    let transcript = fixture.data_dir().join("transcripts");
+    std::fs::create_dir_all(&transcript)?;
+    let old_log = transcript.join("1.log");
+    std::fs::write(&old_log, "an old transcript")?;
+
+    let long_ago = at(1) - chrono::Duration::days(400);
+    RunStore::new(&fixture.pool)
+        .insert(&revlocal_core::Run {
+            id: revlocal_core::RunId::new(0),
+            change_id: seed_change(&fixture, long_ago).await?,
+            attempt: 1,
+            status: revlocal_core::RunStatus::Done,
+            engine: EngineKind::Mock,
+            depth: revlocal_core::Depth::Summary,
+            trigger: revlocal_core::TriggerSource::Poll,
+            skip_reason: None,
+            error: None,
+            error_detail: None,
+            degraded: None,
+            usage: revlocal_core::Usage::default(),
+            started_at: Some(long_ago),
+            finished_at: Some(long_ago),
+            transcript_path: Some(old_log.display().to_string()),
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
+            created_at: long_ago,
+        })
+        .await?;
+
+    let report = tick(&fixture, 1).await?;
+
+    assert!(report.pruned > 0, "the old run must be cleared: {report:?}");
+    assert!(
+        !old_log.exists(),
+        "the transcript goes with the row it belonged to"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_recent_run_is_left_alone() -> Result<(), Box<dyn std::error::Error>> {
+    // The window is thirty days. A run from this morning is not old.
+    let fixture = install().await?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    tick(&fixture, 1).await?;
+    let before = RunStore::new(&fixture.pool)
+        .list_recent(None, None, 50)
+        .await?
+        .len();
+
+    // A second pass a day later sweeps, and must not take today's work with it.
+    let later = autopilot::tick(
+        &fixture.pool,
+        &config(),
+        &NullSink,
+        &fixture.data_dir(),
+        &[],
+        at(1) + chrono::Duration::days(2),
+        &CancellationToken::new(),
+    )
+    .await?;
+
+    assert_eq!(later.pruned, 0, "{later:?}");
+    let after = RunStore::new(&fixture.pool)
+        .list_recent(None, None, 50)
+        .await?
+        .len();
+    assert_eq!(after, before, "recent runs must survive a sweep");
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_sweep_does_not_run_on_every_tick() -> Result<(), Box<dyn std::error::Error>> {
+    // The delete scans, the window is thirty days, and the loop ticks every
+    // minute. Sweeping every tick is a table scan a minute to remove nothing.
+    let fixture = install().await?;
+
+    tick(&fixture, 1).await?;
+    let first = SettingStore::new(&fixture.pool)
+        .get(autopilot::SETTING_LAST_SWEEP)
+        .await?;
+    assert!(first.is_some(), "the first pass sweeps and records when");
+
+    tick(&fixture, 2).await?;
+    let second = SettingStore::new(&fixture.pool)
+        .get(autopilot::SETTING_LAST_SWEEP)
+        .await?;
+    assert_eq!(second, first, "a tick a minute later must not sweep again");
+    Ok(())
+}
+
+/// A change row for a run to belong to.
+async fn seed_change(
+    fixture: &Fixture,
+    when: Timestamp,
+) -> Result<revlocal_core::ChangeId, Box<dyn std::error::Error>> {
+    Ok(revlocal_store::ChangeStore::new(&fixture.pool)
+        .upsert(&revlocal_core::Change {
+            id: revlocal_core::ChangeId::new(0),
+            repo_id: fixture.repo.id,
+            kind: revlocal_core::ChangeKind::Commit,
+            external_id: format!("old-{}", when.timestamp()),
+            title: Some("an old commit".to_owned()),
+            author_name: None,
+            author_email: None,
+            authored_at: None,
+            branch: Some("main".to_owned()),
+            base_ref: None,
+            head_ref: None,
+            url: None,
+            diff_stat: revlocal_core::DiffStat::default(),
+            detected_at: when,
+        })
+        .await?
+        .id)
+}

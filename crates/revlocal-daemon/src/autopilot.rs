@@ -49,6 +49,13 @@ use crate::state_machine::{recover_interrupted, RunEventSink};
 /// day running `git log` over repositories nobody touched.
 pub const DEFAULT_INTERVAL_SECS: u64 = 60;
 
+/// The database key holding when retention last swept.
+///
+/// Stored rather than kept in memory so a machine that is shut down every
+/// evening still sweeps: an in-process "once a day" timer on an app that runs
+/// for six hours a day never fires.
+pub const SETTING_LAST_SWEEP: &str = "retention.last_sweep";
+
 /// Why a tick could not run at all.
 ///
 /// Anything that only stops *one* repository is a note on the report instead: the
@@ -117,6 +124,8 @@ pub struct TickReport {
     pub publish_failed: usize,
     /// Publish actions sitting in the approvals inbox, right now.
     pub awaiting_approval: usize,
+    /// Finished runs removed by retention this tick (§13.1).
+    pub pruned: u64,
     /// Runs still queued after this tick.
     pub still_queued: u32,
     /// The kill switch is engaged.
@@ -170,6 +179,9 @@ impl TickReport {
         }
         if self.publish_failed > 0 {
             parts.push(format!("{} failed to file", self.publish_failed));
+        }
+        if self.pruned > 0 {
+            parts.push(format!("cleared {} old run(s)", self.pruned));
         }
         if self.awaiting_approval > 0 {
             parts.push(format!("{} waiting for you", self.awaiting_approval));
@@ -387,6 +399,17 @@ pub async fn tick(
         Err(error) => report.notes.push(format!("could not deliver: {error}")),
     }
 
+    // Housekeeping last: it is the least urgent thing a pass does, and doing it
+    // before the review would delay work for a sweep nobody is waiting on.
+    match sweep(pool, config, at).await {
+        Ok(pruned) => report.pruned = pruned,
+        // §18: a sweep that failed is not a pass that failed, but it is also not
+        // nothing — a disk filling up quietly is the failure this prevents.
+        Err(error) => report
+            .notes
+            .push(format!("could not clear old runs — {error}")),
+    }
+
     report.awaiting_approval = PublishActionStore::new(pool)
         .list_awaiting_approval()
         .await
@@ -398,6 +421,65 @@ pub async fn tick(
         .map_err(boxed)?;
 
     Ok(report)
+}
+
+/// Remove finished runs past their retention window, at most once a day.
+///
+/// # Why the store hands back transcript paths
+///
+/// A run row and its transcript are two records of the same thing in two places.
+/// Deleting the row and leaving the file is how a data directory grows without
+/// anything in the database to explain it, so `delete_finished_before` returns
+/// the paths and this removes them in the same pass.
+///
+/// # Why once a day rather than every tick
+///
+/// The delete scans, the window is thirty days, and the loop ticks every minute.
+/// Sweeping every tick would be a table scan a minute to remove nothing.
+async fn sweep(pool: &Pool, config: &GlobalConfig, at: Timestamp) -> Result<u64, AutopilotError> {
+    let settings = SettingStore::new(pool);
+    let last = settings
+        .get(SETTING_LAST_SWEEP)
+        .await
+        .map_err(boxed)?
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(&raw).ok())
+        .map(|parsed| parsed.with_timezone(&chrono::Utc));
+
+    // A stored value that will not parse is treated as "never swept" rather than
+    // as an error: the remedy is to sweep, which is what this does anyway.
+    if last.is_some_and(|last| at - last < chrono::Duration::days(1)) {
+        return Ok(0);
+    }
+
+    let days = i64::from(config.global.transcript_retention_days);
+    // Zero means keep everything. Reading it as "delete every finished run" would
+    // turn an unset field into data loss.
+    if days <= 0 {
+        settings
+            .set(SETTING_LAST_SWEEP, &at.to_rfc3339(), at)
+            .await
+            .map_err(boxed)?;
+        return Ok(0);
+    }
+
+    let (deleted, transcripts) = RunStore::new(pool)
+        .delete_finished_before(at - chrono::Duration::days(days))
+        .await
+        .map_err(boxed)?;
+
+    for path in transcripts {
+        // A transcript already gone is not a problem — the row it belonged to is
+        // the thing being removed, and failing the sweep over a missing file
+        // would mean it never completes.
+        let _ = std::fs::remove_file(path);
+    }
+
+    settings
+        .set(SETTING_LAST_SWEEP, &at.to_rfc3339(), at)
+        .await
+        .map_err(boxed)?;
+
+    Ok(deleted)
 }
 
 /// Ask the scheduler whether this tick should poll remotes at all.
