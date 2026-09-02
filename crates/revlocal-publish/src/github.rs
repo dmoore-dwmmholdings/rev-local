@@ -30,6 +30,8 @@ use std::fmt::Write as _;
 
 use revlocal_core::{Finding, Severity, Verdict};
 
+use crate::andare::FINGERPRINT_TRAILER;
+
 /// The review action to submit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewEvent {
@@ -390,6 +392,24 @@ pub trait GitHubWriter: Send + Sync {
     /// Post a new review.
     async fn create_review(&self, payload: &ReviewPayload) -> Result<ExistingReview, PublishError>;
 
+    /// The issue rev-local already filed for this fingerprint, if any.
+    async fn find_issue(
+        &self,
+        repo: &str,
+        fingerprint: &str,
+    ) -> Result<Option<ExistingIssue>, PublishError>;
+
+    /// File a new issue.
+    async fn create_issue(&self, issue: &GitHubIssue) -> Result<ExistingIssue, PublishError>;
+
+    /// Comment on an issue that already exists.
+    async fn comment_issue(
+        &self,
+        repo: &str,
+        number: u64,
+        body: &str,
+    ) -> Result<ExistingIssue, PublishError>;
+
     /// Replace an existing review's body.
     ///
     /// `pr` as well as `review_id`, because GitHub's endpoint is
@@ -416,6 +436,69 @@ impl<W: GitHubWriter> GitHubTarget<W> {
     pub const fn new(writer: W) -> Self {
         Self { writer }
     }
+
+    /// File one finding as an issue, or comment on the issue it already has.
+    ///
+    /// Checked against GitHub rather than against our own row, for the reason the
+    /// review path gives: a crash between filing and recording leaves an issue
+    /// GitHub has and rev-local does not know about, and filing again would be
+    /// exactly the duplicate §11.6 exists to prevent.
+    async fn file_issue(&self, action: &PublishAction) -> Result<PublishReceipt, PublishError> {
+        let issue: GitHubIssue =
+            serde_json::from_str(&action.payload_json).map_err(|e| PublishError::Rejected {
+                target: "github".to_owned(),
+                status: None,
+                detail: format!("the stored payload is not an issue: {e}"),
+            })?;
+
+        if let Some(found) = self
+            .writer
+            .find_issue(&issue.repo, &issue.fingerprint)
+            .await?
+        {
+            let existing = self
+                .writer
+                .comment_issue(&issue.repo, found.number, &recurrence_comment(&issue))
+                .await?;
+            return Ok(PublishReceipt {
+                external_ref: existing
+                    .url
+                    .clone()
+                    .or_else(|| Some(format!("{}#{}", issue.repo, existing.number))),
+                response_json: Some(
+                    serde_json::json!({ "issue": existing.number, "url": existing.url })
+                        .to_string(),
+                ),
+                // The effect already existed. §11.6 wants that distinguishable
+                // from a fresh filing in the audit log.
+                deduplicated: true,
+            });
+        }
+
+        let filed = self.writer.create_issue(&issue).await?;
+        Ok(PublishReceipt {
+            external_ref: filed
+                .url
+                .clone()
+                .or_else(|| Some(format!("{}#{}", issue.repo, filed.number))),
+            response_json: Some(
+                serde_json::json!({ "issue": filed.number, "url": filed.url }).to_string(),
+            ),
+            deduplicated: false,
+        })
+    }
+}
+
+/// What rev-local says on an issue it has already filed.
+///
+/// Short on purpose. The issue already carries the finding; repeating it would
+/// make a recurring problem's thread unreadable by the time somebody comes to fix
+/// it. What is new each time is only that it is still there.
+fn recurrence_comment(issue: &GitHubIssue) -> String {
+    format!(
+        "rev-local saw this again.\n\n---\n{FINGERPRINT_TRAILER} {}\n",
+        issue.fingerprint
+    )
 }
 
 #[async_trait]
@@ -429,10 +512,15 @@ impl<W: GitHubWriter> PublishTarget for GitHubTarget<W> {
             revlocal_core::Capability::PostReview,
             revlocal_core::Capability::Comment,
             revlocal_core::Capability::SetCheck,
+            revlocal_core::Capability::CreateIssue,
         ]))
     }
 
     async fn execute(&self, action: &PublishAction) -> Result<PublishReceipt, PublishError> {
+        if action.capability == revlocal_core::Capability::CreateIssue {
+            return self.file_issue(action).await;
+        }
+
         let payload: ReviewPayload =
             serde_json::from_str(&action.payload_json).map_err(|e| PublishError::Rejected {
                 target: "github".to_owned(),
@@ -610,6 +698,171 @@ pub fn find_own_review(listing_json: &str, head_sha: &str) -> Option<ExistingRev
             id: review.get("id").and_then(serde_json::Value::as_u64)?,
             url: review
                 .get("html_url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        })
+    })
+}
+
+// --- issues (RL-1510, SPEC §11.3) -------------------------------------------
+
+/// One finding, as a GitHub issue.
+///
+/// Deliberately not `IssueDraft`: that one carries an Andare project key, which
+/// means nothing here, and a shared struct with a field each side ignores is how
+/// two targets end up validating each other's requirements.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GitHubIssue {
+    /// `owner/name`.
+    pub repo: String,
+    /// The issue title.
+    pub title: String,
+    /// The body, fingerprint trailer included.
+    pub body: String,
+    /// The fingerprint, so a re-review finds this issue instead of filing again.
+    pub fingerprint: String,
+}
+
+/// An issue rev-local has already filed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExistingIssue {
+    /// The issue number.
+    pub number: u64,
+    /// Its URL, for the receipt.
+    pub url: Option<String>,
+}
+
+/// `owner/name` from a remote URL, when it is a GitHub one.
+///
+/// # Why the host has to look like GitHub
+///
+/// Every forge uses the same two URL shapes, so a parser that only looked at the
+/// path would happily produce `owner/name` for a GitLab remote and hand it to
+/// `gh`, which would file the issue against whatever `owner/name` happens to
+/// exist on github.com. Filing a private repository's findings into a stranger's
+/// project is the worst outcome this code has available, so an unrecognised host
+/// returns `None` and the caller reports it rather than guessing.
+///
+/// `contains("github")` rather than an exact match, because GitHub Enterprise is
+/// normally `github.company.com`. A self-hosted instance on an unrelated hostname
+/// is not detected, which is the safe direction to be wrong in.
+pub fn github_slug(remote_url: &str) -> Option<String> {
+    let trimmed = remote_url.trim();
+
+    // The scheme is checked on the whole string, not on what precedes the first
+    // colon: in `https://github.com/...` that prefix is `https`, so testing it
+    // for `://` sent every https remote down the scp branch and every one of
+    // them came back as "not GitHub".
+    let rest = if trimmed.contains("://") {
+        after_host(trimmed)?
+    } else if let Some((authority, path)) = trimmed.split_once(':') {
+        // `git@host:owner/name` — scp-like syntax, which is not a URL at all.
+        let host = authority.rsplit('@').next().unwrap_or(authority);
+        if !host.contains("github") {
+            return None;
+        }
+        path
+    } else {
+        return None;
+    };
+
+    let path = rest.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    let owner = parts.next()?;
+    let name = parts.next()?;
+    // Exactly two. A longer path is a URL this does not understand — a gist, a
+    // tree view, an enterprise route — and inventing a repository from its first
+    // two segments would file somewhere nobody asked for.
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{name}"))
+}
+
+/// The path of a `scheme://[user@]host/path` URL, when the host looks like GitHub.
+fn after_host(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let (authority, path) = rest.split_once('/')?;
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    host.contains("github").then_some(path)
+}
+
+/// Find the issue rev-local already filed for this fingerprint.
+///
+/// `--state all`, because a finding that recurs after somebody closed the issue
+/// should reopen the conversation there rather than file a second one.
+pub fn gh_find_issue(repo: &str, fingerprint: &str) -> GhRequest {
+    GhRequest {
+        args: vec![
+            "issue".to_owned(),
+            "list".to_owned(),
+            "--repo".to_owned(),
+            repo.to_owned(),
+            "--state".to_owned(),
+            "all".to_owned(),
+            "--search".to_owned(),
+            format!("{FINGERPRINT_TRAILER} {fingerprint} in:body"),
+            "--json".to_owned(),
+            "number,url,body".to_owned(),
+            "--limit".to_owned(),
+            "10".to_owned(),
+        ],
+        stdin: None,
+    }
+}
+
+/// File one issue.
+pub fn gh_create_issue(issue: &GitHubIssue) -> GhRequest {
+    GhRequest {
+        args: vec![
+            "issue".to_owned(),
+            "create".to_owned(),
+            "--repo".to_owned(),
+            issue.repo.clone(),
+            "--title".to_owned(),
+            issue.title.clone(),
+            "--body-file".to_owned(),
+            "-".to_owned(),
+        ],
+        stdin: Some(issue.body.clone()),
+    }
+}
+
+/// Comment on an issue that already exists.
+pub fn gh_comment_issue(repo: &str, number: u64) -> GhRequest {
+    GhRequest {
+        args: vec![
+            "issue".to_owned(),
+            "comment".to_owned(),
+            number.to_string(),
+            "--repo".to_owned(),
+            repo.to_owned(),
+            "--body-file".to_owned(),
+            "-".to_owned(),
+        ],
+        stdin: None,
+    }
+}
+
+/// Pick rev-local's own issue out of a `gh issue list --json` result.
+///
+/// The search is confirmed against the body rather than trusted. GitHub's search
+/// is fuzzy and tokenises on punctuation, so a query for one fingerprint can
+/// return an issue carrying another — and commenting on the wrong issue is worse
+/// than filing a second one.
+pub fn find_own_issue(listing_json: &str, fingerprint: &str) -> Option<ExistingIssue> {
+    let issues: Vec<serde_json::Value> = serde_json::from_str(listing_json).ok()?;
+    let marker = format!("{FINGERPRINT_TRAILER} {fingerprint}");
+    issues.iter().find_map(|issue| {
+        let body = issue.get("body").and_then(serde_json::Value::as_str)?;
+        if !body.contains(&marker) {
+            return None;
+        }
+        Some(ExistingIssue {
+            number: issue.get("number").and_then(serde_json::Value::as_u64)?,
+            url: issue
+                .get("url")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
         })

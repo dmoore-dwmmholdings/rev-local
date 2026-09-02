@@ -660,10 +660,17 @@ async fn a_repository_with_no_andare_project_still_completes_its_review() {
         "the local report is written with nothing configured"
     );
 
+    // Every reason, not the first. This fixture is missing what two targets need
+    // — an Andare project and a GitHub remote — and while `held` was a single
+    // value the second message silently replaced the first (§18).
     let detail = outcome.detail.clone().unwrap_or_default();
     assert!(
         detail.contains("Andare project"),
         "the reason must name the setting to fix: {detail:?}"
+    );
+    assert!(
+        detail.contains("GitHub remote"),
+        "a second target's reason must not be dropped: {detail:?}"
     );
 
     let run = RunStore::new(&fixture.pool)

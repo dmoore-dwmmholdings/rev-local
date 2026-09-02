@@ -636,7 +636,9 @@ async fn execute_one(
         // and the only one that leaves a usable review behind.
         detail: failure_line(&outcome.report)
             .or_else(|| outcome.report.degraded.clone())
-            .or(actions.held),
+            // Every held reason, not the first. Two targets can each be missing
+            // something different, and showing one would hide the other.
+            .or_else(|| (!actions.held.is_empty()).then(|| actions.held.join("\n"))),
     }))
 }
 
@@ -721,13 +723,18 @@ async fn materialize(
 struct QueuedActions {
     /// The status each queued action was given.
     statuses: Vec<revlocal_core::PublishActionStatus>,
-    /// Why nothing was queued, when the review itself was fine.
+    /// Why work was not queued, when the review itself was fine.
     ///
     /// §18: nothing is dropped in silence. A repository missing a setting is not
     /// a failed review, and returning it as one used to leave the run stuck in
     /// `publishing` and abort the whole executor pass — one repository's missing
     /// `andare_project` stopped every other repository's queue.
-    held: Option<String>,
+    ///
+    /// A `Vec`, not an `Option`, because targets fail independently and a
+    /// repository can be missing what two of them need. While this held one
+    /// reason, adding the GitHub target made its message shadow Andare's — which
+    /// is the same silent drop in a new place.
+    held: Vec<String>,
 }
 
 /// Turn publishable findings into gated publish actions (§11, §12).
@@ -749,7 +756,7 @@ async fn queue_actions(
         // findings are still stored for somebody to read.
         return Ok(QueuedActions {
             statuses: Vec::new(),
-            held: None,
+            held: Vec::new(),
         });
     }
 
@@ -784,28 +791,49 @@ async fn queue_actions(
     // repository with `targets = []` still had Andare actions queued for it.
     let wants_andare = repo_config.targets_include("andare");
     let wants_report = repo_config.targets_include(revlocal_publish::REPORT_TARGET);
+    // A GitHub target needs `owner/name`, and the only place that can come from
+    // is the repository's own remote. `github_slug` returns `None` for a remote
+    // it does not recognise as GitHub rather than guessing: the path shape is the
+    // same on every forge, and a wrong guess files a private repository's
+    // findings into a stranger's project.
+    let github_repo = repo_config
+        .targets_include("github")
+        .then(|| {
+            repo.remote_url
+                .as_deref()
+                .and_then(revlocal_publish::github_slug)
+        })
+        .flatten();
+    let wants_github = github_repo.is_some();
     let publishable = stored.iter().filter(|(_, ok)| *ok).count();
 
     // Reported and skipped, not raised: the review ran and its findings are
     // stored. What cannot happen is filing them into a project nobody named — or
     // into no target at all.
-    let mut held = if publishable == 0 {
-        None
-    } else if !wants_andare && !wants_report {
-        Some(format!(
-            "run #{}: {publishable} finding(s) were not published — `{}` has no publish targets enabled\n  try: add `report` to that repository's `targets` to write them to disk",
-            run.get(),
-            repo.name
-        ))
-    } else if wants_andare && project.is_none() {
-        Some(format!(
-            "run #{}: {publishable} finding(s) were not filed to Andare — `{}` has no Andare project set\n  try: set the project key under \u{201c}Where findings go\u{201d} on that repository's screen",
-            run.get(),
-            repo.name
-        ))
-    } else {
-        None
-    };
+    let mut held = Vec::new();
+    if publishable > 0 {
+        if !wants_andare && !wants_report && !wants_github {
+            held.push(format!(
+                "run #{}: {publishable} finding(s) were not published — `{}` has no publish targets enabled\n  try: add `report` to that repository's `targets` to write them to disk",
+                run.get(),
+                repo.name
+            ));
+        }
+        if wants_andare && project.is_none() {
+            held.push(format!(
+                "run #{}: {publishable} finding(s) were not filed to Andare — `{}` has no Andare project set\n  try: set the project key under \u{201c}Where findings go\u{201d} on that repository's screen",
+                run.get(),
+                repo.name
+            ));
+        }
+        if repo_config.targets_include("github") && !wants_github {
+            held.push(format!(
+                "run #{}: {publishable} finding(s) were not filed to GitHub — `{}` has no recognisable GitHub remote\n  try: set the repository's remote URL, or remove `github` from its `targets`",
+                run.get(),
+                repo.name
+            ));
+        }
+    }
 
     for (finding, filable) in stored {
         if !filable {
@@ -848,6 +876,16 @@ async fn queue_actions(
                 };
                 payloads.push(("andare", encode(&payload, "Andare issue")?));
             }
+        }
+
+        if let Some(slug) = &github_repo {
+            let payload = revlocal_publish::GitHubIssue {
+                repo: slug.clone(),
+                title: finding.title.clone(),
+                body: revlocal_publish::compose_body(finding, &context),
+                fingerprint: finding.fingerprint.clone(),
+            };
+            payloads.push(("github", encode(&payload, "GitHub issue")?));
         }
 
         if wants_report {
@@ -912,8 +950,8 @@ async fn queue_actions(
     // Not silence. A finding that was already filed is the system working, but a
     // run that queued nothing and said nothing is indistinguishable from one that
     // found nothing (§18).
-    if held.is_none() && recurring > 0 {
-        held = Some(format!(
+    if held.is_empty() && recurring > 0 {
+        held.push(format!(
             "run #{}: {recurring} finding(s) are already filed, so nothing new was queued",
             run.get()
         ));

@@ -34,7 +34,9 @@ pub use github::{
     InlineComment, ReviewDraft, ReviewEvent, ReviewOptions, ReviewPayload,
 };
 pub use github::{
-    find_own_review, gh_create_review, gh_list_reviews, gh_update_review, GhRequest, REVIEW_MARKER,
+    find_own_issue, find_own_review, gh_comment_issue, gh_create_issue, gh_create_review,
+    gh_find_issue, gh_list_reviews, gh_update_review, github_slug, ExistingIssue, GhRequest,
+    GitHubIssue, REVIEW_MARKER,
 };
 pub use local::{ReportPayload, ReportTarget, TARGET_ID as REPORT_TARGET};
 pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_CONCURRENCY};

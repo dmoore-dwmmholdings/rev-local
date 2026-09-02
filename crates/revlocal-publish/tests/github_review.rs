@@ -296,6 +296,43 @@ struct FakeGitHub {
 
 #[async_trait]
 impl GitHubWriter for FakeGitHub {
+    // The issue half of the port is exercised by `gh_issues.rs` against a fixture
+    // `gh`. This fake is about reviews; refusing here rather than returning an
+    // empty success means a review test that accidentally files an issue fails
+    // loudly instead of silently passing.
+    async fn find_issue(
+        &self,
+        _repo: &str,
+        _fingerprint: &str,
+    ) -> Result<Option<revlocal_publish::ExistingIssue>, PublishError> {
+        Err(PublishError::Unsupported {
+            target: "github".to_owned(),
+            capability: Capability::CreateIssue,
+        })
+    }
+
+    async fn create_issue(
+        &self,
+        _issue: &revlocal_publish::GitHubIssue,
+    ) -> Result<revlocal_publish::ExistingIssue, PublishError> {
+        Err(PublishError::Unsupported {
+            target: "github".to_owned(),
+            capability: Capability::CreateIssue,
+        })
+    }
+
+    async fn comment_issue(
+        &self,
+        _repo: &str,
+        _number: u64,
+        _body: &str,
+    ) -> Result<revlocal_publish::ExistingIssue, PublishError> {
+        Err(PublishError::Unsupported {
+            target: "github".to_owned(),
+            capability: Capability::CreateIssue,
+        })
+    }
+
     async fn find_review(
         &self,
         repo: &str,

@@ -29,8 +29,9 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 
 use crate::github::{
-    find_own_review, gh_create_review, gh_list_reviews, gh_update_review, ExistingReview,
-    GhRequest, GitHubWriter, ReviewPayload,
+    find_own_issue, find_own_review, gh_comment_issue, gh_create_issue, gh_create_review,
+    gh_find_issue, gh_list_reviews, gh_update_review, ExistingIssue, ExistingReview, GhRequest,
+    GitHubIssue, GitHubWriter, ReviewPayload,
 };
 use crate::target::PublishError;
 
@@ -264,6 +265,27 @@ fn review_from(json: &str) -> Result<ExistingReview, PublishError> {
     })
 }
 
+/// Read an issue number off the URL `gh issue create` prints.
+///
+/// A rejection rather than a retry when it cannot be read: the issue was filed,
+/// and repeating the call would file a second one.
+fn issue_from_url(url: &str) -> Result<ExistingIssue, PublishError> {
+    let number = url
+        .rsplit('/')
+        .next()
+        .and_then(|last| last.parse::<u64>().ok())
+        .ok_or_else(|| PublishError::Rejected {
+            target: TARGET.to_owned(),
+            status: None,
+            detail: format!("`gh` printed {url:?}, which carries no issue number"),
+        })?;
+
+    Ok(ExistingIssue {
+        number,
+        url: Some(url.to_owned()),
+    })
+}
+
 #[async_trait]
 impl GitHubWriter for GhWriter {
     async fn find_review(
@@ -279,6 +301,41 @@ impl GitHubWriter for GhWriter {
     async fn create_review(&self, payload: &ReviewPayload) -> Result<ExistingReview, PublishError> {
         let request = gh_create_review(payload).map_err(Self::unencodable)?;
         review_from(&self.cli.run(&request).await?)
+    }
+
+    async fn find_issue(
+        &self,
+        repo: &str,
+        fingerprint: &str,
+    ) -> Result<Option<ExistingIssue>, PublishError> {
+        let listing = self.cli.run(&gh_find_issue(repo, fingerprint)).await?;
+        Ok(find_own_issue(&listing, fingerprint))
+    }
+
+    async fn create_issue(&self, issue: &GitHubIssue) -> Result<ExistingIssue, PublishError> {
+        // `gh issue create` prints the new issue's URL and nothing else — there is
+        // no JSON mode for it — so the number is read back off the URL rather than
+        // out of a document.
+        let url = self.cli.run(&gh_create_issue(issue)).await?;
+        issue_from_url(url.trim())
+    }
+
+    async fn comment_issue(
+        &self,
+        repo: &str,
+        number: u64,
+        body: &str,
+    ) -> Result<ExistingIssue, PublishError> {
+        let mut request = gh_comment_issue(repo, number);
+        request.stdin = Some(body.to_owned());
+        let url = self.cli.run(&request).await?;
+        // The comment's URL, not the issue's. The issue number is the one we were
+        // given, and reading it back off a comment permalink would be a second
+        // source of truth for something already known.
+        Ok(ExistingIssue {
+            number,
+            url: Some(url.trim().to_owned()).filter(|url| !url.is_empty()),
+        })
     }
 
     async fn update_review(
