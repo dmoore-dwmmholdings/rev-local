@@ -131,27 +131,29 @@ pub async fn resume(pool: &Pool, at: Timestamp) -> Result<ControlReport, Control
 pub async fn kill_hard(pool: &Pool, at: Timestamp) -> Result<ControlReport, ControlError> {
     let mut report = pause(pool, at).await?;
 
-    // Migration 0006 added `run.engine_pid` for exactly this, and `orphan_pids`
-    // returns the ones left behind: a pid still recorded against a run that has
-    // already reached a terminal status, which is a process that outlived the
-    // run it belonged to.
-    let orphans =
-        RunStore::new(pool)
-            .orphan_pids()
-            .await
-            .map_err(|source| ControlError::Store {
-                source: Box::new(source),
-            })?;
+    // Migration 0006 added `run.engine_pid` for exactly this, and both halves
+    // matter. `orphan_pids` is a process that outlived the run it belonged to;
+    // `active_pids` is an engine reviewing right now. §12.1 says a hard kill takes
+    // a running engine's output with it, and that sentence is only true of the
+    // second — so they are counted apart even though both are reaped the same way
+    // (RL-1528).
+    let runs = RunStore::new(pool);
+    let boxed = |source| ControlError::Store {
+        source: Box::new(source),
+    };
+    let orphans = runs.orphan_pids().await.map_err(boxed)?;
+    let active = runs.active_pids().await.map_err(boxed)?;
+    let interrupted = active.len();
 
     let mut reaped = 0_usize;
-    for (run, pid) in orphans {
+    for (run, pid) in orphans.into_iter().chain(active) {
         if revlocal_daemon::kill_switch::reap(pid) {
             reaped += 1;
         }
         // Cleared whether or not the signal landed. A pid that is already gone is
         // the common case, and leaving it recorded means reporting the same dead
         // process as an orphan on every kill from now on.
-        let _ = RunStore::new(pool).set_engine_pid(run, None).await;
+        let _ = runs.set_engine_pid(run, None).await;
     }
 
     report.action = "kill".to_owned();
@@ -160,15 +162,16 @@ pub async fn kill_hard(pool: &Pool, at: Timestamp) -> Result<ControlReport, Cont
         "{}. {reaped} engine process(es) reaped; any output they had not written \
          is lost.{}",
         report.detail.trim_end_matches('.'),
-        // §18: this control has one job and it cannot yet do all of it. Saying
-        // "0 reaped" and stopping reads as "there were none", which is the same
-        // sentence as the truth and not the same fact (RL-1521).
-        if reaped == 0 {
-            "\n  note: an engine still mid-review is not reaped — its pid is not \
-             recorded until it exits\n  try: `revlocal runs list` to see what is \
-             still in flight"
+        // §18: which of the two happened is the part somebody acts on. A review
+        // that was interrupted has lost work; a leftover process being tidied up
+        // has not, and one total cannot tell them apart.
+        if interrupted > 0 {
+            format!(
+                "\n  {interrupted} of them were mid-review, so that work is lost \
+                 and will be re-queued"
+            )
         } else {
-            ""
+            String::new()
         }
     );
     Ok(report)

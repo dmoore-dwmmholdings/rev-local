@@ -594,6 +594,33 @@ impl<'a> RunStore<'a> {
             .collect())
     }
 
+    /// Pids recorded against runs that are still in flight (RL-1528).
+    ///
+    /// The sibling of [`orphan_pids`](Self::orphan_pids), and deliberately not
+    /// merged with it. These are engines reviewing right now: killing one loses
+    /// work in progress, and reaping a leftover does not. §12.1 says a hard kill
+    /// takes a running engine's output with it, and a caller that could not tell
+    /// the two apart could not say so.
+    pub async fn active_pids(&self) -> Result<Vec<(RunId, u32)>> {
+        let rows = sqlx::query!(
+            "SELECT id, engine_pid FROM run
+             WHERE engine_pid IS NOT NULL
+               AND status IN ('preparing','reviewing','synthesizing','publishing')
+             ORDER BY id"
+        )
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                row.engine_pid
+                    .and_then(|pid| u32::try_from(pid).ok())
+                    .map(|pid| (RunId::new(row.id), pid))
+            })
+            .collect())
+    }
+
     /// Recent runs, newest first, optionally narrowed (§14's `runs list`).
     ///
     /// Joined through `change` because a run does not carry its repository — the

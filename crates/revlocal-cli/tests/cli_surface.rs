@@ -412,7 +412,10 @@ mod control {
     /// pid 1 is used deliberately — it always exists and `reap` refuses to signal
     /// it, so this exercises the clearing path without a test that could kill
     /// something on the machine running it.
-    async fn a_finished_run_with_a_pid(pool: &Pool) -> Result<revlocal_core::RunId, String> {
+    async fn a_run_with_a_pid(
+        pool: &Pool,
+        status: revlocal_core::RunStatus,
+    ) -> Result<revlocal_core::RunId, String> {
         let repo = revlocal_store::RepoStore::new(pool)
             .insert(&revlocal_core::Repo {
                 id: revlocal_core::RepoId::new(0),
@@ -457,7 +460,7 @@ mod control {
                 id: revlocal_core::RunId::new(0),
                 change_id: change.id,
                 attempt: 1,
-                status: revlocal_core::RunStatus::Done,
+                status,
                 engine: revlocal_core::EngineKind::Mock,
                 depth: revlocal_core::Depth::Summary,
                 trigger: revlocal_core::TriggerSource::Poll,
@@ -586,24 +589,72 @@ mod control {
     }
 
     #[tokio::test]
-    async fn kill_hard_does_not_claim_it_stopped_an_engine_it_cannot_reach() -> Result<(), String> {
+    async fn kill_hard_on_an_idle_install_reaps_nothing_and_claims_nothing() -> Result<(), String> {
         // It used to hardcode `reaped = 0` and report "0 engine process(es)
-        // reaped", which is the same sentence as the truth and a different fact:
-        // a pid is not recorded until the process exits, so an engine mid-review
-        // survives a hard kill (RL-1521).
+        // reaped" — the same sentence somebody reads when there genuinely was
+        // nothing to kill (RL-1521). Here there genuinely is nothing, and it must
+        // not imply otherwise in either direction.
         let (pool, _dir) = store().await?;
 
         let report = kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
 
         assert_eq!(report.processes_reaped, 0);
         assert!(
-            report.detail.contains("not reaped"),
-            "a control that cannot do its whole job says so: {}",
+            report.detail.contains("is lost"),
+            "it still says what a hard kill costs: {}",
             report.detail
         );
+        // Nothing was mid-review, so nothing claims work was interrupted.
         assert!(
-            report.detail.contains("try:"),
-            "and says what to do instead: {}",
+            !report.detail.contains("mid-review"),
+            "an empty install has no review to interrupt: {}",
+            report.detail
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn kill_hard_stops_a_review_that_is_running() -> Result<(), String> {
+        // The case the whole control exists for, and the one it could not do:
+        // `orphan_pids` returns terminal statuses only, so an engine reviewing
+        // right now was never a candidate (RL-1528).
+        let (pool, _dir) = store().await?;
+        let run = a_run_with_a_pid(&pool, revlocal_core::RunStatus::Reviewing).await?;
+
+        let report = kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        // §12.1: a hard kill takes a running engine's output with it, and saying so
+        // is the difference between tidying up and losing work.
+        assert!(
+            report.detail.contains("mid-review"),
+            "an interrupted review must be named: {}",
+            report.detail
+        );
+
+        let left = revlocal_store::RunStore::new(&pool)
+            .active_pids()
+            .await
+            .map_err(|e| e.to_string())?;
+        assert!(
+            !left.iter().any(|(id, _)| *id == run),
+            "and its pid cleared: {left:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_leftover_process_is_not_reported_as_lost_work() -> Result<(), String> {
+        // The other half of the distinction. Reaping a process that outlived its
+        // run costs nothing, and saying "that work is lost" about it would send
+        // somebody looking for a review that finished normally.
+        let (pool, _dir) = store().await?;
+        a_run_with_a_pid(&pool, revlocal_core::RunStatus::Done).await?;
+
+        let report = kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
+
+        assert!(
+            !report.detail.contains("mid-review"),
+            "a finished run's leftover is not lost work: {}",
             report.detail
         );
         Ok(())
@@ -614,7 +665,7 @@ mod control {
         // Left recorded, the same dead process is reported as an orphan on every
         // kill from then on.
         let (pool, _dir) = store().await?;
-        let run = a_finished_run_with_a_pid(&pool).await?;
+        let run = a_run_with_a_pid(&pool, revlocal_core::RunStatus::Done).await?;
 
         kill_hard(&pool, now()).await.map_err(|e| e.to_string())?;
 
