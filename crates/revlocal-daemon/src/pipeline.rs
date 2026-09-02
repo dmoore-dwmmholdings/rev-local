@@ -173,7 +173,19 @@ pub struct ReviewReport {
     /// What the engine said it could not review (§8.3, §18).
     pub coverage_notes: Option<String>,
     /// Why the review failed, when `status` is `failed`.
+    ///
+    /// One of §8.2's fixed codes — `engine_not_installed`, `engine_timeout`,
+    /// `engine_cancelled`, `engine_output_unparseable`, `engine_invalid_task`,
+    /// `engine_failed` — because this is stored and the UI groups by it.
     pub failure: Option<String>,
+    /// What the engine actually said, when it failed.
+    ///
+    /// The code is for grouping; this is for a person. `engine_failed` on its own
+    /// answers "did it work" and nothing else, and three runs on the machine this
+    /// was written for sat failed for a week with no exit code, no stderr and no
+    /// way to tell a missing binary from a bad prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_detail: Option<String>,
     /// Tokens and cost. An unmeasured cost stays absent (D10, ADR 0010).
     pub usage: Usage,
 }
@@ -248,6 +260,7 @@ fn skipped_report(
         degraded: None,
         coverage_notes: None,
         failure: None,
+        failure_detail: None,
         usage: Usage::default(),
     }
 }
@@ -492,15 +505,34 @@ fn build_report(
         degraded: None,
         coverage_notes: None,
         failure: None,
+        failure_detail: None,
         usage: Usage::default(),
+    };
+
+    // Read before the pattern below moves `outcome`.
+    //
+    // `EngineError::code()` distinguishes six reasons — a missing binary, a bad
+    // task, a timeout, a cancellation, unparseable output, and the engine running
+    // and failing. This used to hardcode the last one, so all six read as the
+    // generic failure and "codex is not installed" was indistinguishable from
+    // "the model timed out". The code is the stable key the UI groups by; the
+    // message is what tells a person what to do about it.
+    let failure = match &outcome {
+        Err(error) => (error.code().to_owned(), Some(error.to_string())),
+        // The engine succeeded and normalization produced nothing. Named rather
+        // than folded into the generic code, because a failure that says nothing
+        // is the thing this whole change is about.
+        Ok(_) => (
+            "engine_output_unparseable".to_owned(),
+            Some("the engine returned output that produced no review".to_owned()),
+        ),
     };
 
     let (Ok(engine_outcome), Some(normalized)) = (outcome, normalized) else {
         report.status = ReviewStatus::Failed;
-        // A code, not a message: §8.2's failure reasons are a fixed set the UI and
-        // the audit log both key on, and prose would be a different string every
-        // time an error's wording changed.
-        report.failure = Some("engine_failed".to_owned());
+        let (code, detail) = failure;
+        report.failure = Some(code);
+        report.failure_detail = detail;
         return report;
     };
 

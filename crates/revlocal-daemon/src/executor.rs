@@ -634,13 +634,23 @@ async fn execute_one(
         // both worth a line, and only one of them produced a review. A publish
         // that was held comes last, because it is the least serious of the three
         // and the only one that leaves a usable review behind.
-        detail: outcome
-            .report
-            .failure
-            .clone()
+        detail: failure_line(&outcome.report)
             .or_else(|| outcome.report.degraded.clone())
             .or(actions.held),
     }))
+}
+
+/// The failure as one line: the code, and what the engine actually said.
+///
+/// Both, not either. The code is what the UI groups by and what somebody greps
+/// for; the message is the only half that says what to do. Reporting the code
+/// alone is how three runs sat `engine_failed` for a week with nothing to act on.
+fn failure_line(report: &pipeline::ReviewReport) -> Option<String> {
+    let code = report.failure.as_ref()?;
+    Some(match &report.failure_detail {
+        Some(detail) => format!("{code} — {detail}"),
+        None => code.clone(),
+    })
 }
 
 /// Mark a run failed with a reason, and return the line the report shows.

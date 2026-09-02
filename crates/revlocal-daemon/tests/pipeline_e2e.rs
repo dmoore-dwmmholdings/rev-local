@@ -705,6 +705,59 @@ fn an_engine_failure_is_reported_not_panicked() {
     assert!(report.is_consistent());
 }
 
+#[test]
+fn a_failure_is_recorded_as_the_reason_it_was_not_as_the_generic_one() {
+    // `EngineError::code()` has always distinguished six reasons and the pipeline
+    // hardcoded `engine_failed` for all of them, so a missing binary, a timeout
+    // and a cancellation were one indistinguishable code. Three runs on a real
+    // install sat that way for a week with nothing to act on (RL-1508).
+    let (report, _) = with_no_network(|| {
+        review_role(
+            "clean",
+            MockBehaviour::Fail(revlocal_engine::EngineError::NotInstalled {
+                id: revlocal_engine::EngineId::Codex,
+                remediation: "install the Codex CLI".to_owned(),
+            }),
+            RepoConfig::default(),
+        )
+    })
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    assert_eq!(report.status, ReviewStatus::Failed);
+    assert_eq!(
+        report.failure.as_deref(),
+        Some("engine_not_installed"),
+        "a missing binary must not read as the engine having run and failed"
+    );
+
+    // The code groups; the message is the half somebody can act on.
+    let detail = report.failure_detail.clone().unwrap_or_default();
+    assert!(
+        detail.contains("codex"),
+        "the detail must name what is missing: {detail:?}"
+    );
+    assert!(report.is_consistent());
+}
+
+#[test]
+fn a_cancelled_run_is_not_reported_as_an_engine_that_failed() {
+    // §12.1: somebody pressing the kill switch is not a fault. Reporting it as
+    // one fills the failure list with the user's own deliberate actions.
+    let (report, _) = with_no_network(|| {
+        review_role(
+            "clean",
+            MockBehaviour::Fail(revlocal_engine::EngineError::Cancelled {
+                id: revlocal_engine::EngineId::Codex,
+            }),
+            RepoConfig::default(),
+        )
+    })
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    assert_eq!(report.failure.as_deref(), Some("engine_cancelled"));
+    assert!(report.is_consistent());
+}
+
 /// The hard constraint the whole product rests on: reviewing a repository must not
 /// change it. M4 asserts this for materialization; this asserts it for the pipeline,
 /// which is the layer that actually hands a worktree to a third-party binary.

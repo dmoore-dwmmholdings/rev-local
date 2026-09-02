@@ -192,6 +192,11 @@ pub fn render_human(report: &ReviewReport) -> String {
     }
     if let Some(failure) = &report.failure {
         out.push_str(&format!("  failed: {failure}\n"));
+        // The code names the class; this names the instance. Printing only the
+        // code told people their review failed and nothing they could act on.
+        if let Some(detail) = &report.failure_detail {
+            out.push_str(&format!("    {detail}\n"));
+        }
         return out;
     }
 
