@@ -89,15 +89,37 @@ the dashboard; it then checks every enabled repository once a minute, reviews wh
 it finds, and delivers whatever is ready to go — no button presses.
 
 The panel says what the last pass did in one sentence, and lists anything that did
-*not* happen and why. Two things it will tell you about, because they are the two
-that quietly stop findings reaching a tracker:
+*not* happen and why.
 
-- **A repository with no Andare project.** Set it under *Where findings go* on the
-  repository screen. Until it is set, nothing reaches Andare — though the local
-  report below still gets written.
-- **A mode that cannot file.** Filing an issue is high risk (§12.3), so every mode
-  below `auto` holds every issue for your approval. `auto_low_ask_high` will ask
-  about all of them. Choose `auto` on the dashboard for a hands-off loop.
+### It only reviews while it is running
+
+There is no background service (§4.2): the daemon runs inside the app, so a
+machine that reboots stops reviewing until somebody opens it again. **Settings →
+Starting up → "Start rev-local when I log in"** arranges that. It is off until you
+ask for it, and the switch reads the filesystem rather than a remembered
+preference — a login item's failure mode is silently not being there.
+
+### What goes where
+
+| Output | Configuration needed | Waits for approval? |
+|---|---|---|
+| Local report | none | **no** |
+| Andare issue | the project key | under every mode except `auto` |
+| GitHub issue | a recognisable GitHub `remote_url` | under every mode except `auto` |
+
+Filing into somebody else's system is high risk (§12.3), so `auto_low_ask_high` —
+the default — holds every tracker issue for you. Choose `auto` on the dashboard if
+you want those filed unattended too.
+
+A **local report is not** high risk: it is a file on your own disk, which nobody
+else sees and you can delete. It is written under every mode, which is what makes
+it the output that works with nothing set up.
+
+The GitHub remote is read from the repository itself when it is added, and
+backfilled on the next pass for repositories added before that. A remote on a host
+that is not recognisably GitHub is refused rather than guessed at — every forge
+uses the same URL shapes, and a wrong guess files your findings against whatever
+`owner/name` exists on github.com.
 
 ### Local reports
 
@@ -115,6 +137,37 @@ the same problem rewrites one file rather than accumulating duplicates. Drop
 
 `revlocal watch` runs the identical pass from a terminal and writes the same local
 reports; `revlocal publish` is what delivers to a tracker there.
+
+### What it reviews
+
+`review_commits` and `review_prs` decide which kinds of change are eligible. Both
+default to on: a watched local repository may never have a pull request, and one
+that reviewed neither would review nothing at all. A commit already inside an open
+pull request is still only reviewed once.
+
+Turning one off is honoured, and a change skipped for it says so:
+
+```
+skipped: review_commits is off for this repository
+```
+
+### Stopping, and starting again
+
+The kill switch — on every screen and in the tray — pauses in the database *and*
+cancels whatever is running, so an engine mid-review is terminated rather than
+left to finish. Releasing it is the **Resume** button on the paused banner.
+Anything that was already told to stop stays stopped; resuming is for new work.
+
+### Housekeeping it does on its own
+
+- **Approvals expire.** An action nobody answered within `approval_ttl_hours` (72)
+  is rejected with the reason `expired`, which is deliberately not the same as
+  somebody declining it. Set it to `0` to wait indefinitely.
+- **Old runs are cleared.** Finished runs and their transcripts past
+  `transcript_retention_days` (30) are removed, at most once a day. `0` keeps
+  everything.
+- **A repository whose checkout has gone** is reported by name and costs nothing:
+  no discovery, no queueing, and no engine. The other repositories are unaffected.
 
 ## Reviewing a change
 
