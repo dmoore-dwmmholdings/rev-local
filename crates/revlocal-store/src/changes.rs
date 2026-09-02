@@ -250,10 +250,10 @@ impl<'a> RunStore<'a> {
         let id = sqlx::query!(
             "INSERT INTO run
                (change_id, attempt, status, engine, depth, trigger, skip_reason, error,
-                degraded, tokens_in, tokens_out, tokens_known, cost_usd, started_at, finished_at,
-                transcript_path, created_at, truncated, omitted_files_json, verdict,
-                summary)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                error_detail, degraded, tokens_in, tokens_out, tokens_known, cost_usd,
+                started_at, finished_at, transcript_path, created_at, truncated,
+                omitted_files_json, verdict, summary)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
             change_id,
             attempt,
@@ -263,6 +263,7 @@ impl<'a> RunStore<'a> {
             trigger,
             run.skip_reason,
             run.error,
+            run.error_detail,
             run.degraded,
             tokens_in,
             tokens_out,
@@ -299,7 +300,8 @@ impl<'a> RunStore<'a> {
         let raw = id.get();
         let row = sqlx::query!(
             "SELECT id, change_id, attempt, status, engine, depth, trigger, skip_reason,
-                    error, degraded, tokens_in, tokens_out, tokens_known, cost_usd, started_at,
+                    error, error_detail, degraded, tokens_in, tokens_out, tokens_known,
+                    cost_usd, started_at,
                     finished_at, transcript_path, created_at, truncated,
                     omitted_files_json, verdict, summary
              FROM run WHERE id = ?",
@@ -322,6 +324,7 @@ impl<'a> RunStore<'a> {
             trigger: parse_enum::<TriggerSource>("run.trigger", &row.trigger)?,
             skip_reason: row.skip_reason,
             error: row.error,
+            error_detail: row.error_detail,
             degraded: row.degraded,
             usage: Usage {
                 tokens_in: u64::try_from(row.tokens_in).unwrap_or_default(),
@@ -498,6 +501,7 @@ impl<'a> RunStore<'a> {
         let summary = run.summary.as_deref();
         let degraded = run.degraded.as_deref();
         let error = run.error.as_deref();
+        let error_detail = run.error_detail.as_deref();
         let transcript = run.transcript_path.as_deref();
         let started = run.started_at.map(format_time);
         let finished = run.finished_at.map(format_time);
@@ -506,7 +510,7 @@ impl<'a> RunStore<'a> {
             "UPDATE run
                 SET tokens_in = ?, tokens_out = ?, tokens_known = ?, cost_usd = ?,
                     truncated = ?, omitted_files_json = ?, verdict = ?, summary = ?,
-                    degraded = ?, error = ?, transcript_path = ?,
+                    degraded = ?, error = ?, error_detail = ?, transcript_path = ?,
                     started_at = ?, finished_at = ?
               WHERE id = ?",
             tokens_in,
@@ -519,6 +523,7 @@ impl<'a> RunStore<'a> {
             summary,
             degraded,
             error,
+            error_detail,
             transcript,
             started,
             finished,
@@ -527,6 +532,16 @@ impl<'a> RunStore<'a> {
         .execute(self.pool)
         .await?;
 
+        Ok(())
+    }
+
+    /// Attach a retained engine transcript before a terminal status is recorded.
+    pub async fn set_transcript_path(&self, id: RunId, path: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE run SET transcript_path = ? WHERE id = ?")
+            .bind(path)
+            .bind(id.get())
+            .execute(self.pool)
+            .await?;
         Ok(())
     }
 

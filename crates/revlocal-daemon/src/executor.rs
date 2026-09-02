@@ -137,6 +137,7 @@ pub async fn enqueue(
                 trigger: TriggerSource::Poll,
                 skip_reason: None,
                 error: None,
+                error_detail: None,
                 degraded: None,
                 usage: Usage::default(),
                 started_at: None,
@@ -205,6 +206,7 @@ pub async fn enqueue_manual(
         trigger: TriggerSource::Manual,
         skip_reason: None,
         error: None,
+        error_detail: None,
         degraded: None,
         usage: Usage::default(),
         started_at: None,
@@ -582,6 +584,9 @@ async fn execute_one(
     // only reason it is not still here.
     let mut finished = run.clone();
     finished.error = outcome.report.failure.clone();
+    // The code groups; this is the half a person acts on (RL-1512). Stored on the
+    // run rather than only reported, so a failure is still explicable tomorrow.
+    finished.error_detail = outcome.report.failure_detail.clone();
     finished.skip_reason = outcome.report.skip_reason.clone();
     finished.usage = outcome.report.usage;
     finished.verdict = outcome

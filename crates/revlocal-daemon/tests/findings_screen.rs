@@ -43,7 +43,12 @@ async fn seeded(
             engine: EngineKind::Mock,
             autonomy,
             enabled: true,
-            config_json: "{}".to_owned(),
+            // Andare needs a project to file into, and a repository that files
+            // without naming one is a configuration error rather than a review
+            // failure — `a_repository_with_no_andare_project_still_completes_its_review`
+            // covers that case. These tests are about the gate, so they configure
+            // the repository the way a real one filing issues has to be.
+            config_json: r#"{"andare_project": "ENG"}"#.to_owned(),
             created_at: at(0),
             updated_at: at(0),
         })
@@ -79,6 +84,7 @@ async fn seeded(
             trigger: TriggerSource::Manual,
             skip_reason: None,
             error: None,
+            error_detail: None,
             degraded: None,
             usage: Usage::default(),
             started_at: Some(at(2)),

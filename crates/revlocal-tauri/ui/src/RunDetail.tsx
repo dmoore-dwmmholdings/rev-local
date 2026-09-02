@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AnchoredFinding, RunView, TargetLine } from './ipc';
+import { ago, exactly, toneOf, type AnchoredFinding, type RunView, type TargetLine } from './ipc';
 
 /** Bytes, in a form somebody can judge "is this worth expanding" from. */
 function humanBytes(n: number): string {
@@ -140,6 +140,53 @@ function Targets({
 }
 
 /** §15 screen 3. */
+/**
+ * What the review concluded, above the timings and the transcript.
+ *
+ * The distinction this exists to keep: a run with no summary is not necessarily
+ * a run still working. It may have failed, been skipped, or been cancelled, and
+ * telling somebody looking at a cancelled run that "the engine is still working"
+ * is the kind of confidently wrong sentence that costs an hour.
+ */
+function Conclusion({ run }: { run: RunView }) {
+  if (run.error) {
+    return (
+      <div className="caveats" role="alert">
+        <strong>This review did not finish.</strong>
+        {/* The code first, because it is what groups this run with others like
+            it, then what the engine actually said — which is the only half that
+            says what to do. Showing the code alone left three runs unexplained
+            for a week. */}
+        <p className="mono">{run.error}</p>
+        {run.error_detail && <p>{run.error_detail}</p>}
+      </div>
+    );
+  }
+
+  if (run.summary) {
+    return (
+      <section className="run-summary">
+        <h3>summary</h3>
+        <p>{run.summary}</p>
+      </section>
+    );
+  }
+
+  const working = ['queued', 'preparing', 'reviewing', 'synthesizing', 'publishing'].includes(
+    run.status,
+  );
+
+  return (
+    <p className="dim">
+      {working
+        ? run.status === 'queued'
+          ? 'Queued. This screen updates as each stage completes — no refresh needed.'
+          : 'Running. This screen updates as each stage completes — no refresh needed.'
+        : `This run ended as ${run.status} and recorded no summary.`}
+    </p>
+  );
+}
+
 export function RunDetail({
   run,
   transcript,
@@ -161,7 +208,7 @@ export function RunDetail({
         <h2>
           run #{run.run_id} · {run.change}
         </h2>
-        <span className="tag">{run.status}</span>
+        <span className={`tag run-${toneOf(run.status)}`}>{run.status}</span>
         {run.verdict && <span className="tag">{run.verdict}</span>}
         <span className="spacer" />
         <span className="dim">
@@ -172,11 +219,17 @@ export function RunDetail({
 
       <Caveats run={run} />
 
+      <Conclusion run={run} />
+
       <dl className="card-facts">
         <dt>started</dt>
-        <dd>{run.stages.started_at ?? 'not recorded'}</dd>
+        <dd title={exactly(run.stages.started_at)}>
+          {run.stages.started_at ? ago(run.stages.started_at) : 'not recorded'}
+        </dd>
         <dt>finished</dt>
-        <dd>{run.stages.finished_at ?? 'still running'}</dd>
+        <dd title={exactly(run.stages.finished_at)}>
+          {run.stages.finished_at ? ago(run.stages.finished_at) : 'still running'}
+        </dd>
         <dt>elapsed</dt>
         <dd>{run.stages.elapsed_secs !== undefined ? `${run.stages.elapsed_secs}s` : '—'}</dd>
       </dl>
@@ -198,7 +251,7 @@ export function RunDetail({
       <h3>publishing</h3>
       <Targets targets={run.targets} onRetry={onRetry} />
 
-      <h3>transcript</h3>
+      <h3>engine transcript</h3>
       {/* Collapsed by default AND not fetched until expanded. The second is what
           matters: a megabyte already in the payload is a megabyte the screen
           waited for, whatever the DOM does with it afterwards. */}
@@ -209,12 +262,18 @@ export function RunDetail({
             onExpandTranscript();
           }}
         >
-          show transcript ({humanBytes(run.transcript_bytes)})
+          {run.transcript_bytes === 0
+            ? 'show transcript (nothing written yet)'
+            : `show transcript (${humanBytes(run.transcript_bytes)})`}
         </button>
       ) : (
         <>
           <button onClick={() => setShowTranscript(false)}>hide transcript</button>
-          <pre className="transcript">{transcript ?? 'Loading the transcript…'}</pre>
+          <pre className="transcript">
+            {transcript === null
+              ? 'Loading the transcript…'
+              : transcript || 'The engine has not written anything yet.'}
+          </pre>
         </>
       )}
     </section>

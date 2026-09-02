@@ -80,6 +80,7 @@ fn a_run() -> Run {
         trigger: TriggerSource::Poll,
         skip_reason: None,
         error: None,
+        error_detail: None,
         usage: Usage {
             tokens_in: 1_000,
             tokens_out: 250,

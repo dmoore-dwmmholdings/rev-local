@@ -81,6 +81,7 @@ mod changes {
             trigger: TriggerSource::Poll,
             skip_reason: None,
             error: None,
+            error_detail: None,
             degraded: None,
             usage: Usage {
                 tokens_in: 100,

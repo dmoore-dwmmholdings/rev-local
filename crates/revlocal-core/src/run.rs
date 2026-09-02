@@ -28,7 +28,17 @@ pub struct Run {
     /// says why.
     pub skip_reason: Option<String>,
     /// Why the run failed. Set exactly when `status` is [`RunStatus::Failed`].
+    ///
+    /// One of §8.2's fixed codes, because this is what the UI groups by and what
+    /// people grep for. What it is *not* is something a person can act on — see
+    /// [`Run::error_detail`].
     pub error: Option<String>,
+    /// What the engine actually said, alongside the code.
+    ///
+    /// Which binary was missing, what it printed, which timeout elapsed. Stored
+    /// separately rather than folded into `error` so the code stays a stable key:
+    /// prose in that column would make every distinct message its own group.
+    pub error_detail: Option<String>,
     /// Token and cost accounting.
     pub usage: Usage,
     /// When the engine process started.

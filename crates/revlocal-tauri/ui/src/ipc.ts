@@ -344,6 +344,8 @@ export type RunView = {
   verdict?: string;
   summary?: string;
   error?: string;
+  /** What the engine said, beside the code `error` carries (RL-1512). */
+  error_detail?: string;
   degraded?: string;
   tokens: number;
   tokens_known: boolean;

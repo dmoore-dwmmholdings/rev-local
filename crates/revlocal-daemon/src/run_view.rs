@@ -124,6 +124,19 @@ pub struct RunView {
     /// Its verdict, if it reached one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
+    /// The engine's concise review conclusion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Why the review failed, if it did — one of §8.2's codes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// What the engine actually said about it (RL-1512).
+    ///
+    /// Beside the code rather than instead of it: the code is what somebody
+    /// greps for and what groups a run with others like it, and the message is
+    /// the only half that says what to do about this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<String>,
     /// Why its output was salvaged rather than parsed cleanly (§8.2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degraded: Option<String>,
@@ -243,6 +256,9 @@ pub async fn gather(pool: &Pool, run_id: RunId) -> Result<RunView, RunViewError>
         engine: run.engine.as_str().to_owned(),
         depth: run.depth.as_str().to_owned(),
         verdict: run.verdict.map(|v| v.as_str().to_owned()),
+        summary: run.summary.clone(),
+        error: run.error.clone(),
+        error_detail: run.error_detail.clone(),
         degraded: run.degraded.clone(),
         tokens: run.usage.total_tokens(),
         tokens_known: run.usage.tokens_are_known(),

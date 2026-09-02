@@ -113,6 +113,7 @@ mod state_machine {
             trigger: TriggerSource::Poll,
             skip_reason: None,
             error: None,
+            error_detail: None,
             degraded: None,
             usage: Usage::default(),
             started_at: None,

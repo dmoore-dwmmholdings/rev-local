@@ -158,3 +158,42 @@ describe('run detail', () => {
     expect(screen.getByText(/ran and reported nothing/)).toBeDefined();
   });
 });
+
+describe('a run that failed', () => {
+  it('shows what the engine said, not only the code it was grouped under', () => {
+    // Three runs on a real install sat `engine_failed` for a week with nothing
+    // else stored. The code says which kind of failure; only the message says
+    // what to do about this one (RL-1512).
+    render(
+      <RunDetail
+        run={run({
+          status: 'failed',
+          error: 'engine_not_installed',
+          error_detail: '`codex` is not installed',
+        })}
+        transcript={null}
+        onExpandTranscript={noop}
+        onRetry={noop}
+      />,
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/engine_not_installed/);
+    expect(alert.textContent).toMatch(/`codex` is not installed/);
+  });
+
+  it('still says the run failed when no message was recorded', () => {
+    // Every run written before the column existed. An absent message must not
+    // make a failed run render as though it had no error at all.
+    render(
+      <RunDetail
+        run={run({ status: 'failed', error: 'engine_failed' })}
+        transcript={null}
+        onExpandTranscript={noop}
+        onRetry={noop}
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toMatch(/did not finish/);
+  });
+});

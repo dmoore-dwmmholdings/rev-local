@@ -499,6 +499,7 @@ mod skip_rules {
                 trigger: revlocal_core::TriggerSource::Poll,
                 skip_reason: Some(skip.to_skip_reason()),
                 error: None,
+                error_detail: None,
                 degraded: None,
                 usage: revlocal_core::Usage::default(),
                 started_at: None,

@@ -2125,6 +2125,7 @@ mod decisions {
                 trigger: revlocal_core::TriggerSource::Manual,
                 skip_reason: None,
                 error: error.map(str::to_owned),
+                error_detail: None,
                 usage: usage.unwrap_or_default(),
                 started_at: None,
                 finished_at: None,

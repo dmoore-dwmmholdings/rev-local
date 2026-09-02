@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE run\n                SET tokens_in = ?, tokens_out = ?, tokens_known = ?, cost_usd = ?,\n                    truncated = ?, omitted_files_json = ?, verdict = ?, summary = ?,\n                    degraded = ?, error = ?, error_detail = ?, transcript_path = ?,\n                    started_at = ?, finished_at = ?\n              WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 15
+    },
+    "nullable": []
+  },
+  "hash": "c30535b6e76122c7914c2984557f2e266c269d8d5a9fac33bb0f7263333d6124"
+}

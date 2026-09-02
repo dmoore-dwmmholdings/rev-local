@@ -528,6 +528,7 @@ async fn record(
             trigger: TriggerSource::Poll,
             skip_reason: Some(skip.detail.clone()),
             error: None,
+            error_detail: None,
             degraded: None,
             usage: revlocal_core::Usage::default(),
             started_at: None,

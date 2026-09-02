@@ -1,0 +1,12 @@
+-- RL-1512: `run.error` is a code, and a code alone cannot be acted on.
+--
+-- §8.2's failure reasons are a fixed set the UI groups by and people grep for, so
+-- `run.error` stays exactly that. What was missing is the other half: which binary
+-- was not found, what the engine actually printed, which timeout elapsed. Three
+-- runs on a real install sat `engine_failed` for a week with nothing else stored,
+-- and the message existed at the moment of failure.
+--
+-- Nullable with no default, because "nothing was recorded" is the honest reading
+-- of every row written before this column existed. An empty string would assert
+-- that the engine said nothing, which nobody checked.
+ALTER TABLE run ADD COLUMN error_detail TEXT;

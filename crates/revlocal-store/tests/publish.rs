@@ -73,6 +73,7 @@ mod publish {
                 trigger: TriggerSource::Manual,
                 skip_reason: None,
                 error: None,
+                error_detail: None,
                 degraded: None,
                 usage: Usage::default(),
                 started_at: Some(at(2)),

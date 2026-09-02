@@ -95,6 +95,7 @@ async fn seeded() -> Result<(TempDir, Pool, RunId), Box<dyn std::error::Error>> 
             trigger: TriggerSource::Manual,
             skip_reason: None,
             error: None,
+            error_detail: None,
             degraded: None,
             usage: Usage::default(),
             started_at: Some(at(2)),
