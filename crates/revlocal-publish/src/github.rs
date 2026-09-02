@@ -391,9 +391,15 @@ pub trait GitHubWriter: Send + Sync {
     async fn create_review(&self, payload: &ReviewPayload) -> Result<ExistingReview, PublishError>;
 
     /// Replace an existing review's body.
+    ///
+    /// `pr` as well as `review_id`, because GitHub's endpoint is
+    /// `/repos/{repo}/pulls/{pr}/reviews/{review_id}` — a review id alone does not
+    /// address anything. The port was missing it, which no implementation noticed
+    /// while the only implementation was a fake that ignored the URL (RL-1511).
     async fn update_review(
         &self,
         repo: &str,
+        pr: u64,
         review_id: u64,
         body: &str,
     ) -> Result<ExistingReview, PublishError>;
@@ -447,7 +453,7 @@ impl<W: GitHubWriter> PublishTarget for GitHubTarget<W> {
         let review = match existing {
             Some(found) => {
                 self.writer
-                    .update_review(&payload.repo, found.id, &payload.body)
+                    .update_review(&payload.repo, payload.pr, found.id, &payload.body)
                     .await?
             }
             None => self.writer.create_review(&payload).await?,

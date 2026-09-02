@@ -8,6 +8,7 @@
 
 pub mod andare;
 pub mod check;
+pub mod gh;
 pub mod github;
 pub mod local;
 pub mod queue;
@@ -27,6 +28,7 @@ pub use check::{
     conclusion_for, gh_commit_comment, gh_set_check, unresolved_check, CheckPayload, CheckStatus,
     CHECK_NAME,
 };
+pub use gh::{classify as classify_gh_error, GhCli, GhWriter, DEFAULT_PROGRAM as GH_PROGRAM};
 pub use github::{
     compose, event_for, idempotency_key, DiffAnchors, ExistingReview, GitHubTarget, GitHubWriter,
     InlineComment, ReviewDraft, ReviewEvent, ReviewOptions, ReviewPayload,

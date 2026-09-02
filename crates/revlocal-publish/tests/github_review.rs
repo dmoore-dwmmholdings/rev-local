@@ -343,6 +343,7 @@ impl GitHubWriter for FakeGitHub {
     async fn update_review(
         &self,
         repo: &str,
+        _pr: u64,
         review_id: u64,
         body: &str,
     ) -> Result<ExistingReview, PublishError> {
