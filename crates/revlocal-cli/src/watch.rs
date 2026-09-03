@@ -97,11 +97,19 @@ impl WatchReport {
         if let Some(idle) = &self.idle {
             return format!("{idle}\n");
         }
-        if self.passes.is_empty() {
-            return format!("{} repository/ies, nothing due this tick\n", self.repos);
-        }
-
         let mut out = String::new();
+        // A line rather than the whole report. Returning here skipped the held
+        // and reviewed sections below, so a tick where no repository was due for
+        // discovery said "nothing due" over the top of runs that were held and
+        // the reason they were held — which `held` exists to prevent (§18,
+        // RL-1545). The live case is a checkout that has been deleted: the
+        // diagnosis and its remedy went to `--json` and nowhere else.
+        if self.passes.is_empty() {
+            out.push_str(&format!(
+                "{} repository/ies, nothing due this tick\n",
+                self.repos
+            ));
+        }
         for pass in &self.passes {
             match &pass.error {
                 Some(error) => out.push_str(&format!("  {} — FAILED: {error}\n", pass.repo)),

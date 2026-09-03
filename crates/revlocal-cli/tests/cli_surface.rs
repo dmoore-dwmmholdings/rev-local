@@ -1457,8 +1457,48 @@ mod runs_and_findings {
 // --- watch (RL-1201, §4.2, §7) ---------------------------------------------
 
 mod watch_loop {
-    use revlocal_cli::watch::{render, tick};
+    use revlocal_cli::watch::{render, tick, WatchReport};
     use revlocal_store::Pool;
+
+    #[test]
+    fn a_tick_with_nothing_due_still_says_what_was_held() {
+        // RL-1545. `render_human` returned early when no repository ran a
+        // discovery pass, and that return skipped the held and reviewed sections
+        // below it. A tick where nothing was due printed "nothing due this tick"
+        // over the top of runs that were held and the reason they were held —
+        // which is the one thing `held` exists to prevent (§18).
+        //
+        // Found on a replica of the live install: two repositories whose
+        // checkouts had been deleted, 44 runs held against them, and a human
+        // output that said nothing happened while `--json` carried the diagnosis
+        // and its remedy.
+        let report = WatchReport {
+            repos: 1,
+            passes: Vec::new(),
+            idle: None,
+            paused: false,
+            queued: 0,
+            reviewed: vec![revlocal_daemon::executor::RunOutcome {
+                run_id: 7,
+                repo: "acme".to_owned(),
+                change: "e15ff26920b8".to_owned(),
+                status: "done".to_owned(),
+                engine: "mock".to_owned(),
+                verdict: Some("comment".to_owned()),
+                findings: 1,
+                actions: 2,
+                detail: None,
+            }],
+            held: vec!["acme: the checkout is gone\n  try: put it back".to_owned()],
+        };
+
+        let human = report.render_human();
+        assert!(human.contains("nothing due this tick"), "{human}");
+        // The two sections the early return used to skip.
+        assert!(human.contains("the checkout is gone"), "{human}");
+        assert!(human.contains("try: put it back"), "{human}");
+        assert!(human.contains("reviewed acme"), "{human}");
+    }
 
     async fn store() -> Result<(Pool, tempfile::TempDir), String> {
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
