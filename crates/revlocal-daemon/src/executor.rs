@@ -250,7 +250,16 @@ pub async fn execute_run(
 
     let run = RunStore::new(pool).get(run_id).await.map_err(boxed)?;
 
-    execute_one(pool, config, sink, data_dir, &run, at, cancel).await
+    // One run by id, for the desktop's "review this now". The three-way `Attempt`
+    // exists so `drain` can tell a refusal from a failure when counting slots; a
+    // caller reviewing exactly one thing does not care which it was, only whether
+    // it produced a review.
+    Ok(
+        match execute_one(pool, config, sink, data_dir, &run, at, cancel).await? {
+            Attempt::Ran(outcome) => Ok(*outcome),
+            Attempt::Failed(reason) | Attempt::Held(reason) => Err(reason),
+        },
+    )
 }
 
 /// What happened to one run.
@@ -362,12 +371,15 @@ pub async fn drain(
             break;
         }
 
-        match execute_one(pool, config, sink, data_dir, run, at, cancel).await? {
-            Ok(outcome) => {
-                report.finished.push(outcome);
-                started += 1;
-            }
-            Err(held) => report.held.push(held),
+        let attempt = execute_one(pool, config, sink, data_dir, run, at, cancel).await?;
+        if attempt.used_a_slot() {
+            started += 1;
+        }
+        match attempt {
+            // A failure is still reported — the run row carries the reason, and
+            // the report line is what somebody watching a tick sees.
+            Attempt::Ran(outcome) => report.finished.push(*outcome),
+            Attempt::Failed(reason) | Attempt::Held(reason) => report.held.push(reason),
         }
     }
 
@@ -446,6 +458,36 @@ fn group_held(held: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// What one attempt at a queued run did.
+///
+/// Three cases, not two, because the difference between the second and the third
+/// decides whether a concurrency slot was used.
+///
+/// RL-1534 changed `drain`'s limit to count runs that *started* rather than runs
+/// considered, so a run refused before any work stopped occupying a slot it never
+/// used. Right — but `execute_one` reported a refusal and a failure the same way,
+/// so failures stopped counting too. A run can fail after materialising a
+/// worktree and invoking an engine; forty-three of those in one tick is
+/// forty-three model calls under a limit of two (RL-1538).
+///
+/// The line is not success versus failure. It is whether a slot's worth of work
+/// happened.
+enum Attempt {
+    /// The review ran to a conclusion.
+    Ran(Box<RunOutcome>),
+    /// Work was done and it failed. The run row carries the reason.
+    Failed(String),
+    /// Refused before doing anything. Costs a database read and no more.
+    Held(String),
+}
+
+impl Attempt {
+    /// Whether this used a concurrency slot.
+    const fn used_a_slot(&self) -> bool {
+        matches!(self, Self::Ran(_) | Self::Failed(_))
+    }
+}
+
 /// Run one queued review, or say why it was held.
 ///
 /// The nested `Result` is deliberate: the outer one is "the executor broke", the
@@ -460,7 +502,7 @@ async fn execute_one(
     run: &Run,
     at: Timestamp,
     cancel: &CancellationToken,
-) -> Result<Result<RunOutcome, String>, ExecutorError> {
+) -> Result<Attempt, ExecutorError> {
     let change = ChangeStore::new(pool)
         .get(run.change_id)
         .await
@@ -472,14 +514,14 @@ async fn execute_one(
         .into_iter()
         .find(|r| r.id == change.repo_id)
     else {
-        return Ok(Err(format!(
+        return Ok(Attempt::Held(format!(
             "run #{}: its repository has been removed",
             run.id.get()
         )));
     };
 
     if !repo.enabled {
-        return Ok(Err(format!(
+        return Ok(Attempt::Held(format!(
             "run #{}: {} is disabled",
             run.id.get(),
             repo.name
@@ -496,7 +538,7 @@ async fn execute_one(
     // function — the loop, the desktop's queue button, `revlocal watch` — and a
     // guard in one caller is a guard the other two do not have.
     if !crate::repos::checkout_is_present(&repo) {
-        return Ok(Err(format!(
+        return Ok(Attempt::Held(format!(
             "run #{}: {}",
             run.id.get(),
             crate::repos::checkout_missing_detail(&repo)
@@ -511,7 +553,7 @@ async fn execute_one(
         .map_err(boxed)?;
     let verdict = budgets::check(spent.as_ref(), &config.budgets);
     if let Some(reason) = verdict.reason() {
-        return Ok(Err(format!("run #{}: {reason}", run.id.get())));
+        return Ok(Attempt::Held(format!("run #{}: {reason}", run.id.get())));
     }
 
     let engine = engines::for_kind(repo.engine, config)
@@ -537,18 +579,20 @@ async fn execute_one(
     ) {
         Ok(dir) => dir,
         Err(error) => {
-            return Ok(Err(fail(
-                pool,
-                sink,
-                run.id,
-                RunStatus::Preparing,
-                &format!(
-                    "could not create a scratch directory under {}: {error}",
-                    data_dir.display()
-                ),
-                None,
-            )
-            .await?));
+            return Ok(Attempt::Failed(
+                fail(
+                    pool,
+                    sink,
+                    run.id,
+                    RunStatus::Preparing,
+                    &format!(
+                        "could not create a scratch directory under {}: {error}",
+                        data_dir.display()
+                    ),
+                    None,
+                )
+                .await?,
+            ));
         }
     };
 
@@ -556,15 +600,9 @@ async fn execute_one(
         Ok(context) => context,
         Err(detail) => {
             scratch.mark_failed();
-            return Ok(Err(fail(
-                pool,
-                sink,
-                run.id,
-                RunStatus::Preparing,
-                &detail,
-                None,
-            )
-            .await?));
+            return Ok(Attempt::Failed(
+                fail(pool, sink, run.id, RunStatus::Preparing, &detail, None).await?,
+            ));
         }
     };
 
@@ -670,15 +708,17 @@ async fn execute_one(
         Ok(outcome) => outcome,
         Err(error) => {
             scratch.mark_failed();
-            return Ok(Err(fail(
-                pool,
-                sink,
-                run.id,
-                RunStatus::Reviewing,
-                &error.to_string(),
-                transcript.as_deref(),
-            )
-            .await?));
+            return Ok(Attempt::Failed(
+                fail(
+                    pool,
+                    sink,
+                    run.id,
+                    RunStatus::Reviewing,
+                    &error.to_string(),
+                    transcript.as_deref(),
+                )
+                .await?,
+            ));
         }
     };
     scratch.mark_succeeded();
@@ -774,7 +814,7 @@ async fn execute_one(
         .await
         .map_err(boxed)?;
 
-    Ok(Ok(RunOutcome {
+    Ok(Attempt::Ran(Box::new(RunOutcome {
         run_id: run.id.get(),
         repo: repo.name.clone(),
         change: change.external_id.clone(),
@@ -792,7 +832,7 @@ async fn execute_one(
             // Every held reason, not the first. Two targets can each be missing
             // something different, and showing one would hide the other.
             .or_else(|| (!actions.held.is_empty()).then(|| actions.held.join("\n"))),
-    }))
+    })))
 }
 
 /// The failure as one line: the code, and what the engine actually said.

@@ -1163,3 +1163,68 @@ fn a_reason_in_another_shape_is_not_mangled() {
 
     assert_eq!(grouped, ["something else entirely"]);
 }
+
+/// A failure is work; a hold is not.
+#[tokio::test]
+async fn a_failing_run_uses_a_slot_and_a_held_one_does_not() {
+    // RL-1534 changed the limit to count runs that *started*, so a held run would
+    // stop occupying a slot it never used. But `execute_one` reported a refusal
+    // and a failure identically, so failures stopped counting too — and a run can
+    // fail after materialising a worktree and invoking an engine. Forty-three of
+    // those in one tick is forty-three model calls under a limit of two
+    // (RL-1538).
+    let fixture = discovered(AutonomyMode::Auto).await.expect("fixture");
+
+    // Three changes whose commits do not exist, so each fails during
+    // materialisation — after real work, unlike a hold.
+    for n in 0..3 {
+        let change = ChangeStore::new(&fixture.pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id: fixture.repo.id,
+                kind: ChangeKind::Commit,
+                external_id: format!("missing-{n}"),
+                title: None,
+                author_name: None,
+                author_email: None,
+                authored_at: None,
+                branch: Some("main".to_owned()),
+                base_ref: None,
+                head_ref: None,
+                url: None,
+                diff_stat: DiffStat::default(),
+                detected_at: at(1),
+            })
+            .await
+            .expect("change");
+        executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(1))
+            .await
+            .expect("enqueue");
+    }
+
+    let mut config = config(AutonomyMode::Auto);
+    config.global.max_concurrent_runs = 1;
+
+    executor::drain(
+        &fixture.pool,
+        &config,
+        &NullSink,
+        &fixture.data_dir(),
+        1,
+        at(2),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    let failed = RunStore::new(&fixture.pool)
+        .list_recent(None, Some(revlocal_core::RunStatus::Failed), 50)
+        .await
+        .expect("runs")
+        .len();
+
+    assert_eq!(
+        failed, 1,
+        "one slot, one attempt — a failure is work and must be bounded like any          other, not run to exhaustion in a single tick"
+    );
+}
