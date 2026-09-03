@@ -311,21 +311,22 @@ pub async fn tick(
         report.stopped = Some(crate::scheduler::Idle::Killed.summary_line());
         return Ok(report);
     }
-    // Not `stopped`: an install with no repositories yet is somebody halfway
-    // through setting up, not a system that has been halted. A pass where every
-    // repository has vanished is not halted either.
+    // There is deliberately no early return for "no reachable repository". There
+    // used to be, and it skipped everything below — including `dispatch_pending`,
+    // whose own comment promises an action left `pending` by an earlier tick is
+    // still owed delivery "even if this tick reviewed nothing" (RL-1547).
     //
-    // The missing ones are reported here, because this returns before the drain
-    // that would otherwise report them — and a pass where *every* repository has
-    // gone must not fall silent about all of them.
-    if repos.is_empty() {
-        for repo in &missing {
-            report
-                .notes
-                .push(crate::repos::checkout_missing_detail(repo));
-        }
-        return Ok(report);
-    }
+    // The trigger is not exotic: an external drive, a network share, a checkout
+    // being moved. If every enabled repository sat on it, findings a human had
+    // already approved stopped going out, approvals stopped ageing, retention
+    // stopped, and a run stuck mid-stage stayed stuck — all reported as nothing
+    // but "the checkout is gone".
+    //
+    // Nothing below needs a reachable checkout to be correct. Discovery and the
+    // enqueue loop iterate `repos` and so do nothing when it is empty; the drain
+    // holds what it cannot run and says why, which is how the missing ones get
+    // reported at all. Deleting the special case is the fix, rather than adding
+    // a second one.
 
     // First: a run left mid-stage by a crash holds a concurrency slot, so the
     // drain below would never get one.

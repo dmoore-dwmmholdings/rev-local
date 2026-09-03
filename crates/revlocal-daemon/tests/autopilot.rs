@@ -749,6 +749,122 @@ async fn an_action_awaiting_approval(
         .id)
 }
 
+// --- a tick is more than its repositories (RL-1547) -------------------------
+
+#[tokio::test]
+async fn work_already_approved_is_delivered_even_with_no_reachable_checkout(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // RL-1547. `tick` returned early when no enabled repository had a reachable
+    // checkout, and that return skipped `dispatch_pending` — whose own comment
+    // promises an action left `pending` by an earlier tick is still owed delivery
+    // "even if this tick reviewed nothing" — along with approval expiry,
+    // retention and crash recovery.
+    //
+    // The trigger is an unmounted drive or a checkout being moved, not anything
+    // exotic. Findings a human approved days ago stopped going out, and the only
+    // thing said about it was "the checkout is gone".
+    let fixture = install().await?;
+
+    let change = revlocal_store::ChangeStore::new(&fixture.pool)
+        .upsert(&revlocal_core::Change {
+            id: revlocal_core::ChangeId::new(0),
+            repo_id: fixture.repo.id,
+            kind: revlocal_core::ChangeKind::Commit,
+            external_id: "approved-earlier".to_owned(),
+            title: None,
+            author_name: None,
+            author_email: None,
+            authored_at: None,
+            branch: Some("main".to_owned()),
+            base_ref: None,
+            head_ref: None,
+            url: None,
+            diff_stat: revlocal_core::DiffStat::default(),
+            detected_at: at(1),
+        })
+        .await?;
+    let run = RunStore::new(&fixture.pool)
+        .insert(&revlocal_core::Run {
+            id: revlocal_core::RunId::new(0),
+            change_id: change.id,
+            attempt: 1,
+            status: revlocal_core::RunStatus::Done,
+            engine: EngineKind::Mock,
+            depth: revlocal_core::Depth::Summary,
+            trigger: revlocal_core::TriggerSource::Poll,
+            skip_reason: None,
+            error: None,
+            error_detail: None,
+            degraded: None,
+            usage: revlocal_core::Usage::default(),
+            started_at: Some(at(1)),
+            finished_at: Some(at(1)),
+            transcript_path: None,
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
+            created_at: at(1),
+        })
+        .await?
+        .id;
+    let pending = PublishActionStore::new(&fixture.pool)
+        .insert(&revlocal_core::PublishAction {
+            id: revlocal_core::PublishActionId::new(0),
+            run_id: run,
+            finding_id: None,
+            // The local report target needs no network and no configuration, so
+            // this stays inside the ground rules while still being a real
+            // delivery rather than a mocked one.
+            target: "report".to_owned(),
+            capability: revlocal_core::Capability::CreateIssue,
+            risk: revlocal_core::RiskClass::Low,
+            idempotency_key: "report-approved-earlier".to_owned(),
+            payload_json: serde_json::json!({
+                "repo": "acme",
+                "title": "Approved before the drive was unplugged",
+                "body": "It is still owed delivery.",
+                "fingerprint": "abc123",
+            })
+            .to_string(),
+            status: revlocal_core::PublishActionStatus::Pending,
+            attempts: 0,
+            response_json: None,
+            external_ref: None,
+            error: None,
+            created_at: at(1),
+            sent_at: None,
+        })
+        .await?
+        .id;
+
+    // The drive goes away.
+    std::fs::remove_dir_all(&fixture.checkout)?;
+
+    let report = tick(&fixture, 2).await?;
+
+    let after = PublishActionStore::new(&fixture.pool).get(pending).await?;
+    assert_eq!(
+        after.status,
+        revlocal_core::PublishActionStatus::Sent,
+        "an action approved earlier was not delivered: {:?}",
+        after.error
+    );
+    assert_eq!(report.published, 1, "{report:?}");
+
+    // And the missing checkout is still reported — the fix must not buy delivery
+    // by going quiet about the repository.
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("checkout is gone")),
+        "the missing checkout was not reported: {:?}",
+        report.notes
+    );
+    Ok(())
+}
+
 // --- the configured limits are the ones used (RL-1524) ----------------------
 
 #[tokio::test]
