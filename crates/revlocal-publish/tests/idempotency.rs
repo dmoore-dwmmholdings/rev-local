@@ -626,3 +626,91 @@ async fn a_delivery_is_recorded_in_the_audit_log_with_its_receipt() {
     );
     assert_eq!(sent[0].run_id, Some(run), "the entry names no run");
 }
+
+// --- a delivered finding stops reading `open` (RL-1562) ---------------------
+
+#[tokio::test]
+async fn a_delivered_finding_is_marked_published_and_a_suppressed_one_is_not() {
+    // `FindingState::Published` is documented as "Published to at least one
+    // target" and had no producer. A finding filed to Andare, opened as a GitHub
+    // issue and written to a report still read `open` on the findings screen,
+    // which exists to answer exactly that question.
+    //
+    // The second half matters as much: a user who suppresses a finding while its
+    // action is in flight must not have that decision overwritten by the
+    // delivery. The guard is in the store's `WHERE` clause so it cannot race
+    // with them making it.
+    let (_dir, pool, run) = seeded().await.unwrap_or_else(|e| panic!("{e}"));
+    let findings = revlocal_store::FindingStore::new(&pool);
+
+    let make = |fingerprint: &str| revlocal_core::Finding {
+        id: revlocal_core::FindingId::new(0),
+        run_id: run,
+        fingerprint: fingerprint.to_owned(),
+        severity: revlocal_core::Severity::High,
+        category: revlocal_core::Category::Security,
+        confidence: 0.9,
+        file: Some("src/db.rs".to_owned()),
+        line_start: Some(4),
+        line_end: Some(4),
+        title: "SQL injection".to_owned(),
+        body: "name is interpolated into the query.".to_owned(),
+        failure_scenario: None,
+        suggested_fix: None,
+        state: revlocal_core::FindingState::Open,
+        created_at: at(1),
+    };
+
+    let open = findings
+        .insert(&make("fp-open"))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let suppressed = findings
+        .insert(&make("fp-suppressed"))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    findings
+        .set_state(suppressed.id, revlocal_core::FindingState::Suppressed)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let mut queue = PublishQueue::new(pool.clone(), QueueConfig::default());
+    queue.register(Arc::new(CountingTarget {
+        id: "andare".to_owned(),
+        calls: Arc::new(AtomicUsize::new(0)),
+    }));
+
+    for (finding, key) in [(open.id, "fp-open"), (suppressed.id, "fp-suppressed")] {
+        let mut action = an_action(run, "andare", key);
+        action.finding_id = Some(finding);
+        queue
+            .enqueue(&action)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    queue
+        .dispatch_pending(at(4))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let after = |id| {
+        let pool = pool.clone();
+        async move {
+            revlocal_store::FindingStore::new(&pool)
+                .list_for_run(run)
+                .await
+                .unwrap_or_else(|e| panic!("{e}"))
+                .into_iter()
+                .find(|f| f.id == id)
+                .unwrap_or_else(|| panic!("finding vanished"))
+                .state
+        }
+    };
+
+    assert_eq!(after(open.id).await, revlocal_core::FindingState::Published);
+    assert_eq!(
+        after(suppressed.id).await,
+        revlocal_core::FindingState::Suppressed,
+        "delivery overwrote a suppression the user had made"
+    );
+}

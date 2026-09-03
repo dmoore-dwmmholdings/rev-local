@@ -175,6 +175,32 @@ impl std::fmt::Debug for PublishQueue {
 pub const AUDIT_KIND_SENT: &str = "publish_sent";
 
 impl PublishQueue {
+    /// Move the delivered action's finding from `open` to `published`.
+    ///
+    /// `FindingState::Published` is documented as "Published to at least one
+    /// target" and had no producer: a finding filed to Andare, opened as a GitHub
+    /// issue and written to a report still read `open` everywhere (RL-1562). The
+    /// findings screen exists to answer "did this go anywhere", and could not.
+    ///
+    /// The guard lives in the store's `WHERE` clause. A suppressed finding whose
+    /// action was already in flight must not be resurrected — the user's decision
+    /// outranks the delivery — and a read-then-write here would race with them
+    /// making it.
+    async fn mark_finding_published(
+        &self,
+        id: revlocal_core::PublishActionId,
+    ) -> Result<(), revlocal_store::StoreError> {
+        let action = PublishActionStore::new(&self.pool).get(id).await?;
+        // Not every action carries one: a Trama page is per-run, not per-finding.
+        let Some(finding) = action.finding_id else {
+            return Ok(());
+        };
+        revlocal_store::FindingStore::new(&self.pool)
+            .mark_published(finding)
+            .await?;
+        Ok(())
+    }
+
     /// Record a delivery in the audit log, with its receipt.
     ///
     /// The receipt is what makes the entry worth having: "an issue was filed"
@@ -393,6 +419,7 @@ impl PublishQueue {
                     // timestamps afterwards is a second answer to a question
                     // already answered.
                     self.audit_sent(id, &receipt).await?;
+                    self.mark_finding_published(id).await?;
                     report.sent += 1;
                 }
                 Outcome::Failed(id, attempts_before, error) => {

@@ -906,6 +906,31 @@ impl<'a> FindingStore<'a> {
         Ok(findings)
     }
 
+    /// Mark a finding published, if it is still `open`.
+    ///
+    /// Returns whether it moved. The guard is in the `WHERE` clause rather than a
+    /// read-then-write, because the state this must not clobber is one the user
+    /// sets: somebody suppressing a finding while its action is in flight would
+    /// otherwise have that decision overwritten by the delivery (RL-1562).
+    /// `Superseded` is protected for the same reason — a later run already said
+    /// something better about the same defect.
+    pub async fn mark_published(&self, id: FindingId) -> Result<bool> {
+        let raw = id.get();
+        let open = FindingState::Open.as_str();
+        let published = FindingState::Published.as_str();
+        let affected = sqlx::query!(
+            "UPDATE finding SET state = ? WHERE id = ? AND state = ?",
+            published,
+            raw,
+            open
+        )
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+
+        Ok(affected > 0)
+    }
+
     /// Move a finding to a new state (SPEC §5).
     pub async fn set_state(&self, id: FindingId, state: FindingState) -> Result<()> {
         let raw = id.get();
