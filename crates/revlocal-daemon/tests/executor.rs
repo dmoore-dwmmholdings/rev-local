@@ -374,13 +374,117 @@ async fn findings_reach_the_publish_queue_under_the_repository_autonomy_mode() {
     // §11.6: the fingerprint is in the key, so re-reviewing this change reuses the
     // issue rather than filing a second one.
     assert!(waiting[0].idempotency_key.starts_with("andare-"));
-    // §11.4: the key carries the run as well as the fingerprint, so a later
-    // review that still sees the problem reaches the target and can comment
-    // rather than being dropped here (RL-1530).
+    // §11.4: the key carries a date as well as the fingerprint, so a review
+    // tomorrow that still sees the problem reaches the target and can comment
+    // rather than being dropped here (RL-1530) — while a second review today is
+    // dropped, so the commit rate does not become the comment rate (RL-1544).
     assert!(
-        waiting[0].idempotency_key.contains("-run"),
-        "the run must be in the key: {}",
+        waiting[0]
+            .idempotency_key
+            .ends_with(&at(3).format("%Y-%m-%d").to_string()),
+        "the day must be in the key: {}",
         waiting[0].idempotency_key
+    );
+}
+
+#[tokio::test]
+async fn the_same_finding_seen_twice_in_a_day_is_only_reported_once() {
+    // RL-1544. The run used to be in the idempotency key, so every review that
+    // still saw a finding queued another "saw this again" comment. On a
+    // repository taking a commit an hour that is a comment an hour into
+    // somebody's tracker, forever — nothing bounded it, because `queue::Limiter`
+    // paces per target rather than per issue.
+    //
+    // The bound is the calendar rather than the commit rate: a second sighting
+    // today is dropped here, and tomorrow's is not — which is the property
+    // RL-1530 put the run in the key for in the first place.
+    let fixture = discovered(AutonomyMode::DryRun).await.expect("fixture");
+
+    let drain_at = |moment| {
+        let pool = fixture.pool.clone();
+        let data_dir = fixture.data_dir();
+        async move {
+            executor::drain(
+                &pool,
+                &config(AutonomyMode::AutoLowAskHigh),
+                &NullSink,
+                &data_dir,
+                4,
+                moment,
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("drain")
+        }
+    };
+
+    let actions_for = |run| {
+        let pool = fixture.pool.clone();
+        async move {
+            PublishActionStore::new(&pool)
+                .list_for_run(run)
+                .await
+                .expect("actions")
+                .len()
+        }
+    };
+
+    let newest_run = || {
+        let pool = fixture.pool.clone();
+        let repo_id = fixture.repo.id;
+        async move {
+            RunStore::new(&pool)
+                .list_recent(Some(repo_id), None, 1)
+                .await
+                .expect("runs")
+                .first()
+                .expect("a run")
+                .clone()
+        }
+    };
+
+    executor::enqueue(&fixture.pool, &fixture.repo, at(2))
+        .await
+        .expect("enqueue");
+    drain_at(at(3)).await;
+
+    let first = newest_run().await;
+    assert!(
+        actions_for(first.id).await > 0,
+        "the first review filed nothing to bound"
+    );
+
+    // A second review of the same change, later the same day — the path the
+    // "review it again" button takes. The engine is deterministic, so it reports
+    // the same finding with the same fingerprint.
+    let change = ChangeStore::new(&fixture.pool)
+        .get(first.change_id)
+        .await
+        .expect("the change");
+    executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(40))
+        .await
+        .expect("requeue");
+    drain_at(at(41)).await;
+
+    let second = newest_run().await;
+    assert_ne!(second.id, first.id, "the second review did not run");
+    assert_eq!(
+        actions_for(second.id).await,
+        0,
+        "a second sighting the same day queued another action"
+    );
+
+    // Tomorrow it speaks again: a finding still present is not silent forever,
+    // which is what the run in the key was protecting.
+    executor::enqueue_manual(&fixture.pool, &fixture.repo, &change, at(42))
+        .await
+        .expect("requeue");
+    drain_at(at(3) + chrono::Duration::days(1)).await;
+
+    let third = newest_run().await;
+    assert!(
+        actions_for(third.id).await > 0,
+        "a finding still present the next day said nothing"
     );
 }
 

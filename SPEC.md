@@ -844,7 +844,9 @@ Capabilities: `CreateIssue`, `SetStatus`, `Comment`.
   `rev-local-fingerprint: <fp>` trailer used for idempotent re-filing.
 - Before filing, the target **searches** for an existing open issue carrying the same
   fingerprint trailer (via a `search`/`list` capability if mapped); if found, it
-  comments on it rather than duplicating.
+  comments on it rather than duplicating. At most one action per finding per
+  target per day, so a finding that survives many commits says so at the
+  calendar's pace rather than the commit rate's.
 - `SetStatus` moves the ticket referenced by the change: if the commit message / PR
   title / SVN log message contains a work-item key matching
   `repo.config.andare_key_regex` (default `[A-Z][A-Z0-9]+-\d+`), the run reports

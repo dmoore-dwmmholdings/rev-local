@@ -1186,11 +1186,21 @@ async fn queue_actions(
             // payload and could never be sent, and a finding still present twenty
             // commits later said nothing.
             //
-            // With the run in the key, each review that still sees the problem
-            // queues its own action, the constraint still holds, and the remote
-            // dedupe decides between filing and commenting — which is where §11.4
-            // put that decision.
-            let key = format!("{target}-{}-run{}", finding.fingerprint, run.get());
+            // The run was in the key for that reason, and it made the commit rate
+            // the comment rate: a repository taking a commit an hour wrote a
+            // "saw this again" comment an hour into somebody's tracker, forever,
+            // and nothing bounded it — `queue::Limiter` paces per target, not per
+            // issue (RL-1544). The fiftieth comment carries nothing the first did
+            // not, and noise on a shared ticket is what makes somebody turn the
+            // whole thing off.
+            //
+            // A date bucket keeps both properties. The first sighting still files,
+            // a finding still present tomorrow still says so, and the constraint
+            // still holds — but how often it speaks is a property of the calendar
+            // rather than of how fast somebody commits. §11.4 asks the target to
+            // comment "rather than duplicating", which is an alternative to filing
+            // twice, not a heartbeat.
+            let key = format!("{target}-{}-{}", finding.fingerprint, at.format("%Y-%m-%d"));
             if store
                 .find_by_idempotency_key(target, &key)
                 .await
