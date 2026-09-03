@@ -89,6 +89,20 @@ pub struct WatchReport {
     pub reviewed: Vec<revlocal_daemon::executor::RunOutcome>,
     /// Runs that did not go ahead, and why — never dropped in silence (§18).
     pub held: Vec<String>,
+    /// Publish actions delivered this tick.
+    ///
+    /// The tick used to report what it reviewed and what it held and nothing
+    /// about the step the tool exists for. A run whose issue failed to send read
+    /// exactly like one that sent (RL-1546).
+    pub published: usize,
+    /// Publish actions that failed to deliver this tick.
+    pub publish_failed: usize,
+    /// Publish actions sitting in the approvals inbox, right now.
+    pub awaiting_approval: usize,
+    /// Approvals that ran out of time waiting for a human (§12.4).
+    pub expired: usize,
+    /// Runs still queued after this tick.
+    pub still_queued: u32,
 }
 
 impl WatchReport {
@@ -150,6 +164,30 @@ impl WatchReport {
         for held in &self.held {
             out.push_str(&format!("  held: {held}\n"));
         }
+        // Delivery, which is the step the whole tool exists for and the one the
+        // tick used to say nothing about (RL-1546). Written as a list of things
+        // that happened rather than a template with zeroes in it, matching
+        // `TickReport::line` — "filed 0, 0 failed" is a line people learn to stop
+        // reading.
+        let mut tail: Vec<String> = Vec::new();
+        if self.published > 0 {
+            tail.push(format!("filed {}", self.published));
+        }
+        if self.publish_failed > 0 {
+            tail.push(format!("{} failed to file", self.publish_failed));
+        }
+        if self.expired > 0 {
+            tail.push(format!("{} approval(s) expired unanswered", self.expired));
+        }
+        if self.awaiting_approval > 0 {
+            tail.push(format!("{} waiting for you", self.awaiting_approval));
+        }
+        if self.still_queued > 0 {
+            tail.push(format!("{} still queued", self.still_queued));
+        }
+        if !tail.is_empty() {
+            out.push_str(&format!("  {}\n", tail.join(", ")));
+        }
         out
     }
 }
@@ -202,6 +240,11 @@ pub async fn tick(
         queued: report.queued,
         reviewed: report.reviewed,
         held: report.notes,
+        published: report.published,
+        publish_failed: report.publish_failed,
+        awaiting_approval: report.awaiting_approval,
+        expired: report.expired,
+        still_queued: report.still_queued,
     })
 }
 

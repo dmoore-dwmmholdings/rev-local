@@ -1461,6 +1461,63 @@ mod watch_loop {
     use revlocal_store::Pool;
 
     #[test]
+    fn a_tick_says_whether_anything_was_actually_delivered() {
+        // RL-1546. `watch::tick` copied five fields out of the autopilot's report
+        // and dropped the rest, so the tick said what it reviewed and what it
+        // held and nothing about the step the tool exists for. A run whose issue
+        // failed to send read exactly like one that sent.
+        let report = WatchReport {
+            repos: 1,
+            passes: Vec::new(),
+            idle: None,
+            paused: false,
+            queued: 0,
+            reviewed: Vec::new(),
+            held: Vec::new(),
+            published: 2,
+            publish_failed: 1,
+            awaiting_approval: 3,
+            expired: 1,
+            still_queued: 44,
+        };
+
+        let human = report.render_human();
+        assert!(human.contains("filed 2"), "{human}");
+        assert!(human.contains("1 failed to file"), "{human}");
+        assert!(
+            human.contains("1 approval(s) expired unanswered"),
+            "{human}"
+        );
+        assert!(human.contains("3 waiting for you"), "{human}");
+        assert!(human.contains("44 still queued"), "{human}");
+    }
+
+    #[test]
+    fn a_quiet_tick_does_not_recite_zeroes() {
+        // The counts are a list of things that happened, not a template with
+        // zeroes in it — "filed 0, 0 failed, 0 waiting" is a line people learn to
+        // stop reading, and then stop reading on the tick that says something.
+        let report = WatchReport {
+            repos: 1,
+            passes: Vec::new(),
+            idle: None,
+            paused: false,
+            queued: 0,
+            reviewed: Vec::new(),
+            held: Vec::new(),
+            published: 0,
+            publish_failed: 0,
+            awaiting_approval: 0,
+            expired: 0,
+            still_queued: 0,
+        };
+
+        let human = report.render_human();
+        assert!(!human.contains("filed"), "{human}");
+        assert!(!human.contains("waiting for you"), "{human}");
+    }
+
+    #[test]
     fn a_tick_with_nothing_due_still_says_what_was_held() {
         // RL-1545. `render_human` returned early when no repository ran a
         // discovery pass, and that return skipped the held and reviewed sections
@@ -1490,6 +1547,11 @@ mod watch_loop {
                 detail: None,
             }],
             held: vec!["acme: the checkout is gone\n  try: put it back".to_owned()],
+            published: 0,
+            publish_failed: 0,
+            awaiting_approval: 0,
+            expired: 0,
+            still_queued: 0,
         };
 
         let human = report.render_human();
