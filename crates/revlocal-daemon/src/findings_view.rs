@@ -152,6 +152,13 @@ pub struct FindingRow {
     /// The file it names, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// The line it names, if any.
+    ///
+    /// This is the screen for scanning every finding across every repository —
+    /// the one where somebody picks a row and goes to the code. A path with no
+    /// line is the one thing on the row that cannot be acted on (RL-1553).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
     /// How the same finding is recognised across runs (§10.3).
     pub fingerprint: String,
 }
@@ -209,6 +216,7 @@ pub async fn gather(pool: &Pool, filter: &FindingFilter) -> Result<FindingsView,
                 state: finding.state,
                 title: finding.title,
                 file: finding.file,
+                line: finding.line_start,
                 fingerprint: finding.fingerprint,
             });
         }
@@ -371,6 +379,7 @@ mod tests {
             state,
             title: "something".to_owned(),
             file: None,
+            line: None,
             fingerprint: "fp".to_owned(),
         }
     }

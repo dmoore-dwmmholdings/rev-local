@@ -147,7 +147,13 @@ export function Findings({
                     <td>{row.category}</td>
                     <td>
                       {row.title}
-                      {row.file && <div className="dim mono">{row.file}</div>}
+                      {/* With the line, because this is the screen somebody
+                          picks a row from and goes to the code (RL-1553). */}
+                      {row.file && (
+                        <div className="dim mono">
+                          {row.line ? `${row.file}:${row.line}` : row.file}
+                        </div>
+                      )}
                     </td>
                     <td>{row.state}</td>
                     <td>

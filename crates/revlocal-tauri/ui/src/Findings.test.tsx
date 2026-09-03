@@ -46,6 +46,23 @@ function mount(v: FindingsView | null, props: Partial<Parameters<typeof Findings
 }
 
 describe('findings', () => {
+  it('shows the line, so a row can be navigated to', () => {
+    // RL-1553. This is the screen for scanning every finding across every
+    // repository — the one where somebody picks a row and goes to the code — and
+    // it showed `src/db.rs` where the CLI and the run detail both show a line.
+    mount(view({ rows: [row({ file: 'src/db.rs', line: 42 })] }));
+
+    expect(screen.getByText('src/db.rs:42')).toBeDefined();
+  });
+
+  it('shows a bare path when the finding names no line', () => {
+    // `src/db.rs:undefined` is worse than `src/db.rs`, and a finding outside any
+    // line range is still a finding.
+    mount(view({ rows: [row({ file: 'src/db.rs', line: undefined })] }));
+
+    expect(screen.getByText('src/db.rs')).toBeDefined();
+  });
+
   it('sends every filter, so choosing two narrows rather than replaces', () => {
     // The acceptance criterion at the edge where the UI could break it: each
     // control patches the filter object rather than replacing it, so a second

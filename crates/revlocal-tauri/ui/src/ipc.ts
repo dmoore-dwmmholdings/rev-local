@@ -523,6 +523,12 @@ export type FindingRow = {
   state: string;
   title: string;
   file?: string;
+  /**
+   * The line it names, if any.
+   *
+   * Optional because a view serialised before RL-1553 has no such field.
+   */
+  line?: number;
   fingerprint: string;
 };
 
