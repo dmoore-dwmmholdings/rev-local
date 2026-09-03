@@ -150,6 +150,11 @@ mod svn_fixtures {
         );
 
         for change in &found {
+            // RL-1561: a revision is `SvnRev`, not `Commit`. §9.4's
+            // `disabled_kind` refuses a commit when `review_commits` is off and
+            // never refuses a Subversion kind, so calling a revision a commit
+            // made that setting skip an entire repository.
+            assert_eq!(change.kind, revlocal_core::ChangeKind::SvnRev, "{change:?}");
             // `r1234` is how a revision is written everywhere else; a bare number
             // reads as a database id in a report title.
             assert!(

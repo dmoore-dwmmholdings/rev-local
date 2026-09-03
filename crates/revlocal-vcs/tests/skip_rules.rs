@@ -998,3 +998,46 @@ mod reviewed_kinds {
         );
     }
 }
+
+#[test]
+fn skip_rules_review_commits_off_does_not_silence_a_subversion_repository() {
+    // RL-1561. `disabled_kind` refuses a `Commit` when `review_commits` is off,
+    // and deliberately never refuses a Subversion kind — a repository watched
+    // over Subversion has nothing else to review, so the setting has no meaning
+    // there. `SvnAdapter` emitted `ChangeKind::Commit`, which handed every
+    // revision to a rule written to exclude it.
+    let config = revlocal_core::RepoConfig {
+        review_commits: false,
+        ..revlocal_core::RepoConfig::default()
+    };
+
+    let revision = revlocal_vcs::DetectedChange {
+        kind: revlocal_core::ChangeKind::SvnRev,
+        external_id: "r3".to_owned(),
+        title: Some("bind a value".to_owned()),
+        author_name: None,
+        author_email: None,
+        authored_at: None,
+        branch: Some("trunk".to_owned()),
+        base_ref: None,
+        parents: Vec::new(),
+        paths: vec!["trunk/main.rs".to_owned()],
+        head_ref: None,
+        url: None,
+        diff_stat: revlocal_core::DiffStat::default(),
+        skip_reason: None,
+        cursor_value: "3".to_owned(),
+    };
+
+    assert!(
+        revlocal_vcs::evaluate_skip(&revision, &config).is_none(),
+        "review_commits should not reach a Subversion revision"
+    );
+
+    // And the rule still bites the kind it was written for.
+    let commit = revlocal_vcs::DetectedChange {
+        kind: revlocal_core::ChangeKind::Commit,
+        ..revision
+    };
+    assert!(revlocal_vcs::evaluate_skip(&commit, &config).is_some());
+}

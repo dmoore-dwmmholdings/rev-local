@@ -171,7 +171,12 @@ impl VcsAdapter for SvnAdapter {
             .reviewable
             .into_iter()
             .map(|rev| DetectedChange {
-                kind: ChangeKind::Commit,
+                // `SvnRev`, not `Commit`: §9.4's `disabled_kind` refuses a
+                // commit when `review_commits` is off and deliberately never
+                // refuses a Subversion kind — "a repository watched over
+                // Subversion has nothing else to review". Calling a revision a
+                // commit made that setting skip everything (RL-1561).
+                kind: ChangeKind::SvnRev,
                 // `r1234` is how a Subversion revision is written everywhere else
                 // in this codebase and in svn's own output; a bare number would
                 // read as a database id in the report and the issue title.
