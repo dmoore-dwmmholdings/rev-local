@@ -1,10 +1,11 @@
 # rev-local
 
-Local, autonomous code review for git, GitHub and Subversion.
+Local, autonomous code review for git and Subversion, published to GitHub,
+Andare or a file on your disk.
 
 rev-local watches repositories you already have on disk, reviews each new change
 with a coding CLI you already have installed (`claude`, `codex`), and publishes the
-findings back to wherever the work lives — a GitHub pull request, an issue tracker,
+findings back to wherever the work lives — a GitHub issue, an issue tracker,
 a wiki. Everything runs on your machine: the repository is never uploaded, and the
 review engine is a process you control.
 
@@ -51,6 +52,12 @@ configured repository, so it has no stored engine choice to honour and defaults 
 the mock engine — which spends nothing and invents its findings. It says so on
 stderr every time; `--engine claude` or `--engine codex` is what runs a real one.
 `revlocal watch` and the desktop app use the repository's configured engine.
+
+Not yet: reviewing a **GitHub repository at pull-request granularity**. Filing and
+commenting on GitHub works — that is the "GitHub issue" above — but adding a
+repository with `--kind github` is refused, because pull-request discovery has no
+adapter behind it. Add such a repository as a `git` checkout and its commits are
+reviewed like any other.
 
 Every command that is not doing the whole job says so when you run it, rather than
 looking like it worked.
