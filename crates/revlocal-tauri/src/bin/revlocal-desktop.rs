@@ -830,8 +830,6 @@ fn data_dir() -> std::path::PathBuf {
 
 /// Record what this repository has, so the first review has something to look at.
 async fn discover_for(pool: &revlocal_store::Pool, name: &str) -> Result<(), String> {
-    use revlocal_vcs::VcsAdapter as _;
-
     let repos = revlocal_store::RepoStore::new(pool)
         .list()
         .await
@@ -841,14 +839,11 @@ async fn discover_for(pool: &revlocal_store::Pool, name: &str) -> Result<(), Str
         .find(|r| r.name == name)
         .ok_or_else(|| format!("no repository called {name}"))?;
 
-    // A kind with no adapter must not be handed to the git one: the preview used
-    // to report "is not a git repository" about a path that was correct
-    // (RL-1558).
-    if let Some(detail) = revlocal_vcs::unsupported_kind(repo) {
-        return Err(format!("{name}: {detail}"));
-    }
-
-    let changes = revlocal_vcs::GitAdapter::new()
+    // Chosen by kind: the preview used to hand a Subversion repository to the git
+    // adapter and report "is not a git repository" about a path that was correct
+    // (RL-1558, RL-1559).
+    let changes = revlocal_vcs::adapter_for(repo)
+        .map_err(|e| e.to_string())?
         .discover(repo, None, 50)
         .await
         .map_err(|e| e.to_string())?;

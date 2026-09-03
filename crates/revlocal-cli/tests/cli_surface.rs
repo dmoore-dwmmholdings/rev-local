@@ -2027,10 +2027,17 @@ mod backfill_command {
 
     #[tokio::test]
     async fn backfilling_an_svn_repository_does_not_suggest_git_rev_parse() -> Result<(), String> {
-        // RL-1558. RL-1557 put the honest message in `discover_one` and I closed
-        // it there; `GitAdapter::new()` is hardcoded in five places and I had
-        // fixed one. `backfill` still said the working copy "is not a git
-        // repository", and then suggested running `git rev-parse` inside it.
+        // RL-1558, then RL-1559. `GitAdapter::new()` was hardcoded in five
+        // places; fixing one left `backfill` saying the working copy "is not a
+        // git repository" and suggesting `git rev-parse` inside it.
+        //
+        // This test then caught the same mistake a second time: wiring
+        // `SvnAdapter` into the autopilot alone made `unsupported_kind` return
+        // `None` for svn, `backfill` stopped short-circuiting, and the git error
+        // came back. Every surface now goes through `adapter_for`.
+        //
+        // The repository has no `remote_url` and its path is not a working copy,
+        // so the SVN adapter refuses it — for the right reason, in svn's terms.
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let pool = revlocal_store::open(&dir.path().join("rl.db"))
             .await
@@ -2063,8 +2070,8 @@ mod backfill_command {
         let said = failed.to_string();
         pool.close().await;
 
-        assert!(said.contains("cannot review a `svn` repository"), "{said}");
-        // The two wrong remedies the old error carried.
+        // The two wrong remedies the old error carried, and the reason it is
+        // wrong to send somebody to either.
         assert!(!said.contains("not a git repository"), "{said}");
         assert!(!said.contains("git rev-parse"), "{said}");
         Ok(())

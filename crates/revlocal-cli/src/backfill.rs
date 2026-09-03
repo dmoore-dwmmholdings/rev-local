@@ -21,7 +21,6 @@
 use revlocal_core::{Cursor, RepoId, Timestamp};
 use revlocal_daemon::backfill::{backfill_scope, plan, BackfillItem, BackfillPlan};
 use revlocal_store::{CursorStore, Pool, RepoStore};
-use revlocal_vcs::{GitAdapter, VcsAdapter};
 use serde::{Deserialize, Serialize};
 
 /// How many candidates are enumerated before `--limit` is applied.
@@ -52,16 +51,19 @@ pub enum BackfillError {
     },
 
     /// History could not be walked.
-    #[error(
-        "could not enumerate history from {since}: {detail}\n  try: check that \
-         `{since}` is a ref this repository knows — `git rev-parse {since}` in the \
-         working copy answers that"
-    )]
+    ///
+    /// The remedy is carried rather than written into the message: it used to say
+    /// `git rev-parse` unconditionally, and appending git advice to a Subversion
+    /// failure is misdirection however correct the sentence above it is
+    /// (RL-1559).
+    #[error("could not enumerate history from {since}: {detail}\n  try: {hint}")]
     Enumerate {
         /// What was asked for.
         since: String,
         /// What went wrong.
         detail: String,
+        /// How to check `since` in this repository's own terms.
+        hint: String,
     },
 
     /// The repository's kind has no adapter, so there is no history to read.
@@ -215,19 +217,32 @@ pub async fn plan_backfill(
     // §18 names, produced by the code that exists to report it.
     //
     // Found by running it against a five-commit repository.
-    // Before reaching for the git adapter: a Subversion working copy used to come
-    // back "is not a git repository", with a second remedy suggesting
-    // `git rev-parse` inside it (RL-1558).
-    if let Some(detail) = revlocal_vcs::unsupported_kind(&repo) {
-        return Err(BackfillError::UnsupportedKind { detail });
-    }
+    // Chosen by kind rather than hardcoded to git. A Subversion repository used
+    // to come back "is not a git repository", with a second remedy suggesting
+    // `git rev-parse` inside it (RL-1558, RL-1559).
+    let adapter =
+        revlocal_vcs::adapter_for(&repo).map_err(|error| BackfillError::UnsupportedKind {
+            detail: error.to_string(),
+        })?;
 
-    let changes = GitAdapter::new()
+    // The remedy in this repository's own terms: `git rev-parse` means nothing in
+    // a Subversion working copy.
+    let hint = match repo.kind {
+        revlocal_core::RepoKind::Svn => format!(
+            "check that `{since}` is a revision this repository knows — `svn log` lists them"
+        ),
+        _ => format!(
+            "check that `{since}` is a ref this repository knows — `git rev-parse {since}` in the working copy answers that"
+        ),
+    };
+
+    let changes = adapter
         .discover(&repo, Some(&start), ENUMERATION_CAP)
         .await
         .map_err(|error| BackfillError::Enumerate {
             since: since.to_owned(),
             detail: error.to_string(),
+            hint,
         })?;
 
     let candidates: Vec<BackfillItem> = changes

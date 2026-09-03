@@ -102,6 +102,74 @@ mod svn_fixtures {
         serde_json::from_str(&text).map_err(|e| format!("parsing manifest: {e}"))
     }
 
+    #[tokio::test]
+    async fn svn_the_adapter_discovers_revisions_through_the_trait() {
+        // RL-1559. `svn/discover.rs`, `materialize.rs` and the rest were written,
+        // tested and exported, and `GitAdapter` was the only `impl VcsAdapter` —
+        // so nothing could reach them and a `--kind svn` repository was told its
+        // working copy "is not a git repository".
+        //
+        // This goes through the trait rather than through `svn::discover`, which
+        // already had tests. The trait is where the gap was.
+        let dir = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e}"));
+        let manifest = build_into(dir.path()).unwrap_or_else(|e| panic!("build: {e}"));
+        let Some(url) = manifest.repo_url.clone() else {
+            // No svn on this machine. The manifest says so, and
+            // `svn_the_manifest_agrees_with_whether_svn_is_installed` is what
+            // stops that silently disabling this test on a machine that has it.
+            assert!(
+                manifest.skipped,
+                "no repo_url but the fixture was not skipped"
+            );
+            return;
+        };
+
+        let repo = revlocal_core::Repo {
+            id: revlocal_core::RepoId::new(1),
+            name: "legacy".to_owned(),
+            kind: revlocal_core::RepoKind::Svn,
+            local_path: None,
+            remote_url: Some(url),
+            default_branch: Some("trunk".to_owned()),
+            engine: revlocal_core::EngineKind::Mock,
+            autonomy: revlocal_core::AutonomyMode::DryRun,
+            enabled: true,
+            config_json: "{}".to_owned(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let adapter = revlocal_vcs::SvnAdapter::new();
+        let found = revlocal_vcs::VcsAdapter::discover(&adapter, &repo, None, 50)
+            .await
+            .unwrap_or_else(|e| panic!("discover: {e}"));
+
+        assert!(
+            !found.is_empty(),
+            "the fixture has revisions and none were found"
+        );
+
+        for change in &found {
+            // `r1234` is how a revision is written everywhere else; a bare number
+            // reads as a database id in a report title.
+            assert!(
+                change.external_id.starts_with('r'),
+                "revision id is not r-prefixed: {}",
+                change.external_id
+            );
+            // And the cursor must round-trip: `discover` parses it with
+            // `parse::<u64>()`, which `r3` would fail.
+            assert!(
+                change.cursor_value.parse::<u64>().is_ok(),
+                "cursor value does not parse as a revision: {}",
+                change.cursor_value
+            );
+        }
+
+        // A kind that is wired is no longer reported as unsupported.
+        assert!(revlocal_vcs::unsupported_kind(&repo).is_none());
+    }
+
     #[test]
     fn svn_the_manifest_exists_whether_or_not_svn_is_installed() {
         // The item's gate is `test -f fixtures/out/svn-basic/.manifest.json`, and it

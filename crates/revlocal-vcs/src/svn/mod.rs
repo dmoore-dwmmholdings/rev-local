@@ -6,12 +6,14 @@
 //! which is a property of this module never being reached from the git path, not
 //! of it handling absence gracefully.
 
+pub mod adapter;
 pub mod cmd;
 pub mod demotion;
 pub mod discover;
 pub mod materialize;
 pub mod pseudo_pr;
 
+pub use adapter::SvnAdapter;
 pub use cmd::{
     doctor_line, file_url, is_available, non_interactive_env, CertFailure, SvnError, SvnOutput,
     SvnRunner, DEFAULT_TIMEOUT,

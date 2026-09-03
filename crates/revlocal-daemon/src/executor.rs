@@ -898,6 +898,9 @@ async fn materialize(
     change: &Change,
     into: &Path,
 ) -> Result<revlocal_vcs::ChangeContext, String> {
+    // Not `adapter_for`: that refuses a GitHub repository because *discovery*
+    // needs pull requests, and materialising one is a git checkout either way
+    // (RL-1559).
     match repo.kind {
         revlocal_core::RepoKind::Git | revlocal_core::RepoKind::GitHub => {
             use revlocal_vcs::VcsAdapter as _;
@@ -906,14 +909,13 @@ async fn materialize(
                 .await
                 .map_err(|e| e.to_string())
         }
-        // §6.4's SVN path materialises through its own adapter, which needs an
-        // `svn` binary. Reported rather than silently reviewed as git — the diff
-        // would be empty and the review would look clean.
-        revlocal_core::RepoKind::Svn => Err(
-            "SVN repositories are not executed by this pass yet; `revlocal review` \
-             reviews one revision at a time"
-                .to_owned(),
-        ),
+        revlocal_core::RepoKind::Svn => {
+            use revlocal_vcs::VcsAdapter as _;
+            revlocal_vcs::SvnAdapter::new()
+                .materialize(repo, change, into)
+                .await
+                .map_err(|e| e.to_string())
+        }
     }
 }
 

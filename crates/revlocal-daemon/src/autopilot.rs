@@ -33,7 +33,6 @@ use revlocal_core::{Cursor, GlobalConfig, Repo, RepoConfig, RepoId, Timestamp, T
 use revlocal_store::{
     ChangeStore, CursorStore, Pool, PublishActionStore, RepoStore, RunStore, SettingStore,
 };
-use revlocal_vcs::{GitAdapter, VcsAdapter};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -670,20 +669,14 @@ pub async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
         Err(error) => return failed_pass(repo, error.to_string()),
     };
 
-    // Only git has a `VcsAdapter` impl. `svn/` and `github/` carry real
-    // implementations — discovery, materialisation, pull requests — and nothing
-    // routes to them, so a repository added as `--kind svn` was handed to the git
-    // adapter and failed with "is not a git repository ... check the repository's
-    // local path". The path was the one thing that was not wrong, and it said so
-    // once per tick forever (RL-1557).
-    //
-    // Named as unsupported rather than refused at `repo add`: the kind is in the
-    // spec and the CLI is right to accept it. What was wrong was the diagnosis.
-    if let Some(detail) = revlocal_vcs::unsupported_kind(repo) {
-        return failed_pass(repo, detail);
-    }
+    // Chosen by kind rather than hardcoded to git (RL-1559). One selector, so
+    // wiring an adapter reaches every surface at once.
+    let discovered = match revlocal_vcs::adapter_for(repo) {
+        Err(error) => return failed_pass(repo, error.to_string()),
+        Ok(adapter) => adapter.discover(repo, cursor.as_ref(), 50).await,
+    };
 
-    let changes = match GitAdapter::new().discover(repo, cursor.as_ref(), 50).await {
+    let changes = match discovered {
         Ok(changes) => changes,
         // One unreachable remote must not stop every other repository being
         // reviewed, so this is recorded rather than returned.

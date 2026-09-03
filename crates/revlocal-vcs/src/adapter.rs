@@ -244,11 +244,39 @@ pub struct HookReport {
     pub problems: Vec<ProbeProblem>,
 }
 
+/// The adapter for a repository's kind.
+///
+/// # Why selection lives here
+///
+/// `GitAdapter::new()` was hardcoded in five places. RL-1558 put a shared
+/// *check* beside the adapters, which stopped four of them lying — and then
+/// wiring `SvnAdapter` into the autopilot alone reintroduced the same defect on
+/// `backfill`, because a check for "is this kind supported" is not the same
+/// thing as choosing what to run. One selector is (RL-1559).
+///
+/// Returns the error [`unsupported_kind`] describes for a kind with no adapter,
+/// so a caller gets the remedy without composing it.
+pub fn adapter_for(repo: &Repo) -> Result<Box<dyn VcsAdapter + Send + Sync>> {
+    match repo.kind {
+        RepoKind::Git => Ok(Box::new(crate::GitAdapter::new())),
+        RepoKind::Svn => Ok(Box::new(crate::SvnAdapter::new())),
+        // Not the git adapter. A GitHub repository is reviewed at pull-request
+        // granularity (§6.3), and `github/pull_requests.rs` is the code for it —
+        // still unrouted. Handing it to the git adapter would review its commits
+        // instead, which is a quieter wrong answer than an error and therefore a
+        // worse one.
+        RepoKind::GitHub => Err(VcsError::Unusable {
+            repo: repo.name.clone(),
+            problem: "rev-local cannot review a `github` repository yet — pull-request discovery is not wired".to_owned(),
+            remediation: "add it as a `git` checkout to review its commits, or disable it until GitHub support lands".to_owned(),
+        }),
+    }
+}
+
 /// Why this repository's kind cannot be reviewed yet, if it cannot.
 ///
-/// `None` for git, the only kind with a [`VcsAdapter`] impl. `svn/` and
-/// `github/` carry real implementations — discovery, materialisation, pull
-/// requests — and nothing routes to them.
+/// `None` for git and Subversion. `github/` still carries an implementation —
+/// pull-request discovery and its transport — that nothing routes to.
 ///
 /// # Why this lives here rather than in each caller
 ///
@@ -262,12 +290,12 @@ pub struct HookReport {
 /// The message carries no repository name: callers that have one prepend it.
 pub fn unsupported_kind(repo: &Repo) -> Option<String> {
     match repo.kind {
-        RepoKind::Git => None,
-        kind => Some(format!(
-            "rev-local cannot review a `{}` repository yet — only `git` is wired\n  try: point this repository at a git checkout, or disable it until {} support lands",
-            kind.as_str(),
-            kind.as_str()
-        )),
+        RepoKind::Git | RepoKind::Svn => None,
+        RepoKind::GitHub => Some(
+            "rev-local cannot review a `github` repository yet — pull-request discovery is not wired\n  try: add it as a `git` checkout to review its commits, or disable it until GitHub support lands"
+                .to_owned(),
+        ),
+
     }
 }
 

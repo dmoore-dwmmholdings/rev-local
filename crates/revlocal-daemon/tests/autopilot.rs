@@ -944,15 +944,16 @@ async fn a_ceiling_of_zero_falls_back_rather_than_stopping_everything(
 #[tokio::test]
 async fn a_repository_whose_kind_has_no_adapter_says_that_rather_than_blaming_the_path(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // RL-1557. `GitAdapter` is the only `impl VcsAdapter`, and `discover_one`
-    // hardcoded it — so a repository added as `--kind svn` was handed to the git
-    // adapter and failed with "is not a git repository ... check the repository's
-    // local path". The path was the one thing that was not wrong, and it said so
-    // once per tick, forever.
+    // RL-1557, then RL-1559. `GitAdapter` was the only `impl VcsAdapter` and
+    // `discover_one` hardcoded it, so a repository of another kind was handed to
+    // the git adapter and failed with "is not a git repository ... check the
+    // repository's local path". The path was the one thing that was not wrong.
     //
-    // `svn/discover.rs` and `github/pull_requests.rs` exist; they are unrouted
-    // rather than unimplemented. Saying which is the difference between somebody
-    // checking a correct path and somebody knowing to wait.
+    // Subversion is wired now, so the subject here is GitHub, which is not: a
+    // GitHub repository is reviewed at pull-request granularity and
+    // `github/pull_requests.rs` is still unrouted. Handing it to the git adapter
+    // would review its commits instead — a quieter wrong answer than an error,
+    // and therefore a worse one.
     let fixture = install().await?;
 
     // Inserted rather than updated: `RepoStore::update` deliberately does not
@@ -961,7 +962,7 @@ async fn a_repository_whose_kind_has_no_adapter_says_that_rather_than_blaming_th
         .insert(&Repo {
             id: RepoId::new(0),
             name: "legacy".to_owned(),
-            kind: RepoKind::Svn,
+            kind: RepoKind::GitHub,
             // A path that exists: this must fail on the kind, not the checkout.
             local_path: Some(fixture.checkout.display().to_string()),
             remote_url: None,
@@ -985,7 +986,7 @@ async fn a_repository_whose_kind_has_no_adapter_says_that_rather_than_blaming_th
         .collect();
     assert_eq!(said.len(), 1, "{report:?}");
     assert!(
-        said[0].contains("cannot review a `svn` repository yet"),
+        said[0].contains("cannot review a `github` repository yet"),
         "{said:?}"
     );
     // The old message sent people to a path that was correct.
