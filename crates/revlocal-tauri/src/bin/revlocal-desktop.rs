@@ -727,13 +727,23 @@ async fn refresh_tray(app: tauri::AppHandle<tauri::Wry>) -> Result<String, Strin
         .is_paused()
         .await
         .map_err(|e| e.to_string());
+    // What is waiting for a human belongs here rather than only on the approvals
+    // screen: the window is closed most of the time, and an approval expires
+    // whether or not anybody opened it (RL-1542). A count that cannot be read is
+    // reported as none — a tooltip is not the place to raise a database error,
+    // and the paused state below is the more important thing to still get right.
+    let waiting = revlocal_store::PublishActionStore::new(&pool)
+        .list_awaiting_approval()
+        .await
+        .map_or(0, |actions| actions.len());
     pool.close().await;
 
     let status = revlocal_daemon::notify::TrayStatus::of(paused?);
+    let tooltip = status.tooltip_with_waiting(waiting);
     if let Some(tray) = app.tray_by_id("revlocal") {
-        let _ = tray.set_tooltip(Some(status.tooltip()));
+        let _ = tray.set_tooltip(Some(&tooltip));
     }
-    Ok(status.tooltip().to_owned())
+    Ok(tooltip)
 }
 
 /// Where manual capability overrides live: beside the config (§11.2, RL-605).

@@ -447,7 +447,14 @@ export function App() {
   const reloadApprovals = useCallback(() => {
     if (!inTauri()) return;
     fetchApprovals()
-      .then(setApprovals)
+      .then((inbox) => {
+        setApprovals(inbox);
+        // The tray carries the waiting count (RL-1542), and this runs after every
+        // approve and reject. Without it the tray would still say "3 decisions
+        // waiting" after somebody answered all three — the same staleness the
+        // kill switch refreshes the tray to avoid.
+        return refreshTray().catch(() => '');
+      })
       .catch((error: unknown) => setNotice(`Could not load the inbox — ${messageOf(error)}`));
   }, []);
 

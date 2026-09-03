@@ -289,6 +289,25 @@ impl TrayStatus {
             Self::Paused => "rev-local — PAUSED, nothing is being reviewed",
         }
     }
+
+    /// The tooltip, plus what is waiting for a human (RL-1542).
+    ///
+    /// This is a menu-bar app whose window people close, so the tray is the only
+    /// surface still on screen. A decision that expires in 72 hours and takes the
+    /// finding with it is the one thing on a clock here, and the tray used to say
+    /// "reviewing" for all 72 of them — which is how three real findings on the
+    /// live install got to within an hour of being discarded unseen.
+    ///
+    /// Pausing does not clear the inbox: held work still needs the same decision,
+    /// so the count is shown in both states.
+    pub fn tooltip_with_waiting(self, waiting: usize) -> String {
+        let base = self.tooltip();
+        if waiting == 0 {
+            return base.to_owned();
+        }
+        let plural = if waiting == 1 { "" } else { "s" };
+        format!("{base} · {waiting} decision{plural} waiting for you")
+    }
 }
 
 #[cfg(test)]
@@ -477,5 +496,36 @@ mod tests {
         assert!(TrayStatus::Paused.tooltip().contains("PAUSED"));
         assert!(TrayStatus::Running.tooltip().contains("reviewing"));
         assert_ne!(TrayStatus::Paused.tooltip(), TrayStatus::Running.tooltip());
+    }
+
+    #[test]
+    fn the_tray_says_when_a_decision_is_waiting() {
+        // RL-1542: three real findings sat 70 of their 72 hours in the inbox and
+        // the tray read "rev-local — reviewing" throughout. The window was closed,
+        // so that string was the whole of what the app was saying.
+        let one = TrayStatus::Running.tooltip_with_waiting(1);
+        assert!(one.contains("1 decision waiting"), "{one}");
+
+        let three = TrayStatus::Running.tooltip_with_waiting(3);
+        assert!(three.contains("3 decisions waiting"), "{three}");
+
+        // Pausing holds the work; it does not answer the question, so the count
+        // stays visible.
+        let paused = TrayStatus::Paused.tooltip_with_waiting(3);
+        assert!(
+            paused.contains("PAUSED") && paused.contains("3 decisions"),
+            "{paused}"
+        );
+    }
+
+    #[test]
+    fn the_tray_stays_quiet_when_nothing_is_waiting() {
+        // An empty inbox reported as "0 decisions waiting" is noise on the one
+        // surface that is always on screen, and noise there is what makes people
+        // stop reading it.
+        assert_eq!(
+            TrayStatus::Running.tooltip_with_waiting(0),
+            TrayStatus::Running.tooltip()
+        );
     }
 }
