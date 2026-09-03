@@ -74,6 +74,12 @@ pub struct QueuedAction {
     /// out afterwards makes it a formality.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unsendable: Option<String>,
+    /// How long before it is discarded, in words; `None` when it waits forever.
+    ///
+    /// §12.4 expires an unanswered approval, and an inbox that does not say so
+    /// lets a real finding be thrown away by somebody who thought they had time
+    /// (RL-1541).
+    pub deadline: Option<String>,
     /// Whether this action carries a finding that could be suppressed.
     ///
     /// §12.4's "reject and suppress this finding" is only meaningful when there is
@@ -115,7 +121,14 @@ impl ApprovalsView {
 }
 
 /// Read the inbox (SPEC §12.4).
-pub async fn gather(pool: &Pool) -> Result<ApprovalsView, ApprovalsError> {
+///
+/// `ttl_hours` is §13.1's `approval_ttl_hours` and `now` the moment to measure
+/// against, so each item can say how long it has left.
+pub async fn gather(
+    pool: &Pool,
+    ttl_hours: i64,
+    now: revlocal_core::Timestamp,
+) -> Result<ApprovalsView, ApprovalsError> {
     let actions = PublishActionStore::new(pool)
         .list_awaiting_approval()
         .await
@@ -137,6 +150,7 @@ pub async fn gather(pool: &Pool) -> Result<ApprovalsView, ApprovalsError> {
                 target: action.target,
                 capability: action.capability.as_str().to_owned(),
                 risk: action.risk.as_str().to_owned(),
+                deadline: crate::approvals::time_left(action.created_at, ttl_hours, now),
                 payload_json: action.payload_json,
                 has_finding: action.finding_id.is_some(),
             })
@@ -146,12 +160,18 @@ pub async fn gather(pool: &Pool) -> Result<ApprovalsView, ApprovalsError> {
 
 /// Everything waiting for one run, for "approve all for this run".
 pub async fn for_run(pool: &Pool, run_id: RunId) -> Result<Vec<i64>, ApprovalsError> {
-    Ok(gather(pool)
-        .await?
-        .waiting
+    // Reads the store directly rather than through `gather`: this answers "which
+    // ids", and asking it to invent a TTL and a clock to compute deadlines nobody
+    // looks at would be borrowing a dependency to throw the result away.
+    Ok(PublishActionStore::new(pool)
+        .list_awaiting_approval()
+        .await
+        .map_err(boxed)?
         .into_iter()
-        .filter(|action| action.run_id == run_id.get())
-        .map(|action| action.id)
+        .filter(|action| {
+            action.status == PublishActionStatus::AwaitingApproval && action.run_id == run_id
+        })
+        .map(|action| action.id.get())
         .collect())
 }
 
@@ -168,6 +188,7 @@ mod tests {
             risk: "high".to_owned(),
             payload_json: r#"{"body":"hello"}"#.to_owned(),
             unsendable: None,
+            deadline: None,
             has_finding,
         }
     }

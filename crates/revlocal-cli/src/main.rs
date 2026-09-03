@@ -597,6 +597,12 @@ enum ApprovalsCommand {
         /// The database to read.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+        /// The global config file (§13.1), read for `approval_ttl_hours`.
+        ///
+        /// Optional: the documented default is used without one, which is what a
+        /// fresh install has.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -1243,9 +1249,41 @@ async fn run(command: Command) -> Result<(), CliError> {
                 Ok(())
             }
 
-            ApprovalsCommand::List { database, json } => {
+            ApprovalsCommand::List {
+                database,
+                config,
+                json,
+            } => {
+                // §13.1's document when there is one. Without it the shipped
+                // default TTL applies, which is what the daemon would enforce.
+                let ttl = match config.as_deref() {
+                    None => revlocal_core::GlobalConfig::default(),
+                    Some(path) => {
+                        let text = std::fs::read_to_string(path).map_err(|source| {
+                            inspect::InspectError::Config {
+                                detail: format!(
+                                    "could not read {}: {source}\n  try: check the path, \
+                                     or omit --config to use the default TTL",
+                                    path.display()
+                                ),
+                            }
+                        })?;
+                        let (parsed, _warnings) = revlocal_core::GlobalConfig::parse(&text)
+                            .map_err(|source| inspect::InspectError::Config {
+                                detail: format!(
+                                    "{}: {source}\n  try: revlocal config check --config {}",
+                                    path.display(),
+                                    path.display()
+                                ),
+                            })?;
+                        parsed
+                    }
+                }
+                .global
+                .approval_ttl_hours;
+
                 let pool = revlocal_store::open(&database).await?;
-                let report = inspect::approvals(&pool).await?;
+                let report = inspect::approvals(&pool, i64::from(ttl), chrono::Utc::now()).await?;
                 pool.close().await;
                 let human = report.render_human();
                 println!("{}", inspect::render(&report, human, json)?);

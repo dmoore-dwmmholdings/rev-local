@@ -558,7 +558,12 @@ async fn list_approvals() -> Result<serde_json::Value, String> {
     let pool = revlocal_store::open(&database_path())
         .await
         .map_err(|e| format!("could not open the database: {e}"))?;
-    let view = revlocal_daemon::approvals_view::gather(&pool).await;
+    let view = revlocal_daemon::approvals_view::gather(
+        &pool,
+        i64::from(global_config().global.approval_ttl_hours),
+        chrono::Utc::now(),
+    )
+    .await;
     pool.close().await;
 
     serde_json::to_value(view.map_err(|e| e.to_string())?).map_err(|e| e.to_string())

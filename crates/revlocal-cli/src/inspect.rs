@@ -24,6 +24,16 @@ pub enum InspectError {
         source: Box<revlocal_store::StoreError>,
     },
 
+    /// The config file could not be read, so the deadline would be a guess.
+    ///
+    /// Reported rather than defaulted: an inbox that showed "3d left" against a
+    /// config it could not read would be inventing the one number somebody acts on.
+    #[error("{detail}")]
+    Config {
+        /// What went wrong and what to try.
+        detail: String,
+    },
+
     /// No run with that id.
     ///
     /// Told apart from a store failure because the remedy is opposite: the
@@ -73,6 +83,8 @@ pub struct WaitingAction {
     pub target: String,
     /// What it would do.
     pub capability: String,
+    /// How long before it is discarded, in words; `None` when it waits forever.
+    pub deadline: Option<String>,
 }
 
 /// The approvals inbox (§12.4).
@@ -95,9 +107,17 @@ impl ApprovalsReport {
         for item in &self.waiting {
             // §15's rule, applied to the CLI: a pending outbound action names its
             // target, so approving it is not a leap of faith.
+            //
+            // The deadline sits on the same line for the same reason. An item two
+            // hours from being discarded looks exactly like one with three days
+            // left unless the list says otherwise (RL-1541).
+            let deadline = match &item.deadline {
+                None => String::new(),
+                Some(words) => format!("   {words}"),
+            };
             out.push_str(&format!(
-                "  #{:<5} run {:<5} {} → {}\n",
-                item.id, item.run_id, item.capability, item.target
+                "  #{:<5} run {:<5} {} → {}{}\n",
+                item.id, item.run_id, item.capability, item.target, deadline
             ));
         }
         out.push_str("\nApprove with: revlocal approvals approve <id>\n");
@@ -106,7 +126,14 @@ impl ApprovalsReport {
 }
 
 /// Read the approvals inbox.
-pub async fn approvals(pool: &Pool) -> Result<ApprovalsReport, InspectError> {
+///
+/// `ttl_hours` is §13.1's `approval_ttl_hours`, and `now` the moment to measure
+/// against, so the list can say how long each item has before it is discarded.
+pub async fn approvals(
+    pool: &Pool,
+    ttl_hours: i64,
+    now: revlocal_core::Timestamp,
+) -> Result<ApprovalsReport, InspectError> {
     let actions = PublishActionStore::new(pool)
         .list_awaiting_approval()
         .await
@@ -120,6 +147,7 @@ pub async fn approvals(pool: &Pool) -> Result<ApprovalsReport, InspectError> {
                 run_id: action.run_id.get(),
                 target: action.target.clone(),
                 capability: action.capability.to_string(),
+                deadline: revlocal_daemon::approvals::time_left(action.created_at, ttl_hours, now),
             })
             .collect(),
     })

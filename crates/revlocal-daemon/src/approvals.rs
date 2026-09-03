@@ -87,6 +87,32 @@ pub fn expires_at(queued_at: Timestamp, ttl_hours: i64) -> Timestamp {
     queued_at + chrono::Duration::hours(ttl_hours)
 }
 
+/// How long an item has left, in words, or `None` when it waits forever.
+///
+/// The inbox exists to tell somebody what needs them. An item silently two hours
+/// from being discarded is the one fact on that screen with a clock attached, and
+/// listing it beside items with three days left — indistinguishable — is how a
+/// real finding gets thrown away by somebody who thought they had time (RL-1541).
+pub fn time_left(queued_at: Timestamp, ttl_hours: i64, now: Timestamp) -> Option<String> {
+    // Zero means "wait forever" here exactly as it does in the expiry sweep. A
+    // deadline shown against a policy that never expires anything would be a lie.
+    if ttl_hours <= 0 {
+        return None;
+    }
+
+    let remaining = expires_at(queued_at, ttl_hours) - now;
+    let hours = remaining.num_hours();
+    Some(if remaining <= chrono::Duration::zero() {
+        "past its deadline — the next check discards it".to_owned()
+    } else if hours < 1 {
+        "under an hour left".to_owned()
+    } else if hours < 24 {
+        format!("{hours}h left")
+    } else {
+        format!("{}d left", hours / 24)
+    })
+}
+
 /// What a person decided about a queued action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -204,3 +230,54 @@ pub fn expiry_detail(action: &PublishAction, waited_hours: i64) -> serde_json::V
 
 /// The audit event name for an expiry.
 pub const AUDIT_KIND_EXPIRED: &str = "approval_expired";
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    fn at(hours: i64) -> Timestamp {
+        chrono::DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+            .expect("a literal timestamp parses")
+            .with_timezone(&chrono::Utc)
+            + chrono::Duration::hours(hours)
+    }
+
+    #[test]
+    fn approvals_a_deadline_two_hours_away_says_so() {
+        // The defect: the inbox listed an item 70 hours into a 72-hour TTL
+        // identically to one queued a minute ago, so nobody could tell which was
+        // about to be discarded.
+        assert_eq!(time_left(at(0), 72, at(70)), Some("2h left".to_owned()));
+    }
+
+    #[test]
+    fn approvals_a_deadline_inside_the_hour_does_not_round_to_zero() {
+        // "0h left" reads like "already gone" and invites somebody to skip it.
+        assert_eq!(
+            time_left(at(0), 72, at(72) - chrono::Duration::minutes(30)),
+            Some("under an hour left".to_owned())
+        );
+    }
+
+    #[test]
+    fn approvals_a_deadline_already_passed_says_what_happens_next() {
+        // Past the TTL the item is still listed until the sweep runs, so the row
+        // has to say it is doomed rather than imply there is time.
+        let words = time_left(at(0), 72, at(80)).expect("a TTL is set");
+        assert!(words.contains("discards it"), "{words}");
+    }
+
+    #[test]
+    fn approvals_a_ttl_of_zero_shows_no_deadline_at_all() {
+        // Zero means "wait forever" in the expiry sweep. A countdown against a
+        // policy that never expires anything would be a lie.
+        assert_eq!(time_left(at(0), 0, at(9_000)), None);
+    }
+
+    #[test]
+    fn approvals_a_long_wait_is_given_in_days() {
+        // "168h left" is a number somebody has to divide. Days are read at a
+        // glance, which is the whole point of the column.
+        assert_eq!(time_left(at(0), 168, at(0)), Some("7d left".to_owned()));
+    }
+}

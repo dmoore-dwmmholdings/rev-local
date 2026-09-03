@@ -162,7 +162,8 @@ Anything that was already told to stop stays stopped; resuming is for new work.
 
 - **Approvals expire.** An action nobody answered within `approval_ttl_hours` (72)
   is rejected with the reason `expired`, which is deliberately not the same as
-  somebody declining it. Set it to `0` to wait indefinitely.
+  somebody declining it. Set it to `0` to wait indefinitely. `revlocal approvals
+  list` and the inbox screen show how long each item has left.
 - **Old runs are cleared.** Finished runs and their transcripts past
   `transcript_retention_days` (30) are removed, at most once a day. `0` keeps
   everything.

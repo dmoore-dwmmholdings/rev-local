@@ -432,6 +432,8 @@ export type QueuedAction = {
   payload_json: string;
   /** Why this cannot be sent as it stands, when it cannot (RL-1516). */
   unsendable?: string;
+  /** How long before it is discarded, in words; absent when it waits forever. */
+  deadline?: string | null;
   has_finding: boolean;
 };
 

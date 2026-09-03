@@ -22,6 +22,34 @@ function action(overrides: Partial<QueuedAction> = {}): QueuedAction {
 const noop = vi.fn();
 
 describe('approvals', () => {
+  it('shows how long an item has left, and marks it when nearly up', () => {
+    // RL-1541, found on the live install: three real findings had waited 70 of
+    // their 72 hours and the inbox said nothing. Two hours later the daemon
+    // discards them, and nothing on screen gave anybody a reason to hurry.
+    render(
+      <Approvals
+        view={{
+          waiting: [
+            action({ id: 1, deadline: '2h left' }),
+            action({ id: 2, run_id: 11, deadline: 'under an hour left' }),
+            action({ id: 3, run_id: 12, deadline: null }),
+          ],
+        }}
+        onApprove={noop}
+        onApproveRun={noop}
+        onReject={noop}
+        onEdit={noop}
+      />,
+    );
+
+    expect(screen.getByText('2h left')).toBeDefined();
+    // The urgent one is marked, not merely listed — the whole failure was that
+    // a doomed item looked like every other row.
+    const soon = screen.getByText('under an hour left');
+    expect(soon.className).toContain('tag-off');
+    expect(screen.getByText('2h left').className).not.toContain('tag-off');
+  });
+
   it('renders the preview out of the payload that would be sent', () => {
     // Criterion 1, and the reason there is no second renderer: dispatch sends
     // `payload_json` verbatim and this reads fields out of that same string, so

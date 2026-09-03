@@ -28,6 +28,11 @@ function preview(payloadJson: string): { title?: string; body?: string } {
   }
 }
 
+/** Whether a deadline is close enough that the row should stand out. */
+function urgent(deadline: string): boolean {
+  return deadline.startsWith('past') || deadline.startsWith('under');
+}
+
 function Action({
   action,
   onApprove,
@@ -51,6 +56,15 @@ function Action({
           {action.capability} → {action.target}
         </strong>
         <span className="tag">{action.risk} risk</span>
+        {/* §12.4 discards an unanswered approval. An item two hours from being
+            thrown away looked exactly like one with three days left, which is
+            how a real finding gets lost by somebody who thought they had time
+            (RL-1541). */}
+        {action.deadline && (
+          <span className={urgent(action.deadline) ? 'tag tag-off' : 'tag'}>
+            {action.deadline}
+          </span>
+        )}
         <span className="spacer" />
         <span className="dim">run #{action.run_id}</span>
       </header>

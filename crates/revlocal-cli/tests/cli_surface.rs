@@ -853,7 +853,7 @@ mod hooks_command {
 // --- approvals and budget (RL-1201, §12.4, §13.1) --------------------------
 
 mod inspect_commands {
-    use revlocal_cli::inspect::{approvals, budget, render};
+    use revlocal_cli::inspect::{approvals, budget, render, ApprovalsReport, WaitingAction};
     use revlocal_core::{BudgetSettings, RepoId, Usage};
     #[allow(unused_imports)]
     use revlocal_store::RepoStore;
@@ -897,12 +897,51 @@ mod inspect_commands {
         // An empty list rendered as nothing is indistinguishable from a command
         // that failed to read anything.
         let (pool, _dir, _repo_id) = store().await?;
-        let report = approvals(&pool).await.map_err(|e| e.to_string())?;
+        let report = approvals(&pool, 72, chrono::Utc::now())
+            .await
+            .map_err(|e| e.to_string())?;
 
         assert!(report.waiting.is_empty());
         let human = report.render_human();
         assert!(human.contains("Nothing is waiting"), "{human}");
         Ok(())
+    }
+
+    #[test]
+    fn the_inbox_says_how_long_each_item_has_left() {
+        // The defect (RL-1541), found on the live install: three real findings had
+        // waited 70 of their 72 hours and the list showed nothing about it. Two
+        // hours later the daemon would have discarded all three, and the one
+        // screen whose job is "what needs a human" gave no reason to hurry.
+        let report = ApprovalsReport {
+            waiting: vec![
+                WaitingAction {
+                    id: 1,
+                    run_id: 5,
+                    target: "andare".to_owned(),
+                    capability: "create_issue".to_owned(),
+                    deadline: Some("2h left".to_owned()),
+                },
+                WaitingAction {
+                    id: 2,
+                    run_id: 6,
+                    target: "github".to_owned(),
+                    capability: "create_issue".to_owned(),
+                    deadline: None,
+                },
+            ],
+        };
+
+        let human = report.render_human();
+        assert!(human.contains("2h left"), "{human}");
+        // The second waits forever, and inventing a deadline for it would be
+        // worse than showing none.
+        assert!(
+            human
+                .lines()
+                .any(|l| l.contains("#2") && !l.contains("left")),
+            "{human}"
+        );
     }
 
     #[tokio::test]
