@@ -170,9 +170,45 @@ impl VcsAdapter for GitAdapter {
                 .filter(|c| c.scope == Cursor::commits_scope(branch))
                 .map(|c| c.value.as_str());
 
-            let found = git::discover_branch(&self.runner, &dir, branch, position, limit)
+            // §6.2: a stored cursor is not necessarily still an ancestor. The
+            // whole of this was implemented in `recover.rs`, tested in
+            // `git_force_push.rs`, and never called — so a rebase re-reviewed
+            // every rewritten commit, spending an engine call each on code no
+            // longer on the branch (RL-1556).
+            //
+            // `effective()` is what makes this one line: it resumes from the
+            // merge-base after a rewrite, and from the beginning when the cursor
+            // is gone — re-discovering rather than skipping forward, because
+            // losing a change is the one outcome this layer must not have.
+            let state = git::classify_cursor(&self.runner, &dir, branch, position)
                 .await
                 .map_err(|e| Self::map_error(repo, e))?;
+
+            let mut found =
+                git::discover_branch(&self.runner, &dir, branch, state.effective(), limit)
+                    .await
+                    .map_err(|e| Self::map_error(repo, e))?;
+
+            // After a rewrite, a commit whose content survived it has already been
+            // reviewed under its old sha. Comparing patch-ids is what tells those
+            // apart from genuinely new work; §9.4 then reports the skip with its
+            // reason rather than dropping it silently.
+            if let git::CursorState::Rewritten {
+                old_cursor,
+                merge_base,
+            } = &state
+            {
+                git::mark_superseded_by_rewrite(
+                    &self.runner,
+                    &dir,
+                    old_cursor,
+                    merge_base,
+                    &mut found,
+                )
+                .await
+                .map_err(|e| Self::map_error(repo, e))?;
+            }
+
             per_branch.push(found);
         }
 

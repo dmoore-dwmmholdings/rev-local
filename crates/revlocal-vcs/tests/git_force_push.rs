@@ -150,6 +150,81 @@ mod git_force_push {
     }
 
     #[tokio::test]
+    async fn git_force_push_the_adapter_itself_skips_what_the_rewrite_replayed() {
+        // RL-1556. Everything below was implemented, tested here, and never
+        // called: `GitAdapter::discover` passed the stored cursor straight to
+        // `discover_branch` and never classified it. A rebase therefore
+        // re-reviewed every replayed commit — an engine call each, unattended,
+        // on content already reviewed under its old sha.
+        //
+        // This asserts the adapter's own behaviour rather than the pieces', which
+        // is the gap: the pieces already passed.
+        let (_dir, repo) = fixture().unwrap_or_else(|e| panic!("{e}"));
+        let rewrite = rebase_top(&repo, 3).unwrap_or_else(|e| panic!("rebase: {e}"));
+
+        let adapter = revlocal_vcs::GitAdapter::new();
+        let repo_row = revlocal_core::Repo {
+            id: revlocal_core::RepoId::new(1),
+            name: "acme".to_owned(),
+            kind: revlocal_core::RepoKind::Git,
+            local_path: Some(repo.display().to_string()),
+            remote_url: None,
+            default_branch: Some("main".to_owned()),
+            engine: revlocal_core::EngineKind::Mock,
+            autonomy: revlocal_core::AutonomyMode::DryRun,
+            enabled: true,
+            config_json: "{}".to_owned(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let cursor = revlocal_core::Cursor {
+            repo_id: repo_row.id,
+            scope: revlocal_core::Cursor::commits_scope("main"),
+            value: rewrite.old_tip.clone(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let found = revlocal_vcs::VcsAdapter::discover(&adapter, &repo_row, Some(&cursor), 50)
+            .await
+            .unwrap_or_else(|e| panic!("discover: {e}"));
+
+        // Discovery resumed from the merge-base rather than the dead cursor, so
+        // the replayed commits are in view at all.
+        assert!(
+            found.len() >= rewrite.replayed.len(),
+            "discovery did not resume from the merge-base: {found:?}"
+        );
+
+        let skipped: Vec<&str> = found
+            .iter()
+            .filter(|c| {
+                c.skip_reason
+                    .as_deref()
+                    .is_some_and(|r| r.starts_with("unchanged_after_rewrite"))
+            })
+            .map(|c| c.external_id.as_str())
+            .collect();
+
+        assert_eq!(
+            skipped.len(),
+            rewrite.replayed.len(),
+            "every replayed commit should be recognised as already reviewed: {found:?}"
+        );
+
+        // And the commit the rebase genuinely added is not skipped — suppressing
+        // that would be worse than the defect, since it is unreviewed work.
+        let inserted: Vec<&str> = found
+            .iter()
+            .filter(|c| c.skip_reason.is_none())
+            .map(|c| c.external_id.as_str())
+            .collect();
+        assert!(
+            !inserted.is_empty(),
+            "the inserted commit was skipped as well: {found:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn git_force_push_the_rewrite_is_detected_and_resets_to_the_merge_base() {
         let (_dir, repo) = fixture().unwrap_or_else(|e| panic!("{e}"));
         let rewrite = rebase_top(&repo, 3).unwrap_or_else(|e| panic!("rebase: {e}"));
