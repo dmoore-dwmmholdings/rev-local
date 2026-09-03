@@ -638,6 +638,31 @@ pub async fn install_checks(
                         .is_some_and(|path| !std::path::Path::new(path).exists())
                 })
                 .collect();
+            // A kind with no adapter is a different problem from a missing
+            // checkout and needs saying separately: the path is fine, and
+            // "all present" was true and useless (RL-1557).
+            let unrouted: Vec<&str> = repos
+                .iter()
+                .copied()
+                .filter(|repo| crate::autopilot::unsupported_kind(repo).is_some())
+                .map(|repo| repo.name.as_str())
+                .collect();
+            if !unrouted.is_empty() {
+                checks.push(Check::warn(
+                    "install:kinds",
+                    &format!(
+                        "{} rev-local cannot review yet: {}",
+                        if unrouted.len() == 1 {
+                            "1 repository".to_owned()
+                        } else {
+                            format!("{} repositories", unrouted.len())
+                        },
+                        unrouted.join(", ")
+                    ),
+                    Some("only `git` is wired; point them at a git checkout or disable them"),
+                ));
+            }
+
             if missing.is_empty() {
                 checks.push(Check::ok(
                     "install:repos",
