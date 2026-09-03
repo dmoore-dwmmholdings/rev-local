@@ -147,6 +147,14 @@ export function Findings({
                     <td>{row.category}</td>
                     <td>
                       {row.title}
+                      {/* Seen more than once: the row is a problem, not a run,
+                          so how long it has survived is the thing the count
+                          adds (RL-1563). */}
+                      {(row.occurrences ?? 1) > 1 && (
+                        <span className="tag" title="runs that have seen this">
+                          seen in {row.occurrences} runs
+                        </span>
+                      )}
                       {/* With the line, because this is the screen somebody
                           picks a row from and goes to the code (RL-1553). */}
                       {row.file && (

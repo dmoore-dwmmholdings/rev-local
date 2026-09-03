@@ -375,3 +375,83 @@ async fn queued_work_behind_a_missing_checkout_is_counted_apart(
     assert_eq!(blocked, 1, "and it is still counted, not dropped");
     Ok(())
 }
+
+#[tokio::test]
+async fn one_problem_across_two_runs_is_one_row() -> Result<(), Box<dyn std::error::Error>> {
+    // RL-1563. `gather` returned one row per `finding` row, so a defect that
+    // survived twenty commits was twenty rows on the screen whose job is "what is
+    // wrong with my code". Scanning it meant reading the same finding over and
+    // over.
+    //
+    // Database-backed rather than a unit test on the collapse: the key is
+    // (repository, fingerprint) and the repository comes from a join through the
+    // run's change, which a unit test would not exercise.
+    let (_dir, pool, _first) = seeded(
+        AutonomyMode::DryRun,
+        &[(Severity::High, Category::Security, "SQL injection")],
+    )
+    .await?;
+
+    let before = findings_view::gather(&pool, &FindingFilter::default()).await?;
+    assert_eq!(before.rows.len(), 1, "{before:?}");
+    assert_eq!(before.rows[0].occurrences, 1);
+
+    // A second run of the same repository finding the same thing — same
+    // fingerprint, new row, as a re-review produces.
+    let runs = RunStore::new(&pool).list_recent(None, None, 10).await?;
+    let first_run = runs.first().ok_or("no run")?;
+    let again = RunStore::new(&pool)
+        .insert(&Run {
+            id: RunId::new(0),
+            change_id: first_run.change_id,
+            attempt: 2,
+            status: RunStatus::Done,
+            engine: EngineKind::Mock,
+            depth: Depth::Summary,
+            trigger: TriggerSource::Poll,
+            skip_reason: None,
+            error: None,
+            error_detail: None,
+            degraded: None,
+            usage: Usage::default(),
+            started_at: Some(at(4)),
+            finished_at: Some(at(4)),
+            transcript_path: None,
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
+            created_at: at(4),
+        })
+        .await?;
+
+    FindingStore::new(&pool)
+        .insert(&Finding {
+            id: FindingId::new(0),
+            run_id: again.id,
+            // The same fingerprint is what makes it the same problem (§10.3).
+            fingerprint: "fp-0".to_owned(),
+            severity: Severity::High,
+            category: Category::Security,
+            confidence: 0.9,
+            file: Some("src/lib.rs".to_owned()),
+            line_start: None,
+            line_end: None,
+            title: "SQL injection".to_owned(),
+            body: "why it matters".to_owned(),
+            failure_scenario: None,
+            suggested_fix: None,
+            state: FindingState::Open,
+            created_at: at(4),
+        })
+        .await?;
+
+    let after = findings_view::gather(&pool, &FindingFilter::default()).await?;
+    assert_eq!(after.rows.len(), 1, "two runs, one problem: {after:?}");
+    assert_eq!(after.rows[0].occurrences, 2, "the count is the news");
+    assert_eq!(
+        after.total_before_filter, 1,
+        "the total counts problems too, or \"1 of 2\" is nonsense"
+    );
+    Ok(())
+}

@@ -536,6 +536,13 @@ export type FindingRow = {
    */
   line?: number;
   fingerprint: string;
+  /**
+   * How many runs have seen this problem, including the latest.
+   *
+   * The table shows one row per problem rather than per run (RL-1563). Optional
+   * because a view serialised before that has no such field.
+   */
+  occurrences?: number;
 };
 
 /**

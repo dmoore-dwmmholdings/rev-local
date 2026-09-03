@@ -161,6 +161,13 @@ pub struct FindingRow {
     pub line: Option<u32>,
     /// How the same finding is recognised across runs (§10.3).
     pub fingerprint: String,
+    /// How many runs have seen this problem, including this one.
+    ///
+    /// The screen shows one row per *problem*, not per `finding` row. A defect
+    /// that survives twenty commits produced twenty rows on the screen whose job
+    /// is "what is wrong with my code", and scanning it meant reading the same
+    /// finding over and over (RL-1563).
+    pub occurrences: usize,
 }
 
 /// The screen's data (§15 screen 4).
@@ -183,6 +190,34 @@ pub struct FindingsView {
     pub truncated: bool,
 }
 
+/// The state that describes the *problem*, given two rows about it.
+///
+/// One `finding` row per run means one problem can be `published` in the run that
+/// filed it and `open` in every later run whose action RL-1544's per-day dedupe
+/// skipped. Neither row is wrong; showing the newer one alone would report a
+/// filed problem as unfiled.
+///
+/// The order is a claim about what somebody needs to know first: a decision they
+/// made outranks anything the system did, a delivery outranks merely having been
+/// recorded, and `Superseded` sits above `Open` because a better statement of the
+/// same defect exists.
+const fn louder(a: FindingState, b: FindingState) -> FindingState {
+    const fn rank(state: FindingState) -> u8 {
+        match state {
+            FindingState::Suppressed => 4,
+            FindingState::Resolved => 3,
+            FindingState::Published => 2,
+            FindingState::Superseded => 1,
+            FindingState::Open => 0,
+        }
+    }
+    if rank(b) > rank(a) {
+        b
+    } else {
+        a
+    }
+}
+
 /// Read findings across repositories (SPEC §15 screen 4).
 pub async fn gather(pool: &Pool, filter: &FindingFilter) -> Result<FindingsView, FindingsError> {
     let repos = RepoStore::new(pool).list().await.map_err(boxed)?;
@@ -202,11 +237,31 @@ pub async fn gather(pool: &Pool, filter: &FindingFilter) -> Result<FindingsView,
     let changes = revlocal_store::ChangeStore::new(pool);
     let findings = FindingStore::new(pool);
 
-    let mut all = Vec::new();
+    // Keyed by repository and fingerprint: §10.3's fingerprint is a problem's
+    // identity across runs, and the same fingerprint in two repositories is two
+    // problems. `list_recent` is newest-first, so the first row seen for a key is
+    // the latest thing said about it.
+    let mut order: Vec<(i64, String)> = Vec::new();
+    let mut by_problem: std::collections::BTreeMap<(i64, String), FindingRow> =
+        std::collections::BTreeMap::new();
+
     for run in &runs {
         let change = changes.get(run.change_id).await.map_err(boxed)?;
         for finding in findings.list_for_run(run.id).await.map_err(boxed)? {
-            all.push(FindingRow {
+            let key = (change.repo_id.get(), finding.fingerprint.clone());
+            if let Some(existing) = by_problem.get_mut(&key) {
+                existing.occurrences += 1;
+                // What is true of the *problem*, not of this row. A user's
+                // decision outranks a delivery, and a delivery outranks "merely
+                // recorded" — otherwise a recurrence whose action was deduped
+                // would report a filed problem as unfiled.
+                existing.state = louder(existing.state, finding.state);
+                continue;
+            }
+            order.push(key.clone());
+            by_problem.insert(
+                key,
+                FindingRow {
                 id: finding.id.get(),
                 run_id: run.id.get(),
                 repo_id: change.repo_id.get(),
@@ -217,10 +272,17 @@ pub async fn gather(pool: &Pool, filter: &FindingFilter) -> Result<FindingsView,
                 title: finding.title,
                 file: finding.file,
                 line: finding.line_start,
-                fingerprint: finding.fingerprint,
-            });
+                    fingerprint: finding.fingerprint,
+                    occurrences: 1,
+                },
+            );
         }
     }
+
+    let all: Vec<FindingRow> = order
+        .into_iter()
+        .filter_map(|key| by_problem.remove(&key))
+        .collect();
 
     let total_before_filter = all.len();
     let mut categories: Vec<String> = all.iter().map(|r| r.category.clone()).collect();
@@ -381,6 +443,7 @@ mod tests {
             file: None,
             line: None,
             fingerprint: "fp".to_owned(),
+            occurrences: 1,
         }
     }
 
@@ -476,5 +539,44 @@ mod tests {
             disposition(AutonomyMode::DryRun, RiskClass::High).initial_status(),
             Some(revlocal_core::PublishActionStatus::SkippedDryRun)
         );
+    }
+}
+
+#[cfg(test)]
+mod problem_tests {
+    use super::*;
+
+    #[test]
+    fn findings_the_problem_state_outranks_the_newest_row() {
+        // RL-1563. One `finding` row per run means a problem is `published` in
+        // the run that filed it and `open` in every later run whose action the
+        // per-day dedupe skipped. Reporting the newest row alone would say a
+        // filed problem is unfiled.
+        assert_eq!(
+            louder(FindingState::Open, FindingState::Published),
+            FindingState::Published
+        );
+        assert_eq!(
+            louder(FindingState::Published, FindingState::Open),
+            FindingState::Published
+        );
+
+        // A decision the user made outranks anything the system did: a
+        // suppressed problem that a queued action delivered anyway is still
+        // suppressed, and the screen must not say otherwise.
+        assert_eq!(
+            louder(FindingState::Published, FindingState::Suppressed),
+            FindingState::Suppressed
+        );
+
+        // And `Open` never wins, which is the whole point.
+        for other in [
+            FindingState::Published,
+            FindingState::Suppressed,
+            FindingState::Superseded,
+            FindingState::Resolved,
+        ] {
+            assert_ne!(louder(FindingState::Open, other), FindingState::Open);
+        }
     }
 }
