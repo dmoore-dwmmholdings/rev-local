@@ -759,7 +759,12 @@ async fn execute_one(
     .await
     .map_err(boxed)?;
 
-    let actions = queue_actions(pool, config, &repo, run.id, &stored, &outcome, at).await?;
+    let subject = Subject {
+        repo: &repo,
+        run: run.id,
+        change: &change,
+    };
+    let actions = queue_actions(pool, config, subject, &stored, &outcome, at).await?;
     let statuses = actions.statuses;
 
     // The run's own record, before the terminal transition: a run that says `done`
@@ -934,15 +939,32 @@ struct QueuedActions {
 ///
 /// The gate is `gating::gate`, the same one every other path uses. This module
 /// does not decide what is risky; it decides nothing at all, which is the point.
+/// What one run reviewed: the repository, the change, and the run's own id.
+///
+/// Passed as one argument because they travel together and because it is what
+/// keeps `queue_actions` inside clippy's argument limit — a limit worth
+/// listening to here, since eight positional parameters of which three are ids
+/// is a call nobody reads correctly.
+#[derive(Debug, Clone, Copy)]
+struct Subject<'a> {
+    /// The repository the change belongs to.
+    repo: &'a Repo,
+    /// The run doing the reviewing.
+    run: RunId,
+    /// The change under review, which is what names the commit on every issue
+    /// and report filed below (RL-1543).
+    change: &'a Change,
+}
+
 async fn queue_actions(
     pool: &Pool,
     config: &GlobalConfig,
-    repo: &Repo,
-    run: RunId,
+    subject: Subject<'_>,
     stored: &[(revlocal_core::Finding, bool)],
     outcome: &pipeline::ReviewOutcome,
     at: Timestamp,
 ) -> Result<QueuedActions, ExecutorError> {
+    let Subject { repo, run, change } = subject;
     let mode = AutonomyMode::effective(config.global.mode, repo.autonomy);
     if mode == AutonomyMode::Off {
         // Not an error and not a silent drop: `off` means no actions, and the
@@ -1078,7 +1100,17 @@ async fn queue_actions(
             )
         };
 
-        let context = revlocal_publish::IssueContext::default();
+        // The commit this finding came from. `IssueContext::default()` left it
+        // empty, so every issue and report the unattended loop filed ended in
+        // "Change: not recorded" — while the hand-driven path from the UI recorded
+        // it correctly (RL-1543). A report that does not name its commit leaves an
+        // agent to guess which revision the line number refers to, which is the
+        // whole of what the local report is for.
+        let context = revlocal_publish::IssueContext {
+            change_ref: Some(change.external_id.clone()),
+            trama_url: None,
+            code_excerpt: None,
+        };
 
         // One finding can owe work to several targets, and they fail
         // independently: a missing Andare project must not stop the local report

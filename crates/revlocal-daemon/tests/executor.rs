@@ -13,7 +13,9 @@ use revlocal_core::{
 };
 use revlocal_daemon::executor;
 use revlocal_daemon::state_machine::NullSink;
-use revlocal_store::{open, ChangeStore, FindingStore, Pool, RepoStore, RunStore};
+use revlocal_store::{
+    open, ChangeStore, FindingStore, Pool, PublishActionStore, RepoStore, RunStore,
+};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -213,6 +215,64 @@ async fn a_queued_change_is_reviewed_and_its_findings_are_stored() {
         .expect("findings");
     assert_eq!(stored.len(), outcome.findings);
     assert!(!stored[0].fingerprint.is_empty());
+}
+
+#[tokio::test]
+async fn a_filed_finding_names_the_commit_it_came_from() {
+    // RL-1543, found by running a tick against a copy of the live database. The
+    // loop worked — commit discovered, review run, local report written and sent
+    // with no approval needed — and the report ended "Change: not recorded" while
+    // the commit sat on the run's own change row.
+    //
+    // `queue_actions` built `IssueContext::default()`, so every issue and report
+    // the unattended loop filed lost its commit. The hand-driven path from the UI
+    // recorded it correctly, which is the half nobody runs unattended.
+    let fixture = discovered(AutonomyMode::DryRun).await.expect("fixture");
+    executor::enqueue(&fixture.pool, &fixture.repo, at(2))
+        .await
+        .expect("enqueue");
+
+    executor::drain(
+        &fixture.pool,
+        &config(AutonomyMode::AutoLowAskHigh),
+        &NullSink,
+        &fixture.data_dir(),
+        4,
+        at(3),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("drain");
+
+    let runs = RunStore::new(&fixture.pool)
+        .list_recent(Some(fixture.repo.id), None, 10)
+        .await
+        .expect("runs");
+    let run = runs.first().expect("a run");
+    let change = ChangeStore::new(&fixture.pool)
+        .get(run.change_id)
+        .await
+        .expect("the change the run reviewed");
+
+    let queued = PublishActionStore::new(&fixture.pool)
+        .list_for_run(run.id)
+        .await
+        .expect("queued actions");
+    assert!(!queued.is_empty(), "the review filed nothing to check");
+
+    for action in &queued {
+        assert!(
+            action.payload_json.contains(&change.external_id),
+            "{} payload does not name the commit: {}",
+            action.target,
+            action.payload_json
+        );
+        assert!(
+            !action.payload_json.contains("Change: not recorded"),
+            "{} payload still says the commit is unknown",
+            action.target
+        );
+    }
 }
 
 #[tokio::test]
