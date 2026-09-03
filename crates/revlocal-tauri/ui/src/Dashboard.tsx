@@ -370,11 +370,14 @@ function Queue({
 function AutopilotPanel({
   autopilot,
   mode,
+  waiting,
   onToggle,
   onRunNow,
 }: {
   autopilot: Autopilot | null;
   mode: string;
+  /** Runs queued right now, so an idle switch can say what it is idle about. */
+  waiting: number;
   onToggle: (enabled: boolean) => void;
   onRunNow: () => void;
 }) {
@@ -403,6 +406,19 @@ function AutopilotPanel({
           {autopilot.ticking ? 'checking…' : 'check now'}
         </button>
       </div>
+
+      {/* Everything else on this panel is gated behind `enabled`, so an install
+          with the switch off said the word "Off" and nothing more — while 51
+          runs sat queued on the live machine and nobody had ever turned it on
+          (RL-1548). "It doesn't want to process automatically" was the report,
+          and this was the app's whole answer to it. Only when something is
+          actually waiting: an empty queue has nothing to say here. */}
+      {!autopilot.enabled && waiting > 0 && (
+        <p className="autopilot-line warn-text">
+          {waiting} change{waiting === 1 ? '' : 's'} waiting. Nothing reviews them
+          until this is on.
+        </p>
+      )}
 
       {autopilot.enabled && (
         <p className="autopilot-line">
@@ -479,6 +495,7 @@ export function Dashboard({
       <AutopilotPanel
         autopilot={autopilot}
         mode={dashboard.mode}
+        waiting={queue?.queued_total ?? 0}
         onToggle={onToggleAutopilot}
         onRunNow={onAutopilotNow}
       />

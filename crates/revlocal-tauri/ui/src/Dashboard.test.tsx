@@ -345,11 +345,17 @@ describe('autopilot panel', () => {
     };
   }
 
-  function mount(autopilot: Autopilot | null, mode = 'auto', handlers = {}) {
+  function mount(
+    autopilot: Autopilot | null,
+    mode = 'auto',
+    handlers = {},
+    queue: QueueStatus | null = null,
+  ) {
     render(
       <Dashboard
         dashboard={{ repos: [card()], mode, paused: false }}
         autopilot={autopilot}
+        queue={queue}
         onMode={noop}
         onOpenRun={noop}
         onOpenRepo={noop}
@@ -357,6 +363,26 @@ describe('autopilot panel', () => {
       />,
     );
   }
+
+  it('says what an idle switch is idle about', () => {
+    // RL-1548. Everything on this panel was gated behind `enabled`, so an
+    // install with the switch off said the word "Off" and nothing more — while
+    // 51 runs sat queued on the live machine and nobody had ever turned it on.
+    // "It doesn't want to process automatically" was the report, and this was
+    // the whole of the app's answer.
+    mount(state({ enabled: false }), 'auto', {}, queue({ queued_total: 51 }));
+
+    expect(screen.getByText(/51 changes waiting/)).toBeDefined();
+    expect(screen.getByText(/Nothing reviews them until this is on/)).toBeDefined();
+  });
+
+  it('stays quiet when the switch is off and nothing is waiting', () => {
+    // A fresh install has an empty queue, and a warning about nothing is how a
+    // panel teaches somebody to stop reading it.
+    mount(state({ enabled: false }), 'auto', {}, queue({ queued_total: 0 }));
+
+    expect(screen.queryByText(/Nothing reviews them until this is on/)).toBeNull();
+  });
 
   it('says whether it is on, and how often it looks', () => {
     // The first question anybody has about this app, and until RL-1506 no screen
