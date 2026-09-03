@@ -293,7 +293,7 @@ pub const fn needs_attention(verdict: &BudgetVerdict) -> bool {
 // --- runs and findings (RL-1201, §14) --------------------------------------
 
 use revlocal_core::{RunId, RunStatus, Severity};
-use revlocal_store::{FindingStore, RunStore};
+use revlocal_store::{ChangeStore, FindingStore, RepoStore, RunStore};
 
 /// One run, as `runs list` shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,22 +446,37 @@ pub struct FindingRow {
     pub severity: String,
     /// What kind.
     pub category: String,
+    /// Which repository it is in.
+    ///
+    /// The premise is one app watching every local repository, and `src/pager.rs`
+    /// exists in several of them. Without this a list across repositories names
+    /// no checkout to open (RL-1549). `--repo` narrows the query rather than
+    /// labelling the answer, so it is not a substitute.
+    pub repo: String,
     /// Where.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// Which line, when the engine gave one.
+    ///
+    /// `Finding` has carried this all along and this row dropped it, so an agent
+    /// got a file and a sentence and had to search for the site itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
     /// The claim.
     pub title: String,
     /// Where it is in its life.
     pub state: String,
 }
 
-fn finding_row(finding: &revlocal_core::Finding) -> FindingRow {
+fn finding_row(finding: &revlocal_core::Finding, repo: &str) -> FindingRow {
     FindingRow {
         id: finding.id.get(),
         fingerprint: finding.fingerprint.clone(),
         severity: finding.severity.as_str().to_owned(),
         category: finding.category.as_str().to_owned(),
+        repo: repo.to_owned(),
         file: finding.file.clone(),
+        line: finding.line_start,
         title: finding.title.clone(),
         state: finding.state.as_str().to_owned(),
     }
@@ -547,13 +562,27 @@ pub async fn run_detail(pool: &Pool, run_id: RunId) -> Result<RunDetail, Inspect
         .await
         .map_err(boxed)?;
 
+    // The run names one change and the change names one repository, so every
+    // finding on this screen shares it. A repository removed since is not worth
+    // failing the detail over.
+    let repo_name = match ChangeStore::new(pool).get(run.change_id).await {
+        Err(_) => "(unknown)".to_owned(),
+        Ok(change) => RepoStore::new(pool)
+            .get(change.repo_id)
+            .await
+            .map_or_else(|_| "(removed)".to_owned(), |repo| repo.name),
+    };
+
     Ok(RunDetail {
         run: row(&run),
         tokens: run.usage.total_tokens(),
         tokens_known: run.usage.tokens_are_known(),
         truncated: run.truncated,
         omitted_files: run.omitted_files.clone(),
-        findings: findings.iter().map(finding_row).collect(),
+        findings: findings
+            .iter()
+            .map(|finding| finding_row(finding, &repo_name))
+            .collect(),
     })
 }
 
@@ -578,11 +607,19 @@ impl FindingsReport {
             self.from_runs
         );
         for finding in &self.findings {
+            // Repository and line, because the answer to "where is this" is not
+            // a path on its own when several checkouts have that path (RL-1549).
+            let where_ = match (finding.file.as_deref(), finding.line) {
+                (None, _) => "(no file)".to_owned(),
+                (Some(file), None) => file.to_owned(),
+                (Some(file), Some(line)) => format!("{file}:{line}"),
+            };
             out.push_str(&format!(
-                "  {:<8} {:<12} {}\n           {}\n           {}\n",
+                "  {:<8} {:<12} {}  {}\n           {}\n           {}\n",
                 finding.severity,
                 finding.category,
-                finding.file.as_deref().unwrap_or("(no file)"),
+                finding.repo,
+                where_,
                 finding.title,
                 finding.fingerprint
             ));
@@ -605,14 +642,41 @@ pub async fn findings(
         .map_err(boxed)?;
     let store = FindingStore::new(pool);
 
+    // One lookup per run rather than per finding: a run has many findings and
+    // they all share its repository.
+    let changes = ChangeStore::new(pool);
+    let repos = RepoStore::new(pool);
+    let mut names: std::collections::BTreeMap<i64, String> = std::collections::BTreeMap::new();
+
     let mut found = Vec::new();
     for run in &runs {
+        let repo_name = match changes.get(run.change_id).await {
+            Err(_) => "(unknown)".to_owned(),
+            Ok(change) => {
+                let key = change.repo_id.get();
+                match names.get(&key) {
+                    Some(name) => name.clone(),
+                    None => {
+                        // A repository removed after its findings were stored is
+                        // not an error worth failing the listing over — the
+                        // findings are still real and still worth showing.
+                        let name = repos
+                            .get(change.repo_id)
+                            .await
+                            .map_or_else(|_| "(removed)".to_owned(), |repo| repo.name);
+                        names.insert(key, name.clone());
+                        name
+                    }
+                }
+            }
+        };
+
         for finding in store.list_for_run(run.id).await.map_err(boxed)? {
             // Filtering here rather than in SQL: severity is an ordered enum in
             // Rust and a string in SQLite, and comparing it as a string would put
             // `critical` below `low` alphabetically.
             if severity.is_none_or(|floor| finding.severity >= floor) {
-                found.push(finding_row(&finding));
+                found.push(finding_row(&finding, &repo_name));
             }
         }
     }

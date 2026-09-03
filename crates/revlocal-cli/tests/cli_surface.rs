@@ -853,7 +853,9 @@ mod hooks_command {
 // --- approvals and budget (RL-1201, §12.4, §13.1) --------------------------
 
 mod inspect_commands {
-    use revlocal_cli::inspect::{approvals, budget, render, ApprovalsReport, WaitingAction};
+    use revlocal_cli::inspect::{
+        approvals, budget, findings, render, ApprovalsReport, WaitingAction,
+    };
     use revlocal_core::{BudgetSettings, RepoId, Usage};
     #[allow(unused_imports)]
     use revlocal_store::RepoStore;
@@ -890,6 +892,101 @@ mod inspect_commands {
             .map_err(|e| e.to_string())?;
 
         Ok((pool, dir, repo.id))
+    }
+
+    #[tokio::test]
+    async fn a_listed_finding_names_its_repository_and_its_line() -> Result<(), String> {
+        // RL-1549. This is the surface an autonomous loop reads, and a row of it
+        // carried neither. The premise is one app watching every local
+        // repository, so `src/pager.rs` exists in several of them and a path on
+        // its own names no checkout to open. `Finding` has carried `line_start`
+        // all along and the row dropped it, leaving an agent to search for the
+        // site itself.
+        let (pool, _dir, repo_id) = store().await?;
+        let now = chrono::Utc::now();
+
+        let change = revlocal_store::ChangeStore::new(&pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id,
+                kind: revlocal_core::ChangeKind::Commit,
+                external_id: "c1".to_owned(),
+                title: None,
+                author_name: None,
+                author_email: None,
+                authored_at: None,
+                branch: Some("main".to_owned()),
+                base_ref: None,
+                head_ref: None,
+                url: None,
+                diff_stat: revlocal_core::DiffStat::default(),
+                detected_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let run = revlocal_store::RunStore::new(&pool)
+            .insert(&revlocal_core::Run {
+                id: revlocal_core::RunId::new(0),
+                change_id: change.id,
+                attempt: 1,
+                status: revlocal_core::RunStatus::Done,
+                engine: revlocal_core::EngineKind::Mock,
+                depth: revlocal_core::Depth::Summary,
+                trigger: revlocal_core::TriggerSource::Poll,
+                skip_reason: None,
+                error: None,
+                error_detail: None,
+                degraded: None,
+                usage: Usage::default(),
+                started_at: Some(now),
+                finished_at: Some(now),
+                transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
+                created_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        revlocal_store::FindingStore::new(&pool)
+            .insert(&revlocal_core::Finding {
+                id: revlocal_core::FindingId::new(0),
+                run_id: run.id,
+                fingerprint: "abc123".to_owned(),
+                severity: revlocal_core::Severity::Medium,
+                category: revlocal_core::Category::Correctness,
+                confidence: 0.9,
+                file: Some("src/pager.rs".to_owned()),
+                line_start: Some(74),
+                line_end: Some(74),
+                title: "Inclusive range walks one past the last index".to_owned(),
+                body: "The loop uses `..=len`, so the last iteration indexes out of range."
+                    .to_owned(),
+                failure_scenario: None,
+                suggested_fix: None,
+                state: revlocal_core::FindingState::Open,
+                created_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = findings(&pool, None, None, 10)
+            .await
+            .map_err(|e| e.to_string())?;
+        let row = report.findings.first().ok_or("no findings listed")?;
+
+        // The repository comes from the run's change, which is the join this
+        // guards: a render test alone would pass with the wrong repository.
+        assert_eq!(row.repo, "acme-api");
+        assert_eq!(row.line, Some(74));
+
+        let human = report.render_human();
+        assert!(human.contains("acme-api"), "{human}");
+        assert!(human.contains("src/pager.rs:74"), "{human}");
+        Ok(())
     }
 
     #[tokio::test]
