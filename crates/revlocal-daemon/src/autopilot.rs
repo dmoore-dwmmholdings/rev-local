@@ -261,11 +261,10 @@ pub async fn tick(
     let (reachable, missing): (Vec<Repo>, Vec<Repo>) = repos
         .into_iter()
         .partition(crate::repos::checkout_is_present);
-    for repo in &missing {
-        report
-            .notes
-            .push(crate::repos::checkout_missing_detail(repo));
-    }
+    // Recorded, not yet reported. The drain below reaches the same conclusion
+    // about the same repositories from the other side — its queued runs cannot
+    // proceed — and a reader needs the repository, the cause and the remedy once.
+    // That the loop learned it in two places is rev-local's business (RL-1536).
     let mut repos = reachable;
 
     // Backfill a remote nobody recorded (RL-1514). Every repository on the live
@@ -314,9 +313,17 @@ pub async fn tick(
     }
     // Not `stopped`: an install with no repositories yet is somebody halfway
     // through setting up, not a system that has been halted. A pass where every
-    // repository has vanished is not halted either — the notes above say what
-    // happened, and saying it twice in different words helps nobody.
+    // repository has vanished is not halted either.
+    //
+    // The missing ones are reported here, because this returns before the drain
+    // that would otherwise report them — and a pass where *every* repository has
+    // gone must not fall silent about all of them.
     if repos.is_empty() {
+        for repo in &missing {
+            report
+                .notes
+                .push(crate::repos::checkout_missing_detail(repo));
+        }
         return Ok(report);
     }
 
@@ -371,7 +378,19 @@ pub async fn tick(
                 detail: error.to_string(),
             })?;
     report.reviewed = drained.finished;
-    report.notes.extend(drained.held);
+    // The drain's held lines already name the repository and the remedy, so a
+    // repository it mentioned needs nothing further from discovery. One that it
+    // did not — because it had no queued runs at all — still does, or its absence
+    // would go unsaid entirely.
+    let held = drained.held;
+    for repo in &missing {
+        if !held.iter().any(|line| line.contains(repo.name.as_str())) {
+            report
+                .notes
+                .push(crate::repos::checkout_missing_detail(repo));
+        }
+    }
+    report.notes.extend(held);
 
     // Last, and unconditional: an action left `pending` by an earlier tick is
     // still owed delivery even if this tick reviewed nothing.

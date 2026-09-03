@@ -337,6 +337,21 @@ async fn a_repository_whose_checkout_is_gone_costs_nothing_and_says_so(
         note.contains("try:"),
         "a problem with no remedy is a dead end: {note}"
     );
+
+    // Once. Discovery and the drain reach the same conclusion from opposite
+    // sides — this repository was not searched, and its queued runs cannot
+    // proceed — and a reader needs the repository, the cause and the remedy one
+    // time (RL-1536).
+    assert_eq!(
+        report
+            .notes
+            .iter()
+            .filter(|note| note.contains("checkout is gone"))
+            .count(),
+        1,
+        "one fact, one line: {:?}",
+        report.notes
+    );
     Ok(())
 }
 
