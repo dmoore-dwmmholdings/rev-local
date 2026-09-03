@@ -684,6 +684,13 @@ export type DoctorReport = {
   engines: DoctorCheck[];
   targets: DoctorCheck[];
   platform: DoctorCheck[];
+  /**
+   * What the install itself is doing — autopilot, checkouts, approvals.
+   *
+   * Optional because a report serialised before RL-1551 has no such field, and a
+   * screen that throws on last week's JSON is worse than one that shows less.
+   */
+  install?: DoctorCheck[];
 };
 
 export type Limits = {
@@ -706,7 +713,15 @@ export type SettingsView = {
 
 /** Every check in report order — the four groups are presentation, not meaning. */
 export function allChecks(report: DoctorReport): DoctorCheck[] {
-  return [...report.prerequisites, ...report.engines, ...report.targets, ...report.platform];
+  return [
+    ...report.prerequisites,
+    ...report.engines,
+    ...report.targets,
+    ...report.platform,
+    // Last, because it is the section somebody scrolls to when the ones above
+    // are all green and nothing is happening anyway (RL-1551).
+    ...(report.install ?? []),
+  ];
 }
 
 /** How many capabilities are unmapped across every target. */

@@ -209,6 +209,44 @@ describe('settings', () => {
     expect(screen.getByText(/npm i -g @anthropic-ai\/claude-code/)).toBeTruthy();
   });
 
+  it('shows what the install itself is doing, not just its tooling', () => {
+    // RL-1551. Doctor reported on binaries and said nothing about the install,
+    // on a machine where autopilot had never been switched on and 51 runs sat
+    // queued. `allChecks` dropped the section even once the daemon filled it,
+    // so fixing the Rust half alone changed nothing anybody could see.
+    mount(
+      view({
+        doctor: {
+          prerequisites: [],
+          engines: [],
+          targets: [],
+          platform: [],
+          install: [
+            {
+              name: 'install:autopilot',
+              health: 'warn',
+              detail: 'off, and 51 run(s) are queued — nothing is reviewing them',
+              remediation: 'switch it on from the dashboard',
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByText(/51 run\(s\) are queued/)).toBeTruthy();
+    expect(screen.getByText(/switch it on from the dashboard/)).toBeTruthy();
+  });
+
+  it('renders a report from before the install section existed', () => {
+    // `install` is optional on purpose: a screen that throws on last week's JSON
+    // is worse than one that shows less.
+    mount(
+      view({ doctor: { prerequisites: [{ name: 'git', health: 'ok', detail: 'git 2.44' }], engines: [], targets: [], platform: [] } }),
+    );
+
+    expect(screen.getByText(/git 2.44/)).toBeTruthy();
+  });
+
   it('says doctor has not run rather than showing an empty pass', () => {
     // An empty report is "nothing ran", not "everything is fine".
     mount(

@@ -895,11 +895,26 @@ async fn settings() -> Result<serde_json::Value, String> {
 /// which §15 forbids: the app stays usable while work happens.
 #[tauri::command]
 async fn run_doctor() -> Result<serde_json::Value, String> {
-    let report = tokio::task::spawn_blocking(|| revlocal_daemon::doctor::gather(0))
+    let mut report = tokio::task::spawn_blocking(|| revlocal_daemon::doctor::gather(0))
         .await
         .map_err(|e| format!("doctor did not finish: {e}"))?;
 
     let config = global_config();
+
+    // The install's own state, not just its tooling (RL-1551). Every
+    // prerequisite can pass while no work moves at all, and this screen is where
+    // somebody looks when it does not. A database that cannot be opened leaves
+    // the section empty rather than failing the screen: the engine and target
+    // checks above it are still worth showing.
+    if let Ok(pool) = revlocal_store::open(&database_path()).await {
+        report.install = revlocal_daemon::doctor::install_checks(
+            &pool,
+            i64::from(config.global.approval_ttl_hours),
+            chrono::Utc::now(),
+        )
+        .await;
+        pool.close().await;
+    }
     let view = revlocal_daemon::settings_view::gather_with_resolver(
         &config,
         &config_path().display().to_string(),
