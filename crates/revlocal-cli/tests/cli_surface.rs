@@ -2023,7 +2023,52 @@ mod watch_loop {
 // --- backfill (RL-1201, §7.4) ----------------------------------------------
 
 mod backfill_command {
-    use revlocal_cli::backfill::{render, BackfillReport, ENUMERATION_CAP};
+    use revlocal_cli::backfill::{plan_backfill, render, BackfillReport, ENUMERATION_CAP};
+
+    #[tokio::test]
+    async fn backfilling_an_svn_repository_does_not_suggest_git_rev_parse() -> Result<(), String> {
+        // RL-1558. RL-1557 put the honest message in `discover_one` and I closed
+        // it there; `GitAdapter::new()` is hardcoded in five places and I had
+        // fixed one. `backfill` still said the working copy "is not a git
+        // repository", and then suggested running `git rev-parse` inside it.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let now = chrono::Utc::now();
+        revlocal_store::RepoStore::new(&pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: "legacy".to_owned(),
+                kind: revlocal_core::RepoKind::Svn,
+                // A path that exists: this must fail on the kind, not the path.
+                local_path: Some(dir.path().display().to_string()),
+                remote_url: None,
+                default_branch: Some("trunk".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let failed = plan_backfill(&pool, "legacy", "1", None, now)
+            .await
+            .err()
+            .ok_or("backfill should refuse an svn repository")?;
+        let said = failed.to_string();
+        pool.close().await;
+
+        assert!(said.contains("cannot review a `svn` repository"), "{said}");
+        // The two wrong remedies the old error carried.
+        assert!(!said.contains("not a git repository"), "{said}");
+        assert!(!said.contains("git rev-parse"), "{said}");
+        Ok(())
+    }
 
     fn report(items: usize, excluded: usize, truncated: bool) -> BackfillReport {
         BackfillReport {

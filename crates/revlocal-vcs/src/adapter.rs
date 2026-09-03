@@ -244,6 +244,33 @@ pub struct HookReport {
     pub problems: Vec<ProbeProblem>,
 }
 
+/// Why this repository's kind cannot be reviewed yet, if it cannot.
+///
+/// `None` for git, the only kind with a [`VcsAdapter`] impl. `svn/` and
+/// `github/` carry real implementations — discovery, materialisation, pull
+/// requests — and nothing routes to them.
+///
+/// # Why this lives here rather than in each caller
+///
+/// `GitAdapter::new()` is hardcoded in five places: the autopilot's discovery
+/// and executor, the desktop's add-repository preview, `backfill` and `review`.
+/// The first version of this check went into one of them, and the other four went
+/// on telling somebody with a Subversion working copy that it "is not a git
+/// repository" — `backfill` went further and suggested `git rev-parse` in it
+/// (RL-1558). A check beside the adapters is one every caller can reach.
+///
+/// The message carries no repository name: callers that have one prepend it.
+pub fn unsupported_kind(repo: &Repo) -> Option<String> {
+    match repo.kind {
+        RepoKind::Git => None,
+        kind => Some(format!(
+            "rev-local cannot review a `{}` repository yet — only `git` is wired\n  try: point this repository at a git checkout, or disable it until {} support lands",
+            kind.as_str(),
+            kind.as_str()
+        )),
+    }
+}
+
 /// One version-control system, behind one interface (SPEC §6.1).
 #[async_trait::async_trait]
 pub trait VcsAdapter: Send + Sync {

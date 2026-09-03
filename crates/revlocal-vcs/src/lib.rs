@@ -21,8 +21,8 @@ pub mod skip_rules;
 pub mod svn;
 
 pub use adapter::{
-    ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem, ProbeReport, Result,
-    VcsAdapter, VcsError,
+    unsupported_kind, ChangeContext, DetectedChange, HookMode, HookReport, ProbeProblem,
+    ProbeReport, Result, VcsAdapter, VcsError,
 };
 pub use git::{
     origin_url, CursorState, DiscoveryEvent, GitAdapter, GitError, GitOutput, GitRunner, EMPTY_TREE,

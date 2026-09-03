@@ -64,6 +64,17 @@ pub enum BackfillError {
         detail: String,
     },
 
+    /// The repository's kind has no adapter, so there is no history to read.
+    ///
+    /// Separate from [`Enumerate`](Self::Enumerate) because that variant appends
+    /// a `git rev-parse` remedy, and telling somebody to run it inside a
+    /// Subversion working copy is worse than saying nothing (RL-1558).
+    #[error("{detail}")]
+    UnsupportedKind {
+        /// What is wrong and what to try.
+        detail: String,
+    },
+
     /// The report could not be serialised.
     #[error("could not render the report: {source}")]
     Unrenderable {
@@ -204,6 +215,13 @@ pub async fn plan_backfill(
     // §18 names, produced by the code that exists to report it.
     //
     // Found by running it against a five-commit repository.
+    // Before reaching for the git adapter: a Subversion working copy used to come
+    // back "is not a git repository", with a second remedy suggesting
+    // `git rev-parse` inside it (RL-1558).
+    if let Some(detail) = revlocal_vcs::unsupported_kind(&repo) {
+        return Err(BackfillError::UnsupportedKind { detail });
+    }
+
     let changes = GitAdapter::new()
         .discover(&repo, Some(&start), ENUMERATION_CAP)
         .await

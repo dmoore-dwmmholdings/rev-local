@@ -679,7 +679,7 @@ pub async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
     //
     // Named as unsupported rather than refused at `repo add`: the kind is in the
     // spec and the CLI is right to accept it. What was wrong was the diagnosis.
-    if let Some(detail) = unsupported_kind(repo) {
+    if let Some(detail) = revlocal_vcs::unsupported_kind(repo) {
         return failed_pass(repo, detail);
     }
 
@@ -726,25 +726,6 @@ pub async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
     }
 
     pass
-}
-
-/// Why this repository's kind cannot be reviewed yet, if it cannot.
-///
-/// `None` for git, which is the only kind with a `VcsAdapter` impl. The others
-/// are not unimplemented so much as unrouted — `svn/discover.rs` and
-/// `github/pull_requests.rs` exist — and saying so is the difference between a
-/// person checking a correct path and a person knowing to wait (RL-1557).
-pub fn unsupported_kind(repo: &Repo) -> Option<String> {
-    match repo.kind {
-        revlocal_core::RepoKind::Git => None,
-        // No repository name in the text: both callers prepend it, and the first
-        // version of this read "legacy: legacy: rev-local cannot ...".
-        kind => Some(format!(
-            "rev-local cannot review a `{}` repository yet — only `git` is wired\n  try: point this repository at a git checkout, or disable it until {} support lands",
-            kind.as_str(),
-            kind.as_str()
-        )),
-    }
 }
 
 fn failed_pass(repo: &Repo, error: String) -> RepoPass {

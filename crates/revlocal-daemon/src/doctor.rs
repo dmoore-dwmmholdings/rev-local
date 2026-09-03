@@ -644,7 +644,7 @@ pub async fn install_checks(
             let unrouted: Vec<&str> = repos
                 .iter()
                 .copied()
-                .filter(|repo| crate::autopilot::unsupported_kind(repo).is_some())
+                .filter(|repo| revlocal_vcs::unsupported_kind(repo).is_some())
                 .map(|repo| repo.name.as_str())
                 .collect();
             if !unrouted.is_empty() {

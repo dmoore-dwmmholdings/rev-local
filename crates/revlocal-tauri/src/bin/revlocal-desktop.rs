@@ -841,6 +841,13 @@ async fn discover_for(pool: &revlocal_store::Pool, name: &str) -> Result<(), Str
         .find(|r| r.name == name)
         .ok_or_else(|| format!("no repository called {name}"))?;
 
+    // A kind with no adapter must not be handed to the git one: the preview used
+    // to report "is not a git repository" about a path that was correct
+    // (RL-1558).
+    if let Some(detail) = revlocal_vcs::unsupported_kind(repo) {
+        return Err(format!("{name}: {detail}"));
+    }
+
     let changes = revlocal_vcs::GitAdapter::new()
         .discover(repo, None, 50)
         .await
