@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id FROM run\n             WHERE status NOT IN ('done','failed','skipped','cancelled')\n               AND COALESCE(started_at, created_at) < ?\n             ORDER BY id",
+  "query": "SELECT id FROM run\n             WHERE status IN ('preparing','reviewing','synthesizing','publishing')\n               AND COALESCE(started_at, created_at) < ?\n             ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "a5ccfaf56892abc68d23dfa9f4d98b69e740efdfd12b83f18afe8395bf250090"
+  "hash": "bda393aacb0a09bbe121eeebe92fe7b6a024b53054f36f2bb1345418d5122331"
 }

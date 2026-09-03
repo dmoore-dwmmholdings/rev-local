@@ -311,9 +311,14 @@ mod state_machine {
         let store = RunStore::new(&pool);
         let sink = Collector::default();
 
-        // The daemon dies on each attempt in turn. Recovery creates the successor
-        // itself, so this only has to keep advancing the clock: each new attempt is
-        // queued and then, twenty minutes later, is as abandoned as the last one.
+        // The daemon dies on each attempt in turn.
+        //
+        // Advancing the clock is no longer enough on its own. Recovery creates the
+        // successor as `queued`, and since RL-1537 a queued run is the drain's
+        // business rather than recovery's — so each attempt has to actually *start*
+        // before it can be stranded again, which is what the drain would do. That
+        // is the real sequence: the loop picks it up, it crashes, recovery catches
+        // it, and the ceiling still holds.
         store
             .insert(&a_run(change, 1, RunStatus::Reviewing, at(0)))
             .await
@@ -323,6 +328,25 @@ mod state_machine {
             recover(&pool, &sink, at(minute))
                 .await
                 .unwrap_or_else(|e| panic!("recover at {minute}: {e}"));
+
+            // Stand in for the drain starting the successor it just created.
+            let queued: Vec<_> = store
+                .list_for_change(change)
+                .await
+                .unwrap_or_else(|e| panic!("list: {e}"))
+                .into_iter()
+                .filter(|run| run.status == RunStatus::Queued)
+                .collect();
+            for run in queued {
+                store
+                    .transition(run.id, RunStatus::Queued, RunStatus::Preparing)
+                    .await
+                    .unwrap_or_else(|e| panic!("start: {e}"));
+                store
+                    .transition(run.id, RunStatus::Preparing, RunStatus::Reviewing)
+                    .await
+                    .unwrap_or_else(|e| panic!("review: {e}"));
+            }
         }
 
         let runs = store
@@ -422,9 +446,21 @@ mod state_machine {
     }
 
     #[tokio::test]
-    async fn state_machine_a_queued_run_is_as_abandoned_as_a_reviewing_one() {
-        // A run queued an hour ago is not waiting its turn — nothing is going to
-        // pick it up, because whatever would have is gone.
+    async fn state_machine_a_queued_run_is_left_for_the_loop_to_pick_up() {
+        // This test used to assert the opposite, and its reasoning was sound at the
+        // time: "a run queued an hour ago is not waiting its turn — nothing is
+        // going to pick it up, because whatever would have is gone." When it was
+        // written that was true. A pass was `watch --once`, and a queued run meant
+        // a daemon that had died before starting it.
+        //
+        // RL-1501 changed the premise. There is now a loop that drains the queue
+        // every sixty seconds, so a run queued an hour ago is waiting its turn —
+        // and on a queue of any size, waiting is the normal state. Recovering it
+        // failed it as `interrupted`, and with `max_attempts` of 3 anything that
+        // could not reach the front within three stale windows was abandoned
+        // (RL-1537).
+        //
+        // The decision was not wrong. The world it described stopped existing.
         let (_dir, pool, change) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
         let sink = Collector::default();
 
@@ -436,7 +472,10 @@ mod state_machine {
         let report = recover(&pool, &sink, at(30))
             .await
             .unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(report.interrupted.len(), 1);
+        assert!(
+            report.is_empty(),
+            "a queued run belongs to the drain, not to recovery: {report:?}"
+        );
     }
 
     #[tokio::test]
@@ -519,6 +558,82 @@ mod state_machine {
             RunStatus::Done,
             "a completed run must not be rewritten as interrupted"
         );
+    }
+
+    // --- what recovery is for, and what it is not (RL-1537) --------------------
+
+    #[tokio::test]
+    async fn a_queued_run_is_not_recovered_however_long_it_waits() {
+        // `list_stale` selected anything non-terminal, so `queued` was swept up
+        // with the runs a crash genuinely stranded. A queued run has not been
+        // interrupted: it is waiting its turn. With `max_attempts` of 3 that meant
+        // a run which could not reach the front of the queue within three stale
+        // windows was failed twice and then given up on — recorded as
+        // `interrupted`, which sends whoever reads it looking for a crash that
+        // never happened.
+        let (_dir, pool, change) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let sink = Collector::default();
+        let run = RunStore::new(&pool)
+            .insert(&a_run(change, 1, RunStatus::Queued, at(0)))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        // Nine hours: far past any stale window.
+        let report = recover(&pool, &sink, at(540))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(
+            report.is_empty(),
+            "a queued run is waiting, not stranded: {report:?}"
+        );
+        let stored = RunStore::new(&pool)
+            .get(run.id)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(stored.status, RunStatus::Queued, "and it stays queued");
+    }
+
+    #[tokio::test]
+    async fn an_approval_waiting_for_a_human_is_not_recovered() {
+        // §12.4 makes this wait deliberate and RL-1523 expires it deliberately.
+        // Recovery treating it as a crash would fail the run out from under the
+        // person being asked.
+        let (_dir, pool, change) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let sink = Collector::default();
+        let run = RunStore::new(&pool)
+            .insert(&a_run(change, 1, RunStatus::AwaitingApproval, at(0)))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let report = recover(&pool, &sink, at(540))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(report.is_empty(), "{report:?}");
+        let stored = RunStore::new(&pool)
+            .get(run.id)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(stored.status, RunStatus::AwaitingApproval);
+    }
+
+    #[tokio::test]
+    async fn a_run_stranded_mid_stage_is_still_recovered() {
+        // The other half. Narrowing the net must not stop it catching what it is
+        // for: a process that died with a review in flight.
+        let (_dir, pool, change) = seeded().await.unwrap_or_else(|e| panic!("seed: {e}"));
+        let sink = Collector::default();
+        RunStore::new(&pool)
+            .insert(&a_run(change, 1, RunStatus::Reviewing, at(0)))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let report = recover(&pool, &sink, at(540))
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(report.interrupted.len(), 1, "{report:?}");
     }
 }
 

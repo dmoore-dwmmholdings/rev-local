@@ -423,8 +423,21 @@ impl<'a> RunStore<'a> {
         let cutoff = format_time(now - stale_after);
 
         let rows = sqlx::query!(
+            // The states a crash can strand a run in — the ones where a process
+            // was doing something and stopped.
+            //
+            // `queued` was in this set by being "not terminal", and a queued run
+            // has not been interrupted: it is waiting its turn. With
+            // `max_attempts` of 3 that meant any run which could not reach the
+            // front of the queue within roughly three stale windows was failed,
+            // re-enqueued twice, and then given up on — with `interrupted`
+            // recorded against it, sending whoever read it looking for a crash
+            // that never happened (RL-1537).
+            //
+            // `awaiting_approval` is excluded for the same reason: it is waiting
+            // for a person, and RL-1523 expires it deliberately and says so.
             "SELECT id FROM run
-             WHERE status NOT IN ('done','failed','skipped','cancelled')
+             WHERE status IN ('preparing','reviewing','synthesizing','publishing')
                AND COALESCE(started_at, created_at) < ?
              ORDER BY id",
             cutoff
