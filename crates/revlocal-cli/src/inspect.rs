@@ -431,8 +431,33 @@ pub struct RunDetail {
     /// Names, not a count: §18's whole point about truncation is that "58 files
     /// omitted" cannot be checked and a list can.
     pub omitted_files: Vec<String>,
-    /// What it found.
-    pub findings: Vec<FindingRow>,
+    /// What it found, in full.
+    ///
+    /// The detail command's findings carry what the finding actually says.
+    /// Reusing the list's row here made the detail view the summary view with
+    /// more chrome, and left no CLI path at all to the body (RL-1550).
+    pub findings: Vec<FindingDetail>,
+}
+
+/// One finding with its content, for the detail view.
+///
+/// Separate from `FindingRow` on purpose: a body per row would make
+/// `findings list` unreadable, and the summary/detail split is where this
+/// belongs. The row is flattened, so a consumer of either sees the same field
+/// names for the same things.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindingDetail {
+    /// Everything the list shows.
+    #[serde(flatten)]
+    pub row: FindingRow,
+    /// The claim, in the engine's own words.
+    pub body: String,
+    /// How to make it happen, when the engine gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_scenario: Option<String>,
+    /// What to change, when the engine proposed something.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_fix: Option<String>,
 }
 
 /// One finding, as the CLI shows it.
@@ -528,16 +553,32 @@ impl RunDetail {
         }
         out.push_str(&format!("\n{} finding(s)\n", self.findings.len()));
         for finding in &self.findings {
+            let row = &finding.row;
+            let where_ = match (row.file.as_deref(), row.line) {
+                (None, _) => "(no file)".to_owned(),
+                (Some(file), None) => file.to_owned(),
+                (Some(file), Some(line)) => format!("{file}:{line}"),
+            };
             out.push_str(&format!(
-                "  {:<8} {:<12} {}\n",
-                finding.severity,
-                finding.category,
-                finding.file.as_deref().unwrap_or("(no file)")
+                "  {:<8} {:<12} {}  {}\n",
+                row.severity, row.category, row.repo, where_
             ));
-            out.push_str(&format!("           {}\n", finding.title));
+            out.push_str(&format!("           {}\n", row.title));
+            // The detail view is where the finding says what it means. Without
+            // this the only way to read it was the markdown report, and the
+            // report's path is in no machine-readable output either (RL-1550).
+            if !finding.body.trim().is_empty() {
+                out.push_str(&format!("           {}\n", finding.body.trim()));
+            }
+            if let Some(scenario) = &finding.failure_scenario {
+                out.push_str(&format!("           fails when: {}\n", scenario.trim()));
+            }
+            if let Some(fix) = &finding.suggested_fix {
+                out.push_str(&format!("           try: {}\n", fix.trim()));
+            }
             // The fingerprint is what `findings suppress` takes, so it is printed
             // rather than looked up separately.
-            out.push_str(&format!("           {}\n", finding.fingerprint));
+            out.push_str(&format!("           {}\n", row.fingerprint));
         }
         out
     }
@@ -581,7 +622,12 @@ pub async fn run_detail(pool: &Pool, run_id: RunId) -> Result<RunDetail, Inspect
         omitted_files: run.omitted_files.clone(),
         findings: findings
             .iter()
-            .map(|finding| finding_row(finding, &repo_name))
+            .map(|finding| FindingDetail {
+                row: finding_row(finding, &repo_name),
+                body: finding.body.clone(),
+                failure_scenario: finding.failure_scenario.clone(),
+                suggested_fix: finding.suggested_fix.clone(),
+            })
             .collect(),
     })
 }

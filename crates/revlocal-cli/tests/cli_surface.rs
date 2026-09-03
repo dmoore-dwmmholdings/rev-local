@@ -854,7 +854,7 @@ mod hooks_command {
 
 mod inspect_commands {
     use revlocal_cli::inspect::{
-        approvals, budget, findings, render, ApprovalsReport, WaitingAction,
+        approvals, budget, findings, render, run_detail, ApprovalsReport, WaitingAction,
     };
     use revlocal_core::{BudgetSettings, RepoId, Usage};
     #[allow(unused_imports)]
@@ -894,18 +894,18 @@ mod inspect_commands {
         Ok((pool, dir, repo.id))
     }
 
-    #[tokio::test]
-    async fn a_listed_finding_names_its_repository_and_its_line() -> Result<(), String> {
-        // RL-1549. This is the surface an autonomous loop reads, and a row of it
-        // carried neither. The premise is one app watching every local
-        // repository, so `src/pager.rs` exists in several of them and a path on
-        // its own names no checkout to open. `Finding` has carried `line_start`
-        // all along and the row dropped it, leaving an agent to search for the
-        // site itself.
-        let (pool, _dir, repo_id) = store().await?;
+    /// One repository, one change, one run, one finding with all its content.
+    ///
+    /// Shared by the list and detail tests so they assert against the same row —
+    /// two fixtures drift, and then the two surfaces disagree without either
+    /// test noticing.
+    async fn seed_one_finding(
+        pool: &Pool,
+        repo_id: RepoId,
+    ) -> Result<revlocal_core::RunId, String> {
         let now = chrono::Utc::now();
 
-        let change = revlocal_store::ChangeStore::new(&pool)
+        let change = revlocal_store::ChangeStore::new(pool)
             .upsert(&revlocal_core::Change {
                 id: revlocal_core::ChangeId::new(0),
                 repo_id,
@@ -925,7 +925,7 @@ mod inspect_commands {
             .await
             .map_err(|e| e.to_string())?;
 
-        let run = revlocal_store::RunStore::new(&pool)
+        let run = revlocal_store::RunStore::new(pool)
             .insert(&revlocal_core::Run {
                 id: revlocal_core::RunId::new(0),
                 change_id: change.id,
@@ -951,7 +951,7 @@ mod inspect_commands {
             .await
             .map_err(|e| e.to_string())?;
 
-        revlocal_store::FindingStore::new(&pool)
+        revlocal_store::FindingStore::new(pool)
             .insert(&revlocal_core::Finding {
                 id: revlocal_core::FindingId::new(0),
                 run_id: run.id,
@@ -965,13 +965,58 @@ mod inspect_commands {
                 title: "Inclusive range walks one past the last index".to_owned(),
                 body: "The loop uses `..=len`, so the last iteration indexes out of range."
                     .to_owned(),
-                failure_scenario: None,
-                suggested_fix: None,
+                failure_scenario: Some("len == 3 panics".to_owned()),
+                suggested_fix: Some("Use `..len`.".to_owned()),
                 state: revlocal_core::FindingState::Open,
                 created_at: now,
             })
             .await
             .map_err(|e| e.to_string())?;
+
+        Ok(run.id)
+    }
+
+    #[tokio::test]
+    async fn the_detail_view_says_what_the_finding_actually_means() -> Result<(), String> {
+        // RL-1550. `RunDetail` reused the list's row, so the detail view was the
+        // summary view with more chrome and no CLI path reached `body`,
+        // `failure_scenario` or `suggested_fix` at all. An agent got a title and
+        // a location and had to infer the rest, or go find the markdown by
+        // fingerprint — and the report's path is in no machine-readable output
+        // either.
+        let (pool, _dir, repo_id) = store().await?;
+        let run_id = seed_one_finding(&pool, repo_id).await?;
+
+        let detail = run_detail(&pool, run_id).await.map_err(|e| e.to_string())?;
+        let found = detail.findings.first().ok_or("no findings on the run")?;
+
+        assert_eq!(
+            found.body,
+            "The loop uses `..=len`, so the last iteration indexes out of range."
+        );
+        assert_eq!(found.failure_scenario.as_deref(), Some("len == 3 panics"));
+        assert_eq!(found.suggested_fix.as_deref(), Some("Use `..len`."));
+        // The list's fields still travel with it, flattened, so a consumer of
+        // either surface sees the same names for the same things.
+        assert_eq!(found.row.repo, "acme-api");
+        assert_eq!(found.row.line, Some(74));
+
+        let human = detail.render_human();
+        assert!(human.contains("fails when: len == 3 panics"), "{human}");
+        assert!(human.contains("try: Use `..len`."), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_listed_finding_names_its_repository_and_its_line() -> Result<(), String> {
+        // RL-1549. This is the surface an autonomous loop reads, and a row of it
+        // carried neither. The premise is one app watching every local
+        // repository, so `src/pager.rs` exists in several of them and a path on
+        // its own names no checkout to open. `Finding` has carried `line_start`
+        // all along and the row dropped it, leaving an agent to search for the
+        // site itself.
+        let (pool, _dir, repo_id) = store().await?;
+        seed_one_finding(&pool, repo_id).await?;
 
         let report = findings(&pool, None, None, 10)
             .await
