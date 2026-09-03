@@ -84,6 +84,18 @@ pub struct AnchoredFinding {
     /// found something outside the changed lines has still found something, and a
     /// screen that silently omitted it would be hiding a result.
     pub anchorable: bool,
+    /// What the finding says, in the engine's own words.
+    ///
+    /// The screen showed a title, a severity and a location, and nothing about
+    /// what was actually wrong. The engine wrote this and the report on disk
+    /// renders it; the app threw it away before the screen saw it (RL-1552).
+    pub body: String,
+    /// How to make it happen, when the engine gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_scenario: Option<String>,
+    /// What to change, when the engine proposed something.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_fix: Option<String>,
 }
 
 /// What is known about when a run passed through its stages.
@@ -228,6 +240,9 @@ pub async fn gather(pool: &Pool, run_id: RunId) -> Result<RunView, RunViewError>
             file: finding.file,
             line_start: finding.line_start,
             line_end: finding.line_end,
+            body: finding.body,
+            failure_scenario: finding.failure_scenario,
+            suggested_fix: finding.suggested_fix,
         })
         .collect();
 

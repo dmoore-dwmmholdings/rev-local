@@ -50,6 +50,49 @@ describe('run detail', () => {
     expect(screen.getByText('src/db.rs:4')).toBeDefined();
   });
 
+  it('says what the finding actually means, not just where it is', () => {
+    // RL-1552. The screen showed a title, a severity and a location and nothing
+    // else, so the only way to learn what a finding meant was to open the
+    // markdown report by hand — and the app never names a path to it. The engine
+    // wrote all three of these and the app threw them away before rendering.
+    render(
+      <RunDetail
+        run={run({
+          findings: [
+            {
+              id: 1,
+              severity: 'high',
+              category: 'security',
+              title: 'SQL injection in find_user',
+              file: 'src/db.rs',
+              line_start: 4,
+              anchorable: true,
+              body: '`name` is formatted into the query, so it is executed as SQL.',
+              failure_scenario: 'name = "\' OR \'1\'=\'1" returns every row',
+              suggested_fix: 'Bind `name` as a parameter.',
+            },
+          ],
+        })}
+        transcript={null}
+        onExpandTranscript={noop}
+        onRetry={noop}
+      />,
+    );
+
+    expect(screen.getByText(/formatted into the query/)).toBeDefined();
+    expect(screen.getByText(/returns every row/)).toBeDefined();
+    expect(screen.getByText(/Bind `name` as a parameter/)).toBeDefined();
+  });
+
+  it('renders a finding from before the body was carried', () => {
+    // The three fields are optional on purpose: a view serialised before RL-1552
+    // has none of them, and a screen that throws on last week's JSON is worse
+    // than one that shows less.
+    render(<RunDetail run={run()} transcript={null} onExpandTranscript={noop} onRetry={noop} />);
+
+    expect(screen.getByText('SQL injection in find_user')).toBeDefined();
+  });
+
   it('shows an unanchorable finding rather than dropping it', () => {
     // §18. A review that found something outside the changed lines has still
     // found something; omitting it would hide a result.

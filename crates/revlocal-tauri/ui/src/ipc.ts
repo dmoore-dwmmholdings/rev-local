@@ -320,6 +320,17 @@ export type AnchoredFinding = {
   line_end?: number;
   /** False when this finding cannot be placed against the diff (§18). */
   anchorable: boolean;
+  /**
+   * What the finding says, in the engine's own words.
+   *
+   * Optional because a view serialised before RL-1552 has no such field, and a
+   * screen that throws on last week's JSON is worse than one that shows less.
+   */
+  body?: string;
+  /** How to make it happen, when the engine gave one. */
+  failure_scenario?: string;
+  /** What to change, when the engine proposed something. */
+  suggested_fix?: string;
 };
 
 export type Stages = {

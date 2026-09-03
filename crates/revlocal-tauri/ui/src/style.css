@@ -229,6 +229,13 @@ tr.bad td.kind { color: var(--bad); }
    read as a location. */
 .anchor-none { color: var(--warn); font-style: italic; }
 
+/* What the finding says, under its title rather than beside it: the location is
+   a label and this is a sentence, and putting them on one line makes the
+   sentence read as more chrome (RL-1552). */
+.finding-body { margin: 0.25rem 0 0; flex-basis: 100%; }
+.finding-aside { margin: 0.15rem 0 0; flex-basis: 100%; color: var(--dim); font-size: 0.9rem; }
+.finding-label { text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; }
+
 .targets { border-collapse: collapse; width: 100%; }
 .targets th {
   text-align: left;

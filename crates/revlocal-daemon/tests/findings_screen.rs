@@ -256,3 +256,27 @@ async fn a_manual_file_is_recorded_and_not_sent_in_dry_run() {
         .expect("waiting");
     assert!(waiting.is_empty());
 }
+
+#[tokio::test]
+async fn the_run_screen_carries_what_the_finding_says() -> Result<(), Box<dyn std::error::Error>> {
+    // RL-1552. `AnchoredFinding` had a title, a severity and a location and none
+    // of the three content fields, so the run screen could show where a finding
+    // was and never what it meant. The only way to read it was to open the
+    // markdown report by hand, and the app names no path to one.
+    //
+    // Database-backed rather than a mapping test: the fields are copied inside
+    // `gather`, and the regression this guards against is somebody dropping one
+    // from that builder.
+    let (_dir, pool, _first) = seeded(
+        AutonomyMode::DryRun,
+        &[(Severity::High, Category::Security, "SQL injection")],
+    )
+    .await?;
+
+    let view = revlocal_daemon::run_view::gather(&pool, revlocal_core::RunId::new(1)).await?;
+    let finding = view.findings.first().ok_or("no findings on the run")?;
+
+    assert_eq!(finding.title, "SQL injection");
+    assert_eq!(finding.body, "why it matters");
+    Ok(())
+}

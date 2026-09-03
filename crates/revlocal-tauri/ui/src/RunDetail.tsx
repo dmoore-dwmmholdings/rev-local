@@ -79,6 +79,21 @@ function Finding({ finding }: { finding: AnchoredFinding }) {
           not anchored to the diff
         </span>
       )}
+      {/* What is actually wrong. The screen showed a title, a severity and a
+          location and nothing else, so the only way to learn what a finding
+          meant was to open the markdown report by hand — and the app never
+          names a path to it (RL-1552). */}
+      {finding.body && <p className="finding-body">{finding.body}</p>}
+      {finding.failure_scenario && (
+        <p className="finding-aside">
+          <span className="finding-label">fails when</span> {finding.failure_scenario}
+        </p>
+      )}
+      {finding.suggested_fix && (
+        <p className="finding-aside">
+          <span className="finding-label">try</span> {finding.suggested_fix}
+        </p>
+      )}
     </li>
   );
 }
