@@ -376,6 +376,25 @@ describe('autopilot panel', () => {
     expect(screen.getByText(/Nothing reviews them until this is on/)).toBeDefined();
   });
 
+  it('does not count work that can never run as work that is waiting', () => {
+    // RL-1554. On the live install 43 of 51 queued runs belonged to a repository
+    // whose checkout was gone. A run like that is held every tick forever — a
+    // hold is not an attempt, so nothing gives up on it — and folding it into
+    // "waiting" gives a number that never goes down. Review all eight real
+    // changes and it still says 51, which is how a warning becomes wallpaper.
+    mount(
+      state({ enabled: false }),
+      'auto',
+      {},
+      queue({ queued_total: 51, queued_blocked: 43 }),
+    );
+
+    expect(screen.getByText(/8 changes waiting/)).toBeDefined();
+    expect(screen.queryByText(/51 changes waiting/)).toBeNull();
+    // Named, not hidden: they are still real runs somebody may want back.
+    expect(screen.getByText(/43 more are blocked/)).toBeDefined();
+  });
+
   it('stays quiet when the switch is off and nothing is waiting', () => {
     // A fresh install has an empty queue, and a warning about nothing is how a
     // panel teaches somebody to stop reading it.

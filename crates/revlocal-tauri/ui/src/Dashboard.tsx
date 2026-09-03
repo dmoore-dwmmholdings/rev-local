@@ -371,13 +371,16 @@ function AutopilotPanel({
   autopilot,
   mode,
   waiting,
+  blocked,
   onToggle,
   onRunNow,
 }: {
   autopilot: Autopilot | null;
   mode: string;
-  /** Runs queued right now, so an idle switch can say what it is idle about. */
+  /** Runnable runs queued right now, so an idle switch says what it is idle about. */
   waiting: number;
+  /** Queued runs that cannot run at all, counted apart from the ones that can. */
+  blocked: number;
   onToggle: (enabled: boolean) => void;
   onRunNow: () => void;
 }) {
@@ -417,6 +420,16 @@ function AutopilotPanel({
         <p className="autopilot-line warn-text">
           {waiting} change{waiting === 1 ? '' : 's'} waiting. Nothing reviews them
           until this is on.
+        </p>
+      )}
+      {/* Named separately rather than folded into the count above. A run whose
+          checkout is gone is held every tick forever, so counting it as waiting
+          work gives a number that never goes down — and a warning that cannot be
+          satisfied is one somebody learns to ignore (RL-1554). */}
+      {blocked > 0 && (
+        <p className="autopilot-line dim">
+          {blocked} more {blocked === 1 ? 'is' : 'are'} blocked on a repository
+          whose checkout is gone.
         </p>
       )}
 
@@ -495,7 +508,8 @@ export function Dashboard({
       <AutopilotPanel
         autopilot={autopilot}
         mode={dashboard.mode}
-        waiting={queue?.queued_total ?? 0}
+        waiting={Math.max(0, (queue?.queued_total ?? 0) - (queue?.queued_blocked ?? 0))}
+        blocked={queue?.queued_blocked ?? 0}
         onToggle={onToggleAutopilot}
         onRunNow={onAutopilotNow}
       />

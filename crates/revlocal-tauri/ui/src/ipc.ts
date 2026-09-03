@@ -241,6 +241,12 @@ export type QueueStatus = {
   draining: boolean;
   paused: boolean;
   queued_total: number;
+  /**
+   * How many of those cannot run because their repository's checkout is gone.
+   *
+   * Optional because a status serialised before RL-1554 has no such field.
+   */
+  queued_blocked?: number;
   active: QueueItem[];
   /** The head of the queue, in the order it will run. */
   waiting: QueueItem[];

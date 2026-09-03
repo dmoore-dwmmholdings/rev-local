@@ -286,8 +286,12 @@ mod doctor {
 
         let human = render(&report, false).unwrap_or_default();
 
-        // Each of the three facts, named rather than counted.
-        assert!(human.contains("1 run(s) are queued"), "{human}");
+        // The queued run is behind the missing checkout, so it is not reported as
+        // work that is waiting to be reviewed — it never will be, until somebody
+        // puts the checkout back (RL-1554). But "nothing is waiting" would be a
+        // false claim while it sits there, so the line says which it is.
+        assert!(human.contains("blocked on a missing checkout"), "{human}");
+        assert!(!human.contains("nothing is waiting"), "{human}");
         assert!(human.contains("gone-away"), "{human}");
         // And the closing line no longer claims all-clear over the top of them.
         assert!(

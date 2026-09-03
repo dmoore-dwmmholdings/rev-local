@@ -574,10 +574,11 @@ pub async fn install_checks(
 ) -> Vec<Check> {
     let mut checks = Vec::new();
 
-    let queued = revlocal_store::RunStore::new(pool)
-        .count_matching(None, Some(revlocal_core::RunStatus::Queued))
-        .await
-        .unwrap_or_default();
+    // Split, not totalled: a run whose checkout is gone is held every tick
+    // forever, and counting it as waiting work makes a number that never goes
+    // down (RL-1554). `install:repos` below names those repositories, and the
+    // two halves of one report must not disagree about the same runs.
+    let (queued, blocked) = crate::repos::queued_split(pool).await.unwrap_or_default();
 
     let autopilot_on = revlocal_store::SettingStore::new(pool)
         .get(crate::autopilot::SETTING_AUTOPILOT)
@@ -590,10 +591,25 @@ pub async fn install_checks(
     checks.push(match (autopilot_on, queued) {
         (true, _) => Check::ok("install:autopilot", "on"),
         // Off with nothing waiting is a quiet install, not a stopped one.
+        // Nothing *runnable* waiting. "Nothing is waiting" would still be a
+        // false claim while runs sit queued behind a missing checkout, so say
+        // which it is — `install:repos` below names the repositories, and the
+        // two halves of one report must agree about the same runs.
+        (false, 0) if blocked > 0 => Check::ok(
+            "install:autopilot",
+            &format!("off; the {blocked} queued run(s) are blocked on a missing checkout"),
+        ),
         (false, 0) => Check::ok("install:autopilot", "off, and nothing is waiting"),
         (false, n) => Check::warn(
             "install:autopilot",
-            &format!("off, and {n} run(s) are queued — nothing is reviewing them"),
+            &format!(
+                "off, and {n} run(s) are queued — nothing is reviewing them{}",
+                if blocked > 0 {
+                    format!(" ({blocked} more are blocked on a missing checkout)")
+                } else {
+                    String::new()
+                }
+            ),
             Some(
                 "switch it on from the dashboard, or run `revlocal watch` on a timer if you drive it yourself",
             ),

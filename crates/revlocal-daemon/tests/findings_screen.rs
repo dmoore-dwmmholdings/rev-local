@@ -280,3 +280,98 @@ async fn the_run_screen_carries_what_the_finding_says() -> Result<(), Box<dyn st
     assert_eq!(finding.body, "why it matters");
     Ok(())
 }
+
+#[tokio::test]
+async fn queued_work_behind_a_missing_checkout_is_counted_apart(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // RL-1554. On the live install 43 of 51 queued runs belonged to a repository
+    // whose checkout was gone. A run like that is held every tick forever — a
+    // hold is not an attempt, so `max_attempts` never applies and nothing gives
+    // up on it — and every count folded it into "waiting". The number then never
+    // goes down, which is how a warning becomes wallpaper.
+    let (dir, pool, _first) = seeded(
+        AutonomyMode::DryRun,
+        &[(Severity::High, Category::Security, "SQL injection")],
+    )
+    .await?;
+
+    // The fixture's repository has no `local_path`, which is "not known to be
+    // unreachable" rather than gone — so its queued work counts as runnable.
+    let (runnable, blocked) = revlocal_daemon::repos::queued_split(&pool).await?;
+    assert_eq!(
+        (runnable, blocked),
+        (0, 0),
+        "the fixture leaves nothing queued"
+    );
+
+    // A second repository pointing at a path that does not exist, with a run
+    // queued against it.
+    let gone = RepoStore::new(&pool)
+        .insert(&Repo {
+            id: RepoId::new(0),
+            name: "gone".to_owned(),
+            kind: RepoKind::Git,
+            local_path: Some(dir.path().join("not-here").display().to_string()),
+            remote_url: None,
+            default_branch: Some("main".to_owned()),
+            engine: EngineKind::Mock,
+            autonomy: AutonomyMode::DryRun,
+            enabled: true,
+            config_json: "{}".to_owned(),
+            created_at: at(0),
+            updated_at: at(0),
+        })
+        .await?;
+
+    let change = ChangeStore::new(&pool)
+        .upsert(&Change {
+            id: ChangeId::new(0),
+            repo_id: gone.id,
+            kind: ChangeKind::Commit,
+            external_id: "blocked-1".to_owned(),
+            title: None,
+            author_name: None,
+            author_email: None,
+            authored_at: None,
+            branch: Some("main".to_owned()),
+            base_ref: None,
+            head_ref: None,
+            url: None,
+            diff_stat: DiffStat::default(),
+            detected_at: at(1),
+        })
+        .await?;
+
+    RunStore::new(&pool)
+        .insert(&Run {
+            id: RunId::new(0),
+            change_id: change.id,
+            attempt: 1,
+            status: RunStatus::Queued,
+            engine: EngineKind::Mock,
+            depth: Depth::Summary,
+            trigger: TriggerSource::Poll,
+            skip_reason: None,
+            error: None,
+            error_detail: None,
+            degraded: None,
+            usage: Usage::default(),
+            started_at: None,
+            finished_at: None,
+            transcript_path: None,
+            truncated: false,
+            omitted_files: Vec::new(),
+            verdict: None,
+            summary: None,
+            created_at: at(1),
+        })
+        .await?;
+
+    let (runnable, blocked) = revlocal_daemon::repos::queued_split(&pool).await?;
+    assert_eq!(
+        runnable, 0,
+        "a run behind a missing checkout is not runnable"
+    );
+    assert_eq!(blocked, 1, "and it is still counted, not dropped");
+    Ok(())
+}

@@ -255,6 +255,8 @@ struct QueueStatus {
     /// The kill switch is engaged, so nothing will start.
     paused: bool,
     queued_total: u32,
+    /// How many of those cannot run because their checkout is gone (RL-1554).
+    queued_blocked: u32,
     active: Vec<QueueItem>,
     /// The head of the queue, oldest first — the order they will run in.
     waiting: Vec<QueueItem>,
@@ -345,6 +347,12 @@ async fn queue_status() -> Result<serde_json::Value, String> {
             .count_matching(None, Some(revlocal_core::RunStatus::Queued))
             .await
             .map_err(|e| e.to_string())?;
+        // How much of that total can actually run. A run whose checkout is gone
+        // is held every tick forever, so a panel that folds it into "waiting"
+        // shows a number that never goes down (RL-1554).
+        let (_runnable, queued_blocked) = revlocal_daemon::repos::queued_split(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
         // The same 200-run window the executor drains, so the head of this list is
         // genuinely the run that goes next — the newest 8 queued runs would be the
@@ -382,6 +390,7 @@ async fn queue_status() -> Result<serde_json::Value, String> {
             draining: QUEUE_DRAINING.load(Ordering::Acquire),
             paused,
             queued_total,
+            queued_blocked,
             waiting_hidden: queued_total
                 .saturating_sub(u32::try_from(queued.len()).unwrap_or(u32::MAX)),
             active: queue_items(&pool, &repos, &active, &mut changes).await?,

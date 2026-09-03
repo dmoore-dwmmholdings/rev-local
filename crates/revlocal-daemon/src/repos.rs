@@ -263,6 +263,48 @@ pub fn checkout_missing_detail(repo: &revlocal_core::Repo) -> String {
     )
 }
 
+/// Queued runs split into what can run and what cannot (RL-1554).
+///
+/// # Why the total on its own is misleading
+///
+/// A run whose repository has no checkout is held every tick and will be held
+/// every tick forever: a hold is not an attempt, so `max_attempts` never applies
+/// and nothing gives up on it. On the live install 43 of 51 queued runs were
+/// like that, and every count — the queue panel, `doctor`, the dashboard's
+/// "changes waiting" warning — reported all 51 as work in progress.
+///
+/// The number then never goes down. Review all eight real changes and it still
+/// says 43 are waiting, which turns a warning into something somebody learns to
+/// ignore.
+///
+/// Returns `(runnable, blocked)`. Counted per repository rather than with a
+/// join, because the "can this run" test is a filesystem check rather than
+/// anything the database knows.
+pub async fn queued_split(pool: &Pool) -> Result<(u32, u32), revlocal_store::StoreError> {
+    let runs = revlocal_store::RunStore::new(pool);
+    let mut runnable = 0_u32;
+    let mut blocked = 0_u32;
+
+    for repo in RepoStore::new(pool).list().await? {
+        let queued = runs
+            .count_matching(Some(repo.id), Some(revlocal_core::RunStatus::Queued))
+            .await?;
+        if queued == 0 {
+            continue;
+        }
+        // The same predicate the drain uses, rather than a second opinion about
+        // what "reachable" means — two of those disagree the first time either
+        // changes.
+        if repo.enabled && checkout_is_present(&repo) {
+            runnable = runnable.saturating_add(queued);
+        } else {
+            blocked = blocked.saturating_add(queued);
+        }
+    }
+
+    Ok((runnable, blocked))
+}
+
 /// Add a repository (§14).
 ///
 /// `autonomy` defaults to `dry_run` rather than anything that acts. A repository
