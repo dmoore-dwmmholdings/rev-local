@@ -574,3 +574,55 @@ fn idempotency_the_backoff_schedule_is_reproducible() {
         );
     }
 }
+
+// --- SPEC principle 3: every outbound write is audited with a receipt -------
+
+#[tokio::test]
+async fn a_delivery_is_recorded_in_the_audit_log_with_its_receipt() {
+    // SPEC's third principle says every outbound write "is recorded in an audit
+    // log with a receipt". Only approval expiry was writing one, so a delivery
+    // left no trace in the place §5 says to look — and a delivery with no record
+    // is indistinguishable from one that never happened, which is the case this
+    // project exists for (RL-1555).
+    //
+    // The receipt is what makes the entry worth having: "an issue was filed" is
+    // not reviewable, "REVL-1 was filed" is.
+    let (_dir, pool, run) = seeded().await.unwrap_or_else(|e| panic!("{e}"));
+
+    let mut queue = PublishQueue::new(pool.clone(), QueueConfig::default());
+    queue.register(Arc::new(CountingTarget {
+        id: "andare".to_owned(),
+        calls: Arc::new(AtomicUsize::new(0)),
+    }));
+    queue
+        .enqueue(&an_action(run, "andare", "finding-abc"))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    queue
+        .dispatch_pending(at(4))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    // `list_for_run` rather than a whole-table read: the entry has to name the
+    // run it belongs to, and asking by run proves it does.
+    let entries = revlocal_store::AuditStore::new(&pool)
+        .list_for_run(run)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let sent: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.kind == revlocal_publish::AUDIT_KIND_SENT)
+        .collect();
+
+    assert_eq!(sent.len(), 1, "one delivery, one audit entry: {entries:?}");
+    let detail = &sent[0].detail_json;
+    assert!(
+        detail.contains("REVL-1"),
+        "no receipt in the entry: {detail}"
+    );
+    assert!(
+        detail.contains("andare"),
+        "no target in the entry: {detail}"
+    );
+    assert_eq!(sent[0].run_id, Some(run), "the entry names no run");
+}

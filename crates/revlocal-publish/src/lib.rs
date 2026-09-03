@@ -40,7 +40,9 @@ pub use github::{
     GitHubIssue, REVIEW_MARKER,
 };
 pub use local::{ReportPayload, ReportTarget, TARGET_ID as REPORT_TARGET};
-pub use queue::{DispatchReport, PublishQueue, QueueConfig, QueueError, DEFAULT_CONCURRENCY};
+pub use queue::{
+    DispatchReport, PublishQueue, QueueConfig, QueueError, AUDIT_KIND_SENT, DEFAULT_CONCURRENCY,
+};
 pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};

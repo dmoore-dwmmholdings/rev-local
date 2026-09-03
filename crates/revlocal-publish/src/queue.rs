@@ -171,7 +171,43 @@ impl std::fmt::Debug for PublishQueue {
     }
 }
 
+/// The audit kind recorded when an action is delivered (SPEC principle 3).
+pub const AUDIT_KIND_SENT: &str = "publish_sent";
+
 impl PublishQueue {
+    /// Record a delivery in the audit log, with its receipt.
+    ///
+    /// The receipt is what makes the entry worth having: "an issue was filed"
+    /// is not reviewable, "ENG-42 was filed" is. `external_ref` is whatever the
+    /// target calls the thing it created — an issue key, a path on disk.
+    async fn audit_sent(
+        &self,
+        id: revlocal_core::PublishActionId,
+        receipt: &revlocal_core::PublishReceipt,
+    ) -> Result<(), revlocal_store::StoreError> {
+        let action = PublishActionStore::new(&self.pool).get(id).await?;
+        let detail = serde_json::json!({
+            "action_id": id.get(),
+            "target": action.target,
+            "capability": action.capability.as_str(),
+            "external_ref": receipt.external_ref,
+        });
+        revlocal_store::AuditStore::new(&self.pool)
+            .append(&revlocal_core::AuditEntry {
+                id: revlocal_core::AuditId::new(0),
+                at: action.sent_at.unwrap_or(action.created_at),
+                // The daemon delivered it. An approved action is still the
+                // daemon's write; who approved it is the approval's own record.
+                actor: "daemon".to_owned(),
+                kind: AUDIT_KIND_SENT.to_owned(),
+                repo_id: None,
+                run_id: Some(action.run_id),
+                detail_json: detail.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
     /// A queue over `pool`, with no targets registered yet.
     pub fn new(pool: Pool, config: QueueConfig) -> Self {
         Self {
@@ -345,6 +381,18 @@ impl PublishQueue {
                             now,
                         )
                         .await?;
+                    // SPEC's third principle: every outbound write "is recorded
+                    // in an audit log with a receipt". Only approval expiry was
+                    // writing one, so a delivery left no trace in the place §5
+                    // says to look — and a delivery with no record is
+                    // indistinguishable from one that never happened, which is
+                    // the case this project exists for (RL-1555).
+                    //
+                    // Here rather than in the caller: this is where the receipt
+                    // is in hand. Reconstructing "what went out this tick" from
+                    // timestamps afterwards is a second answer to a question
+                    // already answered.
+                    self.audit_sent(id, &receipt).await?;
                     report.sent += 1;
                 }
                 Outcome::Failed(id, attempts_before, error) => {
