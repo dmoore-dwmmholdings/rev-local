@@ -168,6 +168,16 @@ enum Command {
         /// then, a missing `svn` cannot be judged blocking or not without it.
         #[arg(long, value_name = "N", default_value_t = 0)]
         svn_repos: usize,
+        /// The database to read the install's own state from.
+        ///
+        /// Without one, doctor checks tooling and says so — every prerequisite
+        /// can pass while no work moves at all, which is the case this command
+        /// exists for (RL-1551).
+        #[arg(long, value_name = "PATH")]
+        database: Option<PathBuf>,
+        /// The global config file (§13.1), read for `approval_ttl_hours`.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
 
     /// Stop all reviewing (SPEC §12.1). Reversible; nothing is lost.
@@ -1406,8 +1416,40 @@ async fn run(command: Command) -> Result<(), CliError> {
             }
         },
 
-        Command::Doctor { json, svn_repos } => {
-            let report = doctor::gather(svn_repos);
+        Command::Doctor {
+            json,
+            svn_repos,
+            database,
+            config,
+        } => {
+            let mut report = doctor::gather(svn_repos);
+            if let Some(path) = database.as_deref() {
+                let ttl = match config.as_deref() {
+                    None => revlocal_core::GlobalConfig::default(),
+                    Some(config_path) => {
+                        let text = std::fs::read_to_string(config_path).map_err(|source| {
+                            inspect::InspectError::Config {
+                                detail: format!(
+                                    "could not read {}: {source}",
+                                    config_path.display()
+                                ),
+                            }
+                        })?;
+                        let (parsed, _warnings) = revlocal_core::GlobalConfig::parse(&text)
+                            .map_err(|source| inspect::InspectError::Config {
+                                detail: format!("{}: {source}", config_path.display()),
+                            })?;
+                        parsed
+                    }
+                }
+                .global
+                .approval_ttl_hours;
+
+                let pool = revlocal_store::open(path).await?;
+                report.install =
+                    doctor::install_checks(&pool, i64::from(ttl), chrono::Utc::now()).await;
+                pool.close().await;
+            }
             println!("{}", doctor::render(&report, json)?);
             // §14: a doctor that always exits 0 is a doctor no script can use.
             if report.has_failures() {

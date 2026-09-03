@@ -147,6 +147,15 @@ pub struct DoctorReport {
     pub targets: Vec<Check>,
     /// Anything platform-specific worth saying.
     pub platform: Vec<Check>,
+    /// What the install itself is doing, read from the database (RL-1551).
+    ///
+    /// Doctor's own help calls it "the thing to run again when reviews have
+    /// quietly stopped", and until this existed it checked binaries on `PATH`
+    /// and nothing about the install — so on a machine where autopilot had
+    /// never been switched on, 51 runs sat queued and two checkouts were gone,
+    /// it reported that nothing was blocking a review.
+    #[serde(default)]
+    pub install: Vec<Check>,
 }
 
 impl DoctorReport {
@@ -157,6 +166,7 @@ impl DoctorReport {
             .chain(self.engines.iter())
             .chain(self.targets.iter())
             .chain(self.platform.iter())
+            .chain(self.install.iter())
     }
 
     /// Whether anything is actually broken.
@@ -186,6 +196,7 @@ impl DoctorReport {
             ("Engines", &self.engines),
             ("Publish targets", &self.targets),
             ("Platform", &self.platform),
+            ("Install", &self.install),
         ] {
             if checks.is_empty() {
                 continue;
@@ -205,7 +216,22 @@ impl DoctorReport {
         if !self.has_failures() {
             // Saying so explicitly matters: a report that ends in silence looks
             // like a report that stopped early.
-            out.push_str("Nothing is blocking a review.\n");
+            //
+            // But "nothing is blocking a review" is a claim about the install and
+            // not only about the tooling, and it was being made on a machine
+            // where nothing had run for days (RL-1551). A prerequisite can be
+            // perfect while the work sits still.
+            if self
+                .install
+                .iter()
+                .any(|check| check.health == Health::Warn)
+            {
+                out.push_str(
+                    "Nothing is blocking a review, but work is not moving — see Install above.\n",
+                );
+            } else {
+                out.push_str("Nothing is blocking a review.\n");
+            }
         }
         out
     }
@@ -385,6 +411,9 @@ pub fn gather(svn_repos: usize) -> DoctorReport {
     let platform = vec![platform_check()];
 
     DoctorReport {
+        // Filled in by `install_checks` when a database is available; `gather`
+        // itself is sync and knows nothing about one.
+        install: Vec::new(),
         prerequisites,
         // Engines and targets need config, which the caller supplies. Empty here
         // rather than absent, so the JSON shape does not change once they arrive.
@@ -520,4 +549,129 @@ pub fn render(report: &DoctorReport, json: bool) -> Result<String, serde_json::E
         return serde_json::to_string_pretty(report);
     }
     Ok(report.render_human())
+}
+
+/// What the install itself is doing (RL-1551).
+///
+/// # Why doctor reads the database at all
+///
+/// Its own help calls it "the thing to run again when reviews have quietly
+/// stopped". Until this existed it checked binaries on `PATH`, engine presence
+/// and the platform — all of which can be perfect while no work moves at all.
+/// Run against a machine where autopilot had never been switched on, 51 runs sat
+/// queued and two checkouts had been deleted, it answered "Nothing is blocking a
+/// review."
+///
+/// These checks are warnings rather than failures. Each describes a state
+/// somebody may have chosen: a queue drained by `revlocal watch` from cron needs
+/// no autopilot, and a repository on an unmounted drive is not broken. What was
+/// wrong was saying nothing, not saying it too gently — so the closing line
+/// accounts for them instead.
+pub async fn install_checks(
+    pool: &revlocal_store::Pool,
+    ttl_hours: i64,
+    at: revlocal_core::Timestamp,
+) -> Vec<Check> {
+    let mut checks = Vec::new();
+
+    let queued = revlocal_store::RunStore::new(pool)
+        .count_matching(None, Some(revlocal_core::RunStatus::Queued))
+        .await
+        .unwrap_or_default();
+
+    let autopilot_on = revlocal_store::SettingStore::new(pool)
+        .get(crate::autopilot::SETTING_AUTOPILOT)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("on");
+
+    checks.push(match (autopilot_on, queued) {
+        (true, _) => Check::ok("install:autopilot", "on"),
+        // Off with nothing waiting is a quiet install, not a stopped one.
+        (false, 0) => Check::ok("install:autopilot", "off, and nothing is waiting"),
+        (false, n) => Check::warn(
+            "install:autopilot",
+            &format!("off, and {n} run(s) are queued — nothing is reviewing them"),
+            Some(
+                "switch it on from the dashboard, or run `revlocal watch` on a timer if you drive it yourself",
+            ),
+        ),
+    });
+
+    // A repository whose checkout has gone holds its runs forever, and the drain
+    // says so every tick. Doctor is where somebody looks first.
+    match revlocal_store::RepoStore::new(pool).list().await {
+        Err(error) => checks.push(Check::warn(
+            "install:repos",
+            &format!("could not be read — {error}"),
+            Some("check the database with `revlocal db migrate`"),
+        )),
+        Ok(repos) => {
+            // Only the enabled ones: a repository somebody switched off is not a
+            // problem to report, and saying so would train people to ignore this.
+            let repos: Vec<&revlocal_core::Repo> =
+                repos.iter().filter(|repo| repo.enabled).collect();
+            let missing: Vec<&revlocal_core::Repo> = repos
+                .iter()
+                .copied()
+                .filter(|repo| {
+                    repo.local_path
+                        .as_deref()
+                        .is_some_and(|path| !std::path::Path::new(path).exists())
+                })
+                .collect();
+            if missing.is_empty() {
+                checks.push(Check::ok(
+                    "install:repos",
+                    &format!("{} enabled, all present", repos.len()),
+                ));
+            } else {
+                // Named, not counted. "2 repositories are missing" cannot be acted
+                // on without going to look them up.
+                let names: Vec<&str> = missing.iter().map(|repo| repo.name.as_str()).collect();
+                checks.push(Check::warn(
+                    "install:repos",
+                    &format!("{} checkout(s) gone: {}", missing.len(), names.join(", ")),
+                    Some("put them back, point each repository at its new location, or disable it"),
+                ));
+            }
+        }
+    }
+
+    // An approval nobody answers is rejected when its time runs out, and the
+    // finding goes with it. That is worth saying before it happens, not after.
+    if let Ok(waiting) = revlocal_store::PublishActionStore::new(pool)
+        .list_awaiting_approval()
+        .await
+    {
+        if waiting.is_empty() {
+            checks.push(Check::ok("install:approvals", "nothing waiting"));
+        } else {
+            let expiring = waiting
+                .iter()
+                .filter(|action| {
+                    crate::approvals::time_left(action.created_at, ttl_hours, at).is_some_and(
+                        |words| words.starts_with("past") || words.starts_with("under"),
+                    )
+                })
+                .count();
+            let detail = if expiring > 0 {
+                format!(
+                    "{} waiting, {expiring} about to be discarded",
+                    waiting.len()
+                )
+            } else {
+                format!("{} waiting", waiting.len())
+            };
+            checks.push(Check::warn(
+                "install:approvals",
+                &detail,
+                Some("see them with `revlocal approvals list`, then approve or reject"),
+            ));
+        }
+    }
+
+    checks
 }

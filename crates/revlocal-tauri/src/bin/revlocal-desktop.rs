@@ -1703,7 +1703,9 @@ fn tray_menu(app: &tauri::AppHandle<tauri::Wry>) -> tauri::Result<Menu<tauri::Wr
 ///
 /// In the database rather than in memory so it survives a restart: an app that
 /// forgets it was switched off is one you switch off twice.
-const SETTING_AUTOPILOT: &str = "autopilot";
+/// The daemon owns this key: `doctor` reads the same setting this toggle writes,
+/// and two definitions of one key is how they drift apart (RL-1551).
+use revlocal_daemon::autopilot::SETTING_AUTOPILOT;
 
 /// What the loop is doing, as a screen needs to read it at any moment.
 ///

@@ -56,6 +56,13 @@ pub const DEFAULT_INTERVAL_SECS: u64 = 60;
 /// for six hours a day never fires.
 pub const SETTING_LAST_SWEEP: &str = "retention.last_sweep";
 
+/// Whether the background loop is switched on.
+///
+/// Written by the desktop app's toggle and read by `doctor`, which is why it
+/// lives here rather than in the binary: two definitions of one key is how the
+/// diagnosis ends up reading a setting nothing writes (RL-1551).
+pub const SETTING_AUTOPILOT: &str = "autopilot";
+
 /// Why a tick could not run at all.
 ///
 /// Anything that only stops *one* repository is a note on the report instead: the

@@ -202,6 +202,127 @@ mod doctor {
         }
     }
 
+    #[tokio::test]
+    async fn a_stopped_install_is_not_a_healthy_one() -> Result<(), String> {
+        // RL-1551. Doctor's own help calls it "the thing to run again when
+        // reviews have quietly stopped", and it checked binaries on PATH and
+        // nothing about the install. On the live machine — autopilot never
+        // switched on, 51 runs queued, two checkouts deleted, three approvals
+        // past their deadline — it answered "Nothing is blocking a review."
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let now = chrono::Utc::now();
+        let repo = revlocal_store::RepoStore::new(&pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: "gone-away".to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                // A path that does not exist, which is the live case.
+                local_path: Some(dir.path().join("not-here").display().to_string()),
+                remote_url: None,
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let change = revlocal_store::ChangeStore::new(&pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id: repo.id,
+                kind: revlocal_core::ChangeKind::Commit,
+                external_id: "c1".to_owned(),
+                title: None,
+                author_name: None,
+                author_email: None,
+                authored_at: None,
+                branch: Some("main".to_owned()),
+                base_ref: None,
+                head_ref: None,
+                url: None,
+                diff_stat: revlocal_core::DiffStat::default(),
+                detected_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        revlocal_store::RunStore::new(&pool)
+            .insert(&revlocal_core::Run {
+                id: revlocal_core::RunId::new(0),
+                change_id: change.id,
+                attempt: 1,
+                status: revlocal_core::RunStatus::Queued,
+                engine: revlocal_core::EngineKind::Mock,
+                depth: revlocal_core::Depth::Summary,
+                trigger: revlocal_core::TriggerSource::Poll,
+                skip_reason: None,
+                error: None,
+                error_detail: None,
+                degraded: None,
+                usage: revlocal_core::Usage::default(),
+                started_at: None,
+                finished_at: None,
+                transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
+                created_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut report = gather(0);
+        report.install = revlocal_daemon::doctor::install_checks(&pool, 72, now).await;
+        pool.close().await;
+
+        let human = render(&report, false).unwrap_or_default();
+
+        // Each of the three facts, named rather than counted.
+        assert!(human.contains("1 run(s) are queued"), "{human}");
+        assert!(human.contains("gone-away"), "{human}");
+        // And the closing line no longer claims all-clear over the top of them.
+        assert!(
+            human.contains("work is not moving"),
+            "the summary still called this healthy: {human}"
+        );
+        assert!(
+            !human.contains("Nothing is blocking a review.\n"),
+            "{human}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_quiet_install_is_not_reported_as_a_stopped_one() -> Result<(), String> {
+        // Off with nothing waiting is somebody who has not started yet, not a
+        // system that has stalled. Warning about it is how this section teaches
+        // people to skip it.
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let install = revlocal_daemon::doctor::install_checks(&pool, 72, chrono::Utc::now()).await;
+        pool.close().await;
+
+        assert!(
+            install
+                .iter()
+                .all(|check| check.health == revlocal_daemon::doctor::Health::Ok),
+            "{install:?}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn the_json_keeps_its_shape_when_a_section_is_empty() {
         // Criterion 5. Engines and targets need config the CLI does not have yet;
