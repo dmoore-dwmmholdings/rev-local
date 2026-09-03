@@ -4,13 +4,15 @@
 - current_item: none in flight
 - item_status: n/a
 - last_gate_command: cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; (ui) npx tsc --noEmit && npx vitest run
-- last_gate_result: PASS — clippy clean, 1415 Rust tests passing, 129 UI tests passing
-- last_visual: smoke run of the built desktop binary, 2026-09-02 (see below)
-- next_action: REVL-131 is the only open item in REVL-127 and is **blocked on a
-  human decision**, not on code. Everything else in the epic is closed. Pick up
-  Trama as an output (`trama_space` / `trama_publish` have no readers) or
-  `andare_transition_on` if more is wanted here.
-- blocked_on: REVL-131 — see below
+- last_gate_result: PASS — clippy clean, 1454 Rust tests passing, 139 UI tests passing
+- last_visual: end-to-end run of the built CLI against a scratch install, 2026-09-03
+  — two commits reviewed, two reports delivered, two audit rows, the commit named
+  in each report
+- next_action: nothing in REVL-127 is in flight. REVL-184 (GitHub pull-request
+  adapter) sits in the backlog and is **not** blocked on a decision — it is
+  blocked on an unexplained `git_hooks` timing failure, bisected and written up on
+  that issue. Read those comments before starting it.
+- blocked_on: nothing
 - adrs_open: none
 
 ## What M15 was
@@ -27,12 +29,25 @@ skipped naming the setting.
 
 ## The pattern this milestone kept finding
 
-**Eight defects of one shape: capability that was built, unit-tested, and never
-called by anything.**
+**Thirteen-plus defects of one shape: capability that was built, unit-tested, and
+never called by anything.**
 
-`RepoConfig.targets`, `pair_has_succeeded`, `delete_finished_before` (retention),
-`KillSwitch`, the engine pid, the approval TTL, `max_concurrent_runs` /
-`coalesce_window_ms`, and `review_commits` / `review_prs`.
+Small ones: `RepoConfig.targets`, `pair_has_succeeded`, `delete_finished_before`
+(retention), `KillSwitch`, the engine pid, the approval TTL, `max_concurrent_runs`
+/ `coalesce_window_ms`, `review_commits` / `review_prs`.
+
+Large ones, all found later in the same milestone and all bigger than the small
+ones put together:
+
+- **force-push recovery** — `recover.rs` implements the whole of §6.2 with its own
+  test file, and `GitAdapter::discover` never classified the cursor, so a rebase
+  re-reviewed every replayed commit
+- **the Subversion adapter** — five modules under `svn/`, no `impl VcsAdapter`, so
+  a `--kind svn` repository was handed to the git adapter and told its working
+  copy "is not a git repository"
+- **the GitHub adapter** — same shape, still open as REVL-184
+- **the audit log** — one writer, for approval expiry, while SPEC's third
+  principle requires *every* outbound write to be recorded with a receipt
 
 Every one was invisible reading the code and obvious asking what the system does.
 Two greps find them, and both are cheap enough to run on any change:
@@ -52,6 +67,20 @@ done
 The seventh was introduced *by this milestone* — `coalesce_window_ms` hardcoded in
 `autopilot.rs` — so this is not archaeology on old code. It belongs on new work.
 
+**Those two greps would not have found the adapters.** They look for functions
+nothing calls; a missing `impl VcsAdapter` is a *trait implementation* that does
+not exist, and every function under it is called by its own tests. The check that
+finds those is to enumerate the trait's implementors and compare against the enum
+the system dispatches on:
+
+```sh
+grep -rn "impl VcsAdapter for" crates/*/src   # one line per kind, or a gap
+grep -n "=> \"" crates/revlocal-core/src/enums.rs   # the kinds that exist
+```
+
+More generally: for any `enum` the system dispatches on, ask what handles each
+variant. A variant with no handler is the same defect wearing a different hat.
+
 ## Two decisions worth revisiting
 
 **`review_commits` now defaults to `true`** (RL-1525). §13.2 said `false`, which
@@ -67,24 +96,38 @@ there because an action is visible to others or awkward to undo, and a file on
 your own disk is neither. This is what makes the local report work with nothing
 configured. It is also half of REVL-131's answer.
 
-## REVL-131, the open question
+## REVL-131, and why it was not a decision after all
 
 `ActionIntent::CreateIssue` is `RiskClass::High` inherently, so `auto_low_ask_high`
 asks before filing **any** tracker issue, forever. The first-use rule cannot season
 it down because the baseline is unconditional.
 
-The code no longer lies about history — `pair_has_succeeded` and
-`actions_sent_since` are read for real — but the question is a product one: should
-a proven target/capability pair file into a tracker unattended under
-`auto_low_ask_high`, or is `auto` correctly the only mode that does? Local reports
-no longer depend on the answer.
+This was carried as "a product decision" for most of the milestone. It was not.
+The specification answers it in two places that had been read separately and never
+put together — §12.3 lists creating an Andare issue as high risk, and §12.2's mode
+table says `auto_low_ask_high` queues high-risk actions to the inbox. So `auto` is
+correctly the only mode that files a tracker issue unattended, and the code was
+right.
+
+The real defect inside that issue was separate and is fixed: `queue_actions` passed
+`pair_previously_succeeded: false` unconditionally, so the code lied about history.
+
+**Twice in this milestone something escalated as needing a human turned out to be
+answered in writing.** Before escalating, grep the specification for the nouns in
+the question.
 
 ## Not code, and still true of the live install
 
 1. `/Applications/rev-local.app` is from 2026-08-30 and predates all of M15.
-   `cargo tauri build --features desktop`, then replace the bundle.
-2. Two of the three watched repositories no longer exist on disk. The loop leaves
-   them alone and says so; disabling or repointing them is the operator's call.
+   `cargo tauri build --features desktop`, then replace the bundle. Nothing in
+   this milestone reaches the machine until that happens.
+2. **Autopilot has never been switched on.** The `setting` table is empty, which
+   is the literal answer to "it doesn't want to process automatically".
+3. Two of the three watched repositories no longer exist on disk — 43 of the 51
+   queued runs are theirs and can never run. The loop leaves them alone, says so,
+   and now counts them apart from work that can actually proceed.
+4. Three publish actions sit in the approvals inbox, long past
+   `approval_ttl_hours`. The next tick that runs will expire them.
 
 ## Counting tests
 
