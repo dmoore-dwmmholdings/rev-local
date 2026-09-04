@@ -977,6 +977,100 @@ mod inspect_commands {
     }
 
     #[tokio::test]
+    async fn one_problem_seen_twice_is_one_row_in_the_cli_too() -> Result<(), String> {
+        // RL-1564. RL-1563 collapsed the desktop's findings screen onto
+        // (repository, fingerprint) and left `inspect::findings` — which backs
+        // `revlocal findings list` — showing one row per run. The two surfaces
+        // then disagreed about how many problems exist, and the CLI is the one an
+        // autonomous loop reads.
+        let (pool, _dir, repo_id) = store().await?;
+        let run = seed_one_finding(&pool, repo_id).await?;
+
+        // A second run of the same repository finding the same thing.
+        let again = revlocal_store::RunStore::new(&pool)
+            .insert(&revlocal_core::Run {
+                id: revlocal_core::RunId::new(0),
+                change_id: revlocal_store::RunStore::new(&pool)
+                    .get(run)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .change_id,
+                attempt: 2,
+                status: revlocal_core::RunStatus::Done,
+                engine: revlocal_core::EngineKind::Mock,
+                depth: revlocal_core::Depth::Summary,
+                trigger: revlocal_core::TriggerSource::Poll,
+                skip_reason: None,
+                error: None,
+                error_detail: None,
+                degraded: None,
+                usage: Usage::default(),
+                started_at: None,
+                finished_at: None,
+                transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        revlocal_store::FindingStore::new(&pool)
+            .insert(&revlocal_core::Finding {
+                id: revlocal_core::FindingId::new(0),
+                run_id: again.id,
+                // The same fingerprint is what makes it the same problem.
+                fingerprint: "abc123".to_owned(),
+                severity: revlocal_core::Severity::Medium,
+                category: revlocal_core::Category::Correctness,
+                confidence: 0.9,
+                file: Some("src/pager.rs".to_owned()),
+                line_start: Some(74),
+                line_end: Some(74),
+                title: "Inclusive range walks one past the last index".to_owned(),
+                body: "unchanged".to_owned(),
+                failure_scenario: None,
+                suggested_fix: None,
+                // The later row is `open` because its publish action was deduped.
+                state: revlocal_core::FindingState::Open,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // And the earlier one was delivered.
+        revlocal_store::FindingStore::new(&pool)
+            .set_state(
+                revlocal_core::FindingId::new(1),
+                revlocal_core::FindingState::Published,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let report = findings(&pool, None, None, 10)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "two runs, one problem: {report:?}"
+        );
+        assert_eq!(report.findings[0].occurrences, 2);
+        // The problem's state, not the newest row's — the newest is `open`.
+        assert_eq!(
+            report.findings[0].state, "published",
+            "a filed problem was reported as unfiled"
+        );
+
+        let human = report.render_human();
+        assert!(human.contains("seen in 2 runs"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn the_detail_view_says_what_the_finding_actually_means() -> Result<(), String> {
         // RL-1550. `RunDetail` reused the list's row, so the detail view was the
         // summary view with more chrome and no CLI path reached `body`,

@@ -490,7 +490,14 @@ pub struct FindingRow {
     /// The claim.
     pub title: String,
     /// Where it is in its life.
+    ///
+    /// The *problem's* state, not this row's: a problem published by the run that
+    /// filed it reads `open` in every later run whose action the per-day dedupe
+    /// skipped, and reporting the newest row alone would call a filed problem
+    /// unfiled (RL-1564).
     pub state: String,
+    /// How many runs have seen this problem, including the latest.
+    pub occurrences: usize,
 }
 
 fn finding_row(finding: &revlocal_core::Finding, repo: &str) -> FindingRow {
@@ -504,6 +511,7 @@ fn finding_row(finding: &revlocal_core::Finding, repo: &str) -> FindingRow {
         line: finding.line_start,
         title: finding.title.clone(),
         state: finding.state.as_str().to_owned(),
+        occurrences: 1,
     }
 }
 
@@ -660,12 +668,20 @@ impl FindingsReport {
                 (Some(file), None) => file.to_owned(),
                 (Some(file), Some(line)) => format!("{file}:{line}"),
             };
+            // How long it has survived, when it has: the row is a problem, not
+            // a run, so the count is what the extra rows used to say (RL-1564).
+            let seen = if finding.occurrences > 1 {
+                format!("  (seen in {} runs)", finding.occurrences)
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
-                "  {:<8} {:<12} {}  {}\n           {}\n           {}\n",
+                "  {:<8} {:<12} {}  {}{}\n           {}\n           {}\n",
                 finding.severity,
                 finding.category,
                 finding.repo,
                 where_,
+                seen,
                 finding.title,
                 finding.fingerprint
             ));
@@ -673,6 +689,16 @@ impl FindingsReport {
         out.push_str("\nSuppress one with: revlocal findings suppress <fingerprint>\n");
         out
     }
+}
+
+/// The state a row carries, back as the enum.
+///
+/// `FindingRow.state` is a string because it is serialised to JSON, and merging
+/// two rows needs the ordering that only the enum has. An unparseable value is
+/// treated as `Open` rather than failing the listing: a row nobody can classify
+/// is still a finding worth showing.
+fn parse_state(text: &str) -> revlocal_core::FindingState {
+    text.parse().unwrap_or(revlocal_core::FindingState::Open)
 }
 
 /// List findings, newest run first (§14).
@@ -694,7 +720,14 @@ pub async fn findings(
     let repos = RepoStore::new(pool);
     let mut names: std::collections::BTreeMap<i64, String> = std::collections::BTreeMap::new();
 
-    let mut found = Vec::new();
+    // One row per *problem*, matching the desktop's findings screen (RL-1563).
+    // Keyed by repository and fingerprint: the same fingerprint in two
+    // repositories is two problems. `list_recent` is newest-first, so the first
+    // row seen for a key is the latest thing said about it.
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut by_problem: std::collections::BTreeMap<(String, String), FindingRow> =
+        std::collections::BTreeMap::new();
+
     for run in &runs {
         let repo_name = match changes.get(run.change_id).await {
             Err(_) => "(unknown)".to_owned(),
@@ -722,13 +755,26 @@ pub async fn findings(
             // Rust and a string in SQLite, and comparing it as a string would put
             // `critical` below `low` alphabetically.
             if severity.is_none_or(|floor| finding.severity >= floor) {
-                found.push(finding_row(&finding, &repo_name));
+                let key = (repo_name.clone(), finding.fingerprint.clone());
+                if let Some(existing) = by_problem.get_mut(&key) {
+                    existing.occurrences += 1;
+                    // The order lives in `revlocal-core` so this and the desktop
+                    // cannot disagree about what a problem's state is.
+                    let merged = parse_state(&existing.state).louder(finding.state);
+                    existing.state = merged.as_str().to_owned();
+                    continue;
+                }
+                order.push(key.clone());
+                by_problem.insert(key, finding_row(&finding, &repo_name));
             }
         }
     }
 
     Ok(FindingsReport {
-        findings: found,
+        findings: order
+            .into_iter()
+            .filter_map(|key| by_problem.remove(&key))
+            .collect(),
         from_runs: runs.len(),
     })
 }

@@ -17,6 +17,41 @@ string_enum! {
     }
 }
 
+impl FindingState {
+    /// The state that describes a *problem*, given two rows about it.
+    ///
+    /// One `finding` row per run means one problem can be `published` in the run
+    /// that filed it and `open` in every later run whose publish action the
+    /// per-day dedupe skipped. Neither row is wrong; showing the newer one alone
+    /// would report a filed problem as unfiled (RL-1563).
+    ///
+    /// The order is a claim about what somebody needs to know first: a decision
+    /// they made outranks anything the system did, a delivery outranks merely
+    /// having been recorded, and `Superseded` sits above `Open` because a better
+    /// statement of the same defect exists.
+    ///
+    /// Lives here rather than beside either caller because it has two — the
+    /// desktop's findings screen and the CLI's `findings list` — and two copies
+    /// of a total order disagree the first time either changes (RL-1564).
+    #[must_use]
+    pub const fn louder(self, other: Self) -> Self {
+        const fn rank(state: FindingState) -> u8 {
+            match state {
+                FindingState::Suppressed => 4,
+                FindingState::Resolved => 3,
+                FindingState::Published => 2,
+                FindingState::Superseded => 1,
+                FindingState::Open => 0,
+            }
+        }
+        if rank(other) > rank(self) {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 string_enum! {
     /// Which local AI CLI performs the review (`repo.engine`, decision D3).
     pub enum EngineKind {

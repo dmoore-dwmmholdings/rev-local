@@ -190,34 +190,6 @@ pub struct FindingsView {
     pub truncated: bool,
 }
 
-/// The state that describes the *problem*, given two rows about it.
-///
-/// One `finding` row per run means one problem can be `published` in the run that
-/// filed it and `open` in every later run whose action RL-1544's per-day dedupe
-/// skipped. Neither row is wrong; showing the newer one alone would report a
-/// filed problem as unfiled.
-///
-/// The order is a claim about what somebody needs to know first: a decision they
-/// made outranks anything the system did, a delivery outranks merely having been
-/// recorded, and `Superseded` sits above `Open` because a better statement of the
-/// same defect exists.
-const fn louder(a: FindingState, b: FindingState) -> FindingState {
-    const fn rank(state: FindingState) -> u8 {
-        match state {
-            FindingState::Suppressed => 4,
-            FindingState::Resolved => 3,
-            FindingState::Published => 2,
-            FindingState::Superseded => 1,
-            FindingState::Open => 0,
-        }
-    }
-    if rank(b) > rank(a) {
-        b
-    } else {
-        a
-    }
-}
-
 /// Read findings across repositories (SPEC §15 screen 4).
 pub async fn gather(pool: &Pool, filter: &FindingFilter) -> Result<FindingsView, FindingsError> {
     let repos = RepoStore::new(pool).list().await.map_err(boxed)?;
@@ -255,23 +227,23 @@ pub async fn gather(pool: &Pool, filter: &FindingFilter) -> Result<FindingsView,
                 // decision outranks a delivery, and a delivery outranks "merely
                 // recorded" — otherwise a recurrence whose action was deduped
                 // would report a filed problem as unfiled.
-                existing.state = louder(existing.state, finding.state);
+                existing.state = existing.state.louder(finding.state);
                 continue;
             }
             order.push(key.clone());
             by_problem.insert(
                 key,
                 FindingRow {
-                id: finding.id.get(),
-                run_id: run.id.get(),
-                repo_id: change.repo_id.get(),
-                repo: name_of(change.repo_id),
-                severity: finding.severity,
-                category: finding.category.as_str().to_owned(),
-                state: finding.state,
-                title: finding.title,
-                file: finding.file,
-                line: finding.line_start,
+                    id: finding.id.get(),
+                    run_id: run.id.get(),
+                    repo_id: change.repo_id.get(),
+                    repo: name_of(change.repo_id),
+                    severity: finding.severity,
+                    category: finding.category.as_str().to_owned(),
+                    state: finding.state,
+                    title: finding.title,
+                    file: finding.file,
+                    line: finding.line_start,
                     fingerprint: finding.fingerprint,
                     occurrences: 1,
                 },
@@ -553,11 +525,11 @@ mod problem_tests {
         // per-day dedupe skipped. Reporting the newest row alone would say a
         // filed problem is unfiled.
         assert_eq!(
-            louder(FindingState::Open, FindingState::Published),
+            FindingState::Open.louder(FindingState::Published),
             FindingState::Published
         );
         assert_eq!(
-            louder(FindingState::Published, FindingState::Open),
+            FindingState::Published.louder(FindingState::Open),
             FindingState::Published
         );
 
@@ -565,7 +537,7 @@ mod problem_tests {
         // suppressed problem that a queued action delivered anyway is still
         // suppressed, and the screen must not say otherwise.
         assert_eq!(
-            louder(FindingState::Published, FindingState::Suppressed),
+            FindingState::Published.louder(FindingState::Suppressed),
             FindingState::Suppressed
         );
 
@@ -576,7 +548,7 @@ mod problem_tests {
             FindingState::Superseded,
             FindingState::Resolved,
         ] {
-            assert_ne!(louder(FindingState::Open, other), FindingState::Open);
+            assert_ne!(FindingState::Open.louder(other), FindingState::Open);
         }
     }
 }
