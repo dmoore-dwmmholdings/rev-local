@@ -164,10 +164,28 @@ pub fn hooks_dir(repo_path: &Path) -> Result<PathBuf, HookError> {
 /// developer who opens their own hook file and finds an unexplained curl in it is
 /// entitled to be alarmed.
 pub fn managed_block(repo_name: &str, port: u16, secret_env: &str) -> String {
+    // The name reaches two grammars here — JSON, then `/bin/sh` — and a
+    // repository is named after a directory, which nobody validates and an
+    // attacker can influence: a clone, an extracted archive, a shared drive.
+    // `repo scan` walks a tree and registers whatever it finds, so the path from
+    // "a directory exists" to "this string is in your post-commit hook" is now
+    // one command (REVL-225).
+    //
+    // Serialised for JSON, then quoted for the shell, in that order, because that
+    // is the order the two are nested in. A name with a quote in it used to close
+    // the string and put the rest in the hook as shell.
+    let payload = serde_json::json!({ "repo": repo_name }).to_string();
+    let payload = single_quoted(&payload);
+    // The name is also written into two `#` comments, and a comment ends at a
+    // newline: a name carrying one would start a fresh line of *executable*
+    // shell. Quoting the payload does nothing about that, which a test found
+    // immediately after the quoting went in.
+    let shown = one_line(repo_name);
+
     format!(
         "{BEGIN_MARKER}\n\
-         # Notifies rev-local that {repo_name} changed. Installed by:\n\
-         #   revlocal hooks install --repo {repo_name}\n\
+         # Notifies rev-local that {shown} changed. Installed by:\n\
+         #   revlocal hooks install --repo {shown}\n\
          # Remove with `revlocal hooks uninstall`, or delete these lines.\n\
          #\n\
          # This block must never fail your commit. It has no `set -e`, it ignores\n\
@@ -178,11 +196,32 @@ pub fn managed_block(repo_name: &str, port: u16, secret_env: &str) -> String {
          \x20      --max-time {HOOK_TIMEOUT_SECS} \\\n\
          \x20      --header 'content-type: application/json' \\\n\
          \x20      --header \"x-revlocal-secret: ${{{secret_env}:-}}\" \\\n\
-         \x20      --data '{{\"repo\":\"{repo_name}\"}}' \\\n\
+         \x20      --data {payload} \\\n\
          \x20      http://127.0.0.1:{port}/trigger >/dev/null 2>&1 || true\n\
          fi\n\
          {END_MARKER}\n"
     )
+}
+
+/// `text` with anything that could end a line replaced by a space.
+///
+/// For the comment lines. A `#` comment runs to the newline, so a name
+/// containing one would put whatever followed it on a line of its own, as shell.
+/// Carriage return gets the same treatment: on a file `/bin/sh` reads, a lone
+/// `\r` is not a line ending, but it makes what a human sees and what the shell
+/// runs disagree, which is its own kind of trap.
+fn one_line(text: &str) -> String {
+    text.replace(['\n', '\r'], " ")
+}
+
+/// `text` as a single-quoted `/bin/sh` word.
+///
+/// The only escape inside single quotes is to leave them: `'` becomes `'\''`,
+/// which closes the string, contributes a literal quote, and reopens it. Every
+/// other byte — `$`, backtick, backslash, newline — is literal inside single
+/// quotes and needs nothing.
+fn single_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// A complete hook file, for the case where none existed.

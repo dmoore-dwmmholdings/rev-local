@@ -74,6 +74,62 @@ fn a_dead_port() -> u16 {
 }
 
 #[test]
+fn git_hooks_a_repository_name_cannot_become_shell() {
+    // REVL-225. The name reaches a `/bin/sh` script and nothing validates it:
+    // `derive_name` takes the last path segment verbatim, and `repo scan` walks a
+    // tree registering whatever directory names it finds — names that come from
+    // clones, extracted archives and shared drives.
+    //
+    // Asserted by *running* the generated block, not by looking at it. The first
+    // two versions of this test checked for the injected text and failed on the
+    // escaped payload, which legitimately contains the name: the property is not
+    // "those characters are absent", it is "they do not execute". `sh` is the
+    // authority on that and is right here.
+    let temp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let marker = temp.path().join("pwned");
+
+    for name in [
+        // Closes the single-quoted payload.
+        format!("acme'; touch {}; #", marker.display()),
+        // Ends the `#` comment the name is also written into.
+        format!("acme\ntouch {}", marker.display()),
+        // Command substitution, in case the quoting ever becomes double.
+        format!("acme$(touch {})", marker.display()),
+        format!("acme`touch {}`", marker.display()),
+    ] {
+        let script = temp.path().join("hook.sh");
+        // No listener is running, so curl fails; the block ends `|| true` and the
+        // hook must survive that, which is the other half of what it promises.
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n{}\nexit 0\n",
+                managed_block(&name, 41791, "REVLOCAL_HOOK_SECRET")
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let status = std::process::Command::new("sh")
+            .arg(&script)
+            .status()
+            .unwrap_or_else(|e| panic!("running the hook: {e}"));
+
+        assert!(
+            status.success(),
+            "the hook must never fail a commit: {name:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "a repository named {name:?} executed shell from the generated hook"
+        );
+    }
+
+    // And the ordinary case still reads exactly as it did.
+    let plain = managed_block("acme-api", 41791, "REVLOCAL_HOOK_SECRET");
+    assert!(plain.contains(r#"--data '{"repo":"acme-api"}'"#), "{plain}");
+}
+
+#[test]
 fn a_commit_succeeds_in_under_two_seconds_with_the_receiver_down() -> Result<(), String> {
     // Criterion 1, and the reason this feature has a `safety` label. A code-review
     // tool that can block `git commit` is a tool people uninstall after the first
