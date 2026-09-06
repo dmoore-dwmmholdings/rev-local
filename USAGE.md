@@ -115,9 +115,23 @@ switch is engaged", "over today's budget", "that repository is disabled". A
 `watch` that silently reviewed nothing would be indistinguishable from one whose
 repositories are quiet.
 
+### What `watch` delivers
+
+The **local markdown report**, into `{data_dir}/reports/{repo}/`. That target
+needs no configuration, which is why it is the one wired here.
+
+Andare, GitHub and Trama are not wired into `watch`. Findings for them are still
+recorded and still queued as publish actions — the tick counts them and says so —
+but a pass will report them as naming a target that is not configured rather than
+sending them. Delivering to a tracker today means the desktop app, or
+`revlocal publish retry`/`replay` for a specific action.
+
+Worth knowing before leaving `watch` on a timer and expecting issues to appear.
+
 ## Leaving the app running
 
-The desktop app runs the same pass on a timer. Turn **Autopilot** on at the top of
+The desktop app runs the same discovery-and-review pass, on a timer, **and wires
+the tracker targets that `watch` does not**. Turn **Autopilot** on at the top of
 the dashboard; it then checks every enabled repository once a minute, reviews what
 it finds, and delivers whatever is ready to go — no button presses.
 
