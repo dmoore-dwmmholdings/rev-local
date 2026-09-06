@@ -1157,6 +1157,28 @@ async fn run(command: Command) -> Result<(), CliError> {
                     .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
             });
 
+            // The log file the engineering rules require: a rolling JSON log
+            // under `{data_dir}/logs/`, through the redaction layer (REVL-220).
+            //
+            // `watch` and the desktop app are the only two callers, because they
+            // are the only two that run unattended. A one-shot `findings list`
+            // creating a log directory would be a surprise, and the question this
+            // exists to answer — "it ran all night, what happened" — is only ever
+            // asked of a process that ran all night.
+            //
+            // The handle is held for the loop's lifetime; dropping it stops the
+            // background flush, which is why it is bound rather than discarded.
+            // A failure here is reported and not fatal: an install that cannot
+            // write logs should still review, and being told why beats a daemon
+            // that will not start.
+            let _logging = match revlocal_daemon::init_logging(&watch_data_dir) {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    eprintln!("revlocal: not writing logs — {error}");
+                    None
+                }
+            };
+
             let pool = revlocal_store::open(&database).await?;
 
             // Ctrl-C ends the loop rather than killing the process: §4.2 runs the

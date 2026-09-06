@@ -2061,6 +2061,23 @@ async fn autopilot_now(app: tauri::AppHandle) -> Result<(), String> {
 /// A panic here would print a backtrace and the word "panicked" to somebody whose
 /// actual problem is a missing webview.
 fn main() -> std::process::ExitCode {
+    // The rolling JSON log the engineering rules require, through the redaction
+    // layer (REVL-220). Held for the whole of `main`, because dropping the handle
+    // stops the background flush — which is what `#[must_use]` on it is about.
+    //
+    // Before this, an app left running for a week wrote no log at all, and the
+    // only account of what it had done was rows in SQLite.
+    //
+    // Not fatal when it fails: an app that cannot write logs should still review,
+    // and the message says which of the two happened.
+    let _logging = match revlocal_daemon::init_logging(&data_dir()) {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            eprintln!("revlocal: not writing logs — {error}");
+            None
+        }
+    };
+
     if let Err(error) = run() {
         eprintln!("revlocal: the desktop app could not start: {error}");
         return std::process::ExitCode::FAILURE;

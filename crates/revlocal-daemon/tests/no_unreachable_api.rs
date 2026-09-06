@@ -36,6 +36,24 @@
 //! Like `no_silent_caps`, this does not verify that existing entries are still
 //! true. It checks that nobody adds a new unreachable public function quietly.
 //!
+//! # What it cannot see
+//!
+//! Counting occurrences of a name means a **common name hides**. `logging::init`
+//! is the whole of SPEC's file-logging requirement — a rolling JSON log under
+//! `{data_dir}/logs/` with the redaction layer — and nothing calls it, so neither
+//! the daemon nor the app writes a log file at all (REVL-220). This check is
+//! silent about it, because "init" appears everywhere.
+//!
+//! That was found by hand, hours after this file was written, which is the
+//! honest measure of the gap. Anything named `init`, `new`, `run`, `get` or
+//! similar is outside what this can assert, and a reviewer should not read a
+//! passing run as "every public function has a caller".
+//!
+//! Resolving it properly needs call-graph information rather than text — `cargo
+//! +nightly rustc -Zunpretty=expanded` or a `syn`-based pass — which is a bigger
+//! tool than this file is trying to be. The narrow check earns its keep by
+//! catching the distinctive names, which is where nine of the ten instances were.
+//!
 //! Helpers return `Result` (ADR 0003); only the `#[test]` functions panic.
 
 use std::collections::BTreeMap;
