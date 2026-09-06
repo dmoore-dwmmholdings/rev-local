@@ -55,6 +55,20 @@ pub enum FindingsError {
         /// Which finding.
         id: i64,
     },
+
+    /// The repository has not selected the Andare project to receive issues.
+    #[error("repository `{repo}` has no Andare project configured\n  try: set `andare_project` in that repository's Configuration before filing")]
+    MissingAndareProject {
+        /// The repository the finding belongs to.
+        repo: String,
+    },
+
+    /// The durable issue payload could not be encoded.
+    #[error("could not encode the Andare issue payload: {detail}")]
+    Payload {
+        /// Serde's actionable detail.
+        detail: String,
+    },
 }
 
 fn boxed(source: revlocal_store::StoreError) -> FindingsError {
@@ -313,11 +327,30 @@ pub async fn file_to_andare(
         return Err(FindingsError::Orphaned { id: finding_id });
     };
 
-    let payload = serde_json::json!({
-        "title": finding.title,
-        "body": finding.body,
-        "rev-local-fingerprint": finding.fingerprint,
-    });
+    let repo_config =
+        serde_json::from_str::<revlocal_core::RepoConfig>(&repo.config_json).unwrap_or_default();
+    let project = repo_config
+        .andare_project
+        .clone()
+        .filter(|project| !project.trim().is_empty())
+        .ok_or_else(|| FindingsError::MissingAndareProject {
+            repo: repo.name.clone(),
+        })?;
+    let options = revlocal_publish::AndareOptions {
+        project,
+        min_severity: repo_config.andare_min_severity,
+    };
+    let context = revlocal_publish::IssueContext {
+        change_ref: Some(change.external_id),
+        trama_url: None,
+        code_excerpt: None,
+    };
+    let draft = revlocal_publish::compose_issue(&finding, &context, &options);
+    let payload = revlocal_publish::AndarePayload {
+        recurrence_body: revlocal_publish::recurrence_comment(&finding, &context),
+        draft,
+        context,
+    };
 
     PublishActionStore::new(pool)
         .insert(&PublishAction {
@@ -330,7 +363,11 @@ pub async fn file_to_andare(
             // §11.6: the fingerprint makes redelivery safe. A manual file and an
             // automatic one for the same finding must not become two issues.
             idempotency_key: format!("manual-andare-{}", finding.fingerprint),
-            payload_json: payload.to_string(),
+            payload_json: serde_json::to_string(&payload).map_err(|error| {
+                FindingsError::Payload {
+                    detail: error.to_string(),
+                }
+            })?,
             status,
             attempts: 0,
             response_json: None,

@@ -100,6 +100,8 @@ pub struct PromptContext {
     pub repo_kind: String,
     /// `commit` | `pr` | `svn_rev` | `svn_pseudo_pr`.
     pub change_kind: String,
+    /// The diff below is the whole tree, not one change within it.
+    pub whole_repository: bool,
     /// The change's identity in its own system.
     pub external_id: String,
     /// Branch, where the concept applies.
@@ -271,6 +273,11 @@ pub fn build_context(
         repo_name: repo_name.to_owned(),
         repo_kind: repo_kind.to_owned(),
         change_kind: change.kind.to_string(),
+        // Derived from the base the change is diffed against, not from a marker
+        // written into a field that means something else. A change whose base is
+        // the empty tree *is* the whole repository — the prompt is describing the
+        // diff it was given rather than being told what to pretend.
+        whole_repository: change.base_ref.as_deref() == Some(revlocal_vcs::EMPTY_TREE),
         external_id: change.external_id.clone(),
         branch: change.branch.clone(),
         author: change.author_name.clone(),

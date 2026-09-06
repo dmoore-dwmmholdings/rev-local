@@ -16,6 +16,13 @@
 You are reviewing one change to a repository. Work only from what is in this
 prompt and the files in your working directory.
 
+{{#if whole_repository}}
+This is a whole-repository review: the diff below is every tracked file, not one
+change within the repository. Report high-confidence correctness, security and
+integration defects, and do not treat a file's presence in the diff as evidence
+that it was recently touched.
+{{/if}}
+
 Write your result to `$REVLOCAL_OUT/result.json` and write nothing else to that
 directory. It must match this schema exactly:
 

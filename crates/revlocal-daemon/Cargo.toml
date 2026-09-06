@@ -18,6 +18,7 @@ handlebars = { workspace = true }
 revlocal-core = { workspace = true }
 revlocal-engine = { workspace = true }
 revlocal-mcp = { workspace = true }
+revlocal-publish = { workspace = true }
 revlocal-store = { workspace = true }
 revlocal-vcs = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
@@ -40,7 +41,6 @@ nix = { workspace = true, features = ["signal"] }
 reqwest = { workspace = true, features = ["json"] }
 sqlx = { workspace = true }
 revlocal-mcp = { workspace = true }
-revlocal-publish = { workspace = true }
 async-trait = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

@@ -31,6 +31,7 @@
 pub mod events;
 pub mod ipc;
 pub mod lifecycle;
+pub mod review;
 
 #[cfg(feature = "desktop")]
 pub mod commands;
@@ -38,3 +39,7 @@ pub mod commands;
 pub use events::{EventBridge, UiEvent, UiEventSink};
 pub use ipc::{IpcError, IpcRequest, IpcResponse};
 pub use lifecycle::{on_close, CloseAction, CloseCause, TrayItem};
+pub use review::{
+    branch_list, change_for, parse_branches, parse_commits, scope_of, title_of, BranchList,
+    ResolvedRequest, ReviewBranch, ReviewCommit, StartedReview, BRANCH_FORMAT, COMMIT_FORMAT,
+};

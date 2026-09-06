@@ -33,6 +33,18 @@ use crate::adapter::ChangeContext;
 /// appearing to the engine as repository content.
 pub const WORKTREE_SUBDIR: &str = "worktree";
 
+/// Git's empty tree object, the base a whole-repository review diffs against.
+///
+/// Diffing a commit against it yields every tracked file as an addition, which is
+/// what "review the whole repository" means expressed as a diff. Spelling it as a
+/// base rather than as a mode flag means depth selection, truncation and the
+/// omitted-file report all apply to it unchanged — a whole-repository review that
+/// only saw 60% of the tree still says so (§18).
+pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// How many commit subjects a range's message carries before it says so instead.
+const RANGE_SUBJECT_LIMIT: usize = 200;
+
 /// Whether `dir` is a bare repository.
 pub async fn is_bare(runner: &GitRunner, dir: &Path) -> Result<bool, GitError> {
     let output = runner
@@ -79,20 +91,79 @@ pub async fn materialize(
     }
 
     let parents = parents_of(runner, repo_dir, &sha).await?;
-    let message = runner
-        .run(repo_dir, &["log", "-1", "--format=%B", &sha])
-        .await?
-        .stdout;
 
-    let diff_unified = runner
-        .run(
-            repo_dir,
-            &["show", "--format=", "--first-parent", "--patch", &sha],
-        )
-        .await?
-        .stdout;
+    // A change that names a base is a *range* — a branch against what it forked
+    // from, or a whole repository against the empty tree. Reviewing only the tip
+    // commit of such a change would produce a review that looked complete and
+    // had not seen most of the work, which §18 exists to prevent.
+    let base = match change.base_ref.as_deref() {
+        Some(base) if !base.trim().is_empty() => {
+            Some(fork_point(runner, repo_dir, base, &sha).await?)
+        }
+        _ => None,
+    };
 
-    let diff_files = file_diffs(runner, repo_dir, &sha).await?;
+    let message = match base.as_deref() {
+        // The subjects across the range, oldest first: for a branch there is no
+        // single commit message, and using the tip's alone would describe one
+        // commit as if it were the branch.
+        //
+        // Bounded, because a long-lived branch's log is not a change description
+        // and a prompt is not a place to put a thousand subject lines. The count
+        // is stated when it bites (§18) rather than the list quietly ending.
+        Some(base) if base != EMPTY_TREE => {
+            let subjects = runner
+                .run(
+                    repo_dir,
+                    &[
+                        "log",
+                        "--reverse",
+                        &format!("--max-count={RANGE_SUBJECT_LIMIT}"),
+                        "--format=%s",
+                        &format!("{base}..{sha}"),
+                    ],
+                )
+                .await?
+                .stdout;
+            if subjects.lines().count() < RANGE_SUBJECT_LIMIT {
+                subjects
+            } else {
+                format!(
+                    "{subjects}\n(the first {RANGE_SUBJECT_LIMIT} commit subjects on this range)"
+                )
+            }
+        }
+        // The whole repository is not a range of commits somebody wrote; every
+        // commit in history is not its description. `EMPTY_TREE..sha` is accepted
+        // by git and lists the entire log, which would put a thousand unrelated
+        // subjects in front of the engine as if they were this change.
+        _ => {
+            runner
+                .run(repo_dir, &["log", "-1", "--format=%B", &sha])
+                .await?
+                .stdout
+        }
+    };
+
+    let diff_unified = match base.as_deref() {
+        Some(base) => {
+            runner
+                .run(repo_dir, &["diff", "--patch", base, &sha])
+                .await?
+                .stdout
+        }
+        None => {
+            runner
+                .run(
+                    repo_dir,
+                    &["show", "--format=", "--first-parent", "--patch", &sha],
+                )
+                .await?
+                .stdout
+        }
+    };
+
+    let diff_files = file_diffs(runner, repo_dir, base.as_deref(), &sha).await?;
     let stat = diff_files
         .iter()
         .fold(DiffStat::default(), |mut acc, file| {
@@ -202,6 +273,31 @@ async fn extract_archive(
     Ok(())
 }
 
+/// Where `base` and `head` diverged, so a branch diff shows the branch's own work.
+///
+/// The two-dot diff `base..head` would also include everything that landed on the
+/// base since the branch forked, attributed to a branch that never touched it.
+/// `merge-base` is what makes a branch review show the branch.
+///
+/// The empty tree has no history, so it is used as given: it is a base by
+/// construction rather than a commit that might share one.
+async fn fork_point(
+    runner: &GitRunner,
+    repo_dir: &Path,
+    base: &str,
+    head: &str,
+) -> Result<String, GitError> {
+    if base == EMPTY_TREE {
+        return Ok(base.to_owned());
+    }
+    match runner.run(repo_dir, &["merge-base", base, head]).await {
+        Ok(output) if !output.stdout.trim().is_empty() => Ok(output.stdout.trim().to_owned()),
+        // Unrelated histories have no merge base. `git diff base head` is still a
+        // meaningful answer, and is a better one than refusing to review.
+        _ => Ok(base.to_owned()),
+    }
+}
+
 /// The parents of `sha`.
 async fn parents_of(
     runner: &GitRunner,
@@ -226,34 +322,23 @@ async fn parents_of(
 async fn file_diffs(
     runner: &GitRunner,
     repo_dir: &Path,
+    base: Option<&str>,
     sha: &str,
 ) -> Result<Vec<FileDiff>, GitError> {
-    let numstat = runner
-        .run(
-            repo_dir,
-            &[
-                "show",
-                "--format=",
-                "--first-parent",
-                "--numstat",
-                "--no-renames",
-                sha,
-            ],
-        )
-        .await?;
-    let name_status = runner
-        .run(
-            repo_dir,
-            &[
-                "show",
-                "--format=",
-                "--first-parent",
-                "--name-status",
-                "--no-renames",
-                sha,
-            ],
-        )
-        .await?;
+    let stat_args = |format: &'static str| match base {
+        Some(base) => vec!["diff", format, "--no-renames", base, sha],
+        None => vec![
+            "show",
+            "--format=",
+            "--first-parent",
+            format,
+            "--no-renames",
+            sha,
+        ],
+    };
+
+    let numstat = runner.run(repo_dir, &stat_args("--numstat")).await?;
+    let name_status = runner.run(repo_dir, &stat_args("--name-status")).await?;
 
     let statuses: Vec<(String, FileStatus)> = name_status
         .stdout

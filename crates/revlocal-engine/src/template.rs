@@ -190,6 +190,10 @@ impl InvocationTemplate {
                 "workspace-write".to_owned(),
                 "--cd".to_owned(),
                 "{cwd}".to_owned(),
+                // Codex's workspace-write sandbox otherwise permits writes only
+                // under `cwd`; the output contract lives beside that worktree.
+                "--add-dir".to_owned(),
+                "{out_dir}".to_owned(),
                 "{prompt_file_content}".to_owned(),
             ],
             version_args: vec!["--version".to_owned()],

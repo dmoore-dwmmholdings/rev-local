@@ -35,6 +35,7 @@ export function Onboarding({
   busy,
   error,
   onDraft,
+  onPickRepository = () => {},
   onBack,
   onNext,
   onFinish,
@@ -46,6 +47,7 @@ export function Onboarding({
   busy: boolean;
   error: string | null;
   onDraft: (next: Draft) => void;
+  onPickRepository?: () => void;
   onBack: () => void;
   onNext: () => void;
   onFinish: () => void;
@@ -97,16 +99,27 @@ export function Onboarding({
 
       {step === 'add_repo' && (
         <div className="step-body">
-          <label className="filter">
-            Repository path
-            <input
-              className="mono"
-              aria-label="repository path"
-              value={draft.path}
-              placeholder="/home/you/projects/acme"
-              onChange={(e) => onDraft({ ...draft, path: e.target.value })}
-            />
-          </label>
+          {/* The button sits beside the field rather than inside its label: a
+              <button> inside a <label> is a click that also focuses the input,
+              and `.filter` stacks its children, which put a full-width button
+              under a path box. Typing a path stays the primary route — the
+              chooser is a convenience, and on a machine with no chooser
+              installed it says so rather than being the only way in. */}
+          <div className="path-row">
+            <label className="filter">
+              Repository path
+              <input
+                className="mono"
+                aria-label="repository path"
+                value={draft.path}
+                placeholder="/home/you/projects/acme"
+                onChange={(e) => onDraft({ ...draft, path: e.target.value })}
+              />
+            </label>
+            <button type="button" onClick={onPickRepository}>
+              Choose folder…
+            </button>
+          </div>
           <label className="filter">
             Name
             <input
