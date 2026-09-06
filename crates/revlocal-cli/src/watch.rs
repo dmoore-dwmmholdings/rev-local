@@ -132,6 +132,13 @@ impl WatchReport {
                         "  {} — {} discovered, {} recorded",
                         pass.repo, pass.discovered, pass.recorded
                     ));
+                    // Said next to the count it explains, and without the word
+                    // FAILED: a repository with no commits yet is not broken,
+                    // and four of twenty-seven on a real machine were in that
+                    // state (REVL-201).
+                    if let Some(note) = &pass.note {
+                        out.push_str(&format!(" — {note}"));
+                    }
                     if !pass.skipped.is_empty() {
                         out.push_str(&format!(", {} skipped", pass.skipped.len()));
                     }

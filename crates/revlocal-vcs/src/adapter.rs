@@ -99,6 +99,18 @@ pub struct ProbeProblem {
     pub problem: String,
     /// What the user should do.
     pub remediation: String,
+    /// Whether this is something wrong, as opposed to something not ready yet.
+    ///
+    /// A repository somebody has run `git init` in and not committed to is not
+    /// misconfigured and has nothing for anybody to fix — it simply has nothing
+    /// to review until there is a commit. Reporting that as a failure puts the
+    /// word FAILED against four of the twenty-seven repositories on a real
+    /// machine, none of which is broken, and a screen that shouts about things
+    /// that are fine is one people stop reading (REVL-201).
+    ///
+    /// `usable` on the report stays false either way: neither kind can be
+    /// reviewed. This says whether anybody should be alarmed about it.
+    pub fault: bool,
 }
 
 impl ProbeReport {

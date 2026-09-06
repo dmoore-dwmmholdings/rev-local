@@ -352,6 +352,41 @@ pub fn svn_check(available: bool, svn_repos: usize) -> Check {
     }
 }
 
+/// Re-answer the `svn` check from what the install actually has (REVL-195).
+///
+/// [`gather`] is deliberately database-free: "is this machine equipped" is a
+/// fair question to ask before there is an install, and the CLI's `--svn-repos`
+/// is how it is asked. But once a database is open, the count is *known*, and
+/// asking somebody to type a number they have already told rev-local is how
+/// `doctor` came to report "no SVN repositories are configured" on an install
+/// where every Subversion repository was failing for want of the binary.
+///
+/// Replaces the check by name rather than by position, because the position of
+/// a check in a list is not something a caller should have to know.
+pub async fn apply_svn_count(report: &mut DoctorReport, pool: &revlocal_store::Pool) {
+    let Ok(repos) = revlocal_store::RepoStore::new(pool).list().await else {
+        // A database that cannot be read is reported by the install checks. This
+        // one keeps whatever the caller passed rather than claiming zero.
+        return;
+    };
+
+    let configured = repos
+        .iter()
+        .filter(|repo| repo.kind == revlocal_core::RepoKind::Svn)
+        .count();
+
+    let fresh = svn_check(can_run("svn", &["--version", "--quiet"]), configured);
+    if let Some(existing) = report
+        .prerequisites
+        .iter_mut()
+        .find(|check| check.name == "svn")
+    {
+        *existing = fresh;
+    } else {
+        report.prerequisites.push(fresh);
+    }
+}
+
 /// Whether a required tool is present.
 pub fn required_tool_check(tool: &str, available: bool, needed_for: &str, install: &str) -> Check {
     if available {

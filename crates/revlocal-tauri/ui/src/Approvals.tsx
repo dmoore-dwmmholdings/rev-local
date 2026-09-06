@@ -69,6 +69,14 @@ function Action({
         <span className="dim">run #{action.run_id}</span>
       </header>
 
+      {/* Why it is here at all. The class on its own is a label; this is the
+          sentence somebody needs before they either approve it or go and change
+          the setting that would stop it asking (REVL-199). */}
+      <p className="dim held-by">
+        {action.held_by.reason}
+        {action.held_by.remedy && <> — {action.held_by.remedy}</>}
+      </p>
+
       <div className="preview">
         {title && <p className="preview-title">{title}</p>}
         {body && <p className="preview-body">{body}</p>}

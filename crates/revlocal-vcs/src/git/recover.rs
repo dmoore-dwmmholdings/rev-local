@@ -233,6 +233,38 @@ pub async fn origin_url(runner: &GitRunner, dir: &Path) -> Result<Option<String>
     }
 }
 
+/// The branch this checkout is actually on (SPEC §6.2, REVL-200).
+///
+/// # Why this is asked at all
+///
+/// `RepoConfig::branches` defaults to `["main", "release/*"]`, so a checkout
+/// whose default branch is `master`, `trunk` or `develop` matches nothing,
+/// discovers nothing, and reports itself healthy — a repository with three
+/// hundred commits reads exactly like one nobody has touched. Asking git once,
+/// when the repository is registered, is what stops that: the answer is one
+/// command away and the alternative is somebody typing
+/// `repo set <name> default_branch=master` for each of thirty repositories that
+/// a scan just added.
+///
+/// `symbolic-ref` rather than `branch --show-current`, which is newer, and
+/// rather than parsing `git status`, which is prose. A detached HEAD has no
+/// branch and returns `None`: that is a normal state for a checkout somebody is
+/// bisecting in, and guessing a branch for it would be worse than saying
+/// nothing.
+pub async fn head_branch(runner: &GitRunner, dir: &Path) -> Result<Option<String>, GitError> {
+    match runner.run(dir, &["symbolic-ref", "--short", "HEAD"]).await {
+        Ok(output) => Ok(output
+            .lines()
+            .first()
+            .map(|line| line.trim().to_owned())
+            .filter(|branch| !branch.is_empty())),
+        // Exit 1 is a detached HEAD, which is the case above rather than a
+        // failure worth reporting.
+        Err(GitError::Failed { code: 1, .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// What a fetch attempt did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchOutcome {

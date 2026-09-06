@@ -164,8 +164,9 @@ enum Command {
         json: bool,
         /// How many configured repositories use Subversion.
         ///
-        /// Temporary: once `repo add` lands this comes from the database. Until
-        /// then, a missing `svn` cannot be judged blocking or not without it.
+        /// Only consulted without `--database`: with one, the count comes from
+        /// the install itself. It stays for the case doctor is most used in —
+        /// checking a machine before there is anything on it.
         #[arg(long, value_name = "N", default_value_t = 0)]
         svn_repos: usize,
         /// The database to read the install's own state from.
@@ -433,11 +434,56 @@ enum RepoCommand {
         engine: String,
         /// How much it may do unattended.
         ///
-        /// Defaults to `dry_run`: a repository added a moment ago has never been
-        /// reviewed and nobody has seen its findings.
-        #[arg(long, default_value = "dry_run")]
-        autonomy: String,
+        /// Omitted, this install's default is used — `dry_run` unless
+        /// `revlocal repo defaults autonomy=...` says otherwise. A repository
+        /// added a moment ago has never been reviewed and nobody has seen its
+        /// findings, so the shipped default publishes nothing.
+        #[arg(long)]
+        autonomy: Option<String>,
         /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Register every git or Subversion checkout under a directory.
+    ///
+    /// The command for the case rev-local is for: a machine that already has
+    /// thirty repositories on it, none of which anybody wants to type out.
+    Scan {
+        /// The directory to walk.
+        #[arg(value_name = "DIR")]
+        directory: PathBuf,
+        /// How deep below it to look.
+        #[arg(long, default_value_t = revlocal_daemon::scan::DEFAULT_SCAN_DEPTH, value_name = "N")]
+        depth: usize,
+        /// Which engine reviews them.
+        #[arg(long, default_value = "claude")]
+        engine: String,
+        /// How much they may do unattended. Defaults to `repo defaults`.
+        #[arg(long)]
+        autonomy: Option<String>,
+        /// List what would be registered and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// The database to write to.
+        #[arg(long, value_name = "PATH")]
+        database: PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show or set what new repositories get: `autonomy=`.
+    ///
+    /// Existing repositories are not touched — `repo set` changes one of those.
+    Defaults {
+        /// One `key=value` pair. Omit to report the current defaults.
+        #[arg(value_name = "KEY=VALUE")]
+        pair: Option<String>,
+        /// The database to read or write.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
         /// Machine-readable output.
@@ -525,9 +571,12 @@ enum RunsCommand {
 
     /// List recent runs, newest first.
     List {
-        /// Narrow to one repository.
-        #[arg(long, value_name = "ID")]
-        repo: Option<i64>,
+        /// Narrow to one repository, by name or id.
+        ///
+        /// The name is what every other surface prints; the id appears on none
+        /// of them (REVL-213).
+        #[arg(long, value_name = "NAME|ID")]
+        repo: Option<String>,
         /// Narrow to one status.
         #[arg(long, value_name = "STATUS")]
         status: Option<String>,
@@ -581,13 +630,20 @@ enum FindingsCommand {
 
     /// List findings from recent runs.
     List {
-        /// Narrow to one repository.
-        #[arg(long, value_name = "ID")]
-        repo: Option<i64>,
+        /// Narrow to one repository, by name or id.
+        ///
+        /// An agent that has just read `"repo": "rev-local"` out of this
+        /// command's own JSON can feed that value straight back in (REVL-213).
+        #[arg(long, value_name = "NAME|ID")]
+        repo: Option<String>,
         /// Show only this severity and worse.
         #[arg(long, value_name = "SEVERITY")]
         severity: Option<String>,
-        /// How many runs to read.
+        /// How many finished runs to read.
+        ///
+        /// Queued runs have no findings, so they are not counted against this.
+        /// Spending the limit on them is how this command came to report nothing
+        /// at all on an install with a backlog (REVL-204).
         #[arg(long, default_value_t = 20)]
         limit: u32,
         /// The database to read.
@@ -678,9 +734,9 @@ enum BudgetCommand {
 
     /// Show today's spend against the configured ceilings.
     Show {
-        /// Which repository.
-        #[arg(long, value_name = "ID")]
-        repo: i64,
+        /// Which repository, by name or id (REVL-213).
+        #[arg(long, value_name = "NAME|ID")]
+        repo: String,
         /// The database to read.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
@@ -1160,9 +1216,13 @@ async fn run(command: Command) -> Result<(), CliError> {
                     Some(raw) => Some(inspect::parse_status(raw)?),
                 };
                 let pool = revlocal_store::open(&database).await?;
-                let report =
-                    inspect::runs(&pool, repo.map(revlocal_core::RepoId::new), status, limit)
-                        .await?;
+                // Resolved after the pool is open, because a name is a database
+                // question and an id is not (REVL-213).
+                let resolved = match repo.as_deref() {
+                    None => None,
+                    Some(given) => Some(inspect::resolve_repo(&pool, given).await?),
+                };
+                let report = inspect::runs(&pool, resolved, status, limit).await?;
                 pool.close().await;
                 let human = report.render_human();
                 println!("{}", inspect::render(&report, human, json)?);
@@ -1212,9 +1272,11 @@ async fn run(command: Command) -> Result<(), CliError> {
                     Some(raw) => Some(inspect::parse_severity(raw)?),
                 };
                 let pool = revlocal_store::open(&database).await?;
-                let report =
-                    inspect::findings(&pool, repo.map(revlocal_core::RepoId::new), severity, limit)
-                        .await?;
+                let resolved = match repo.as_deref() {
+                    None => None,
+                    Some(given) => Some(inspect::resolve_repo(&pool, given).await?),
+                };
+                let report = inspect::findings(&pool, resolved, severity, limit).await?;
                 pool.close().await;
                 let human = report.render_human();
                 println!("{}", inspect::render(&report, human, json)?);
@@ -1266,7 +1328,7 @@ async fn run(command: Command) -> Result<(), CliError> {
             } => {
                 // §13.1's document when there is one. Without it the shipped
                 // default TTL applies, which is what the daemon would enforce.
-                let ttl = match config.as_deref() {
+                let config_global = match config.as_deref() {
                     None => revlocal_core::GlobalConfig::default(),
                     Some(path) => {
                         let text = std::fs::read_to_string(path).map_err(|source| {
@@ -1289,11 +1351,16 @@ async fn run(command: Command) -> Result<(), CliError> {
                         parsed
                     }
                 }
-                .global
-                .approval_ttl_hours;
+                .global;
+                // The mode is read for the same reason the TTL is: an item held
+                // by the *global* ceiling looks identical to one held by its own
+                // repository's setting, and only one of the two remedies works
+                // (REVL-198).
+                let (ttl, mode) = (config_global.approval_ttl_hours, config_global.mode);
 
                 let pool = revlocal_store::open(&database).await?;
-                let report = inspect::approvals(&pool, i64::from(ttl), chrono::Utc::now()).await?;
+                let report =
+                    inspect::approvals(&pool, i64::from(ttl), mode, chrono::Utc::now()).await?;
                 pool.close().await;
                 let human = report.render_human();
                 println!("{}", inspect::render(&report, human, json)?);
@@ -1323,11 +1390,11 @@ async fn run(command: Command) -> Result<(), CliError> {
                 let pool = revlocal_store::open(&database).await?;
                 let report = inspect::budget(
                     &pool,
-                    revlocal_core::RepoId::new(repo),
+                    inspect::resolve_repo(&pool, &repo).await?,
                     chrono::Utc::now(),
-                    // TODO(RL-1201): per-repo settings arrive with `repo add`.
-                    // §13.1's defaults until then, which is what a fresh install
-                    // actually has.
+                    // §13.1's defaults. Per-repository budget overrides are not
+                    // a thing `repo set` writes, so these are what the install
+                    // actually has rather than a placeholder.
                     &revlocal_core::BudgetSettings::default(),
                 )
                 .await?;
@@ -1448,6 +1515,11 @@ async fn run(command: Command) -> Result<(), CliError> {
                 let pool = revlocal_store::open(path).await?;
                 report.install =
                     doctor::install_checks(&pool, i64::from(ttl), chrono::Utc::now()).await;
+                // The database knows how many Subversion repositories there are.
+                // Asking for `--svn-repos` as well is how doctor came to report
+                // "no SVN repositories are configured" on an install where every
+                // one of them was failing (REVL-195).
+                doctor::apply_svn_count(&mut report, &pool).await;
                 pool.close().await;
             }
             println!("{}", doctor::render(&report, json)?);
@@ -1514,12 +1586,62 @@ async fn run(command: Command) -> Result<(), CliError> {
                     &kind,
                     name.as_deref(),
                     &engine,
-                    &autonomy,
+                    autonomy.as_deref(),
                     chrono::Utc::now(),
                 )
                 .await?;
                 pool.close().await;
                 println!("{}", repo::render_write(&report, json)?);
+                Ok(())
+            }
+            RepoCommand::Scan {
+                directory,
+                depth,
+                engine,
+                autonomy,
+                dry_run,
+                database,
+                json,
+            } => {
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::scan(
+                    &pool,
+                    &directory,
+                    depth,
+                    &engine,
+                    autonomy.as_deref(),
+                    dry_run,
+                    chrono::Utc::now(),
+                )
+                .await?;
+                pool.close().await;
+                print!("{}", repo::render_scan(&report, json)?);
+                if json {
+                    println!();
+                }
+                Ok(())
+            }
+            RepoCommand::Defaults {
+                pair,
+                database,
+                json,
+            } => {
+                // `autonomy=auto` rather than a bare `auto`, so the one command
+                // that reads and writes cannot be made to write by accident.
+                let set_to = match pair.as_deref() {
+                    Some(pair) => Some(pair.strip_prefix("autonomy=").ok_or_else(|| {
+                        revlocal_daemon::repos::RepoCommandError::NotAValue {
+                            what: "key".to_owned(),
+                            given: pair.split('=').next().unwrap_or(pair).to_owned(),
+                            valid: "autonomy".to_owned(),
+                        }
+                    })?),
+                    None => None,
+                };
+                let pool = revlocal_store::open(&database).await?;
+                let report = repo::defaults(&pool, set_to, chrono::Utc::now()).await?;
+                pool.close().await;
+                println!("{}", repo::render_defaults(&report, json)?);
                 Ok(())
             }
 

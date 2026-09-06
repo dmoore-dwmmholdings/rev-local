@@ -114,6 +114,7 @@ impl VcsAdapter for SvnAdapter {
                 tool_version: None,
                 default_branch: None,
                 problems: vec![ProbeProblem {
+                    fault: true,
                     problem: "svn is not on PATH".to_owned(),
                     remediation: "install Subversion and make sure `svn` is on PATH".to_owned(),
                 }],
@@ -133,6 +134,7 @@ impl VcsAdapter for SvnAdapter {
         let mut problems = Vec::new();
         if let Err(error) = self.root_url(repo).await {
             problems.push(ProbeProblem {
+                fault: true,
                 problem: error.to_string(),
                 remediation: "add the repository by its root URL, or point it at a working copy"
                     .to_owned(),
@@ -230,6 +232,7 @@ impl VcsAdapter for SvnAdapter {
             installed: false,
             preserved: Vec::new(),
             problems: vec![ProbeProblem {
+                fault: true,
                 problem: format!(
                     "{}: Subversion hooks live on the server, not in a working copy",
                     repo.name

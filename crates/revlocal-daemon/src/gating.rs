@@ -105,3 +105,71 @@ pub fn gate(
         assessment,
     }
 }
+
+/// Why one action is waiting, and which setting would release it.
+///
+/// §12.2's effective mode is `min(global, repo)`, so an action can be held by a
+/// setting the operator has already widened on the repository. Naming the wrong
+/// half sends somebody to change a setting that was right, watch nothing happen,
+/// and conclude the product is broken — which is what this exists to prevent
+/// (REVL-198, REVL-199).
+///
+/// Lives here rather than in either front end because both inboxes ask it, and
+/// the project's rule is that a headless operator and somebody looking at the
+/// app see the same thing. A copy in each is how the two come to disagree.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Held {
+    /// What is holding it, in one sentence.
+    pub reason: String,
+    /// What would release it, when anything would.
+    ///
+    /// `None` when there is nothing useful to say — advice that cannot work is
+    /// worse than none, because somebody follows it, nothing happens, and they
+    /// stop believing the screen.
+    pub remedy: Option<String>,
+}
+
+/// Why this action is waiting (see [`Held`]).
+///
+/// Phrased in terms of *settings* rather than either front end's spelling of
+/// them, so the CLI can print it after "try:" and the app can put it under a
+/// button without either one lying about where the setting lives.
+pub fn held_by(risk: revlocal_core::RiskClass, mode: revlocal_core::AutonomyMode) -> Held {
+    use revlocal_core::{AutonomyMode, RiskClass};
+
+    match (risk, mode) {
+        (_, AutonomyMode::Auto) => Held {
+            // Not reachable from the mode: under `auto` the gate sends. It is
+            // reachable in the database — an item queued before somebody widened
+            // the mode is still sitting in the inbox, and telling them to widen a
+            // mode they have already widened would be nonsense.
+            reason: "queued while a narrower mode was in force".to_owned(),
+            remedy: Some("approving it sends it; nothing needs changing".to_owned()),
+        },
+        (RiskClass::High, AutonomyMode::AutoLowAskHigh) => Held {
+            reason: "high risk, and the global autonomy is `auto_low_ask_high`".to_owned(),
+            remedy: Some(
+                "set the global mode to `auto` (§13.1's `[global] mode`); a \
+                 repository's own `autonomy` widens the other half of \
+                 `min(global, repo)` only"
+                    .to_owned(),
+            ),
+        },
+        (_, AutonomyMode::DryRun | AutonomyMode::Off) => Held {
+            reason: format!(
+                "the global autonomy is `{}`, which publishes nothing on its own",
+                mode.as_str()
+            ),
+            remedy: Some("set the global mode to `auto` or `auto_low_ask_high`".to_owned()),
+        },
+        (RiskClass::Low, _) => Held {
+            reason: "low risk, so the class is not what held it — first use of this \
+                     target and capability pair (§12.3) is the usual reason"
+                .to_owned(),
+            // Deliberately none. First use is meant to be answered once, by a
+            // person looking at the payload, and "turn off the first-use rule"
+            // is not a remedy anybody should be handed in an inbox.
+            remedy: None,
+        },
+    }
+}

@@ -14,6 +14,6 @@ pub use materialize::{
     WORKTREE_SUBDIR,
 };
 pub use recover::{
-    classify_cursor, fetch, has_remote, mark_superseded_by_rewrite, origin_url, patch_ids,
-    CursorState, DiscoveryEvent, FetchOutcome,
+    classify_cursor, fetch, has_remote, head_branch, mark_superseded_by_rewrite, origin_url,
+    patch_ids, CursorState, DiscoveryEvent, FetchOutcome,
 };

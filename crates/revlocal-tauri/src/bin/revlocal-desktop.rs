@@ -567,9 +567,14 @@ async fn list_approvals() -> Result<serde_json::Value, String> {
     let pool = revlocal_store::open(&database_path())
         .await
         .map_err(|e| format!("could not open the database: {e}"))?;
+    // The mode travels with the TTL for the same reason it does in the CLI: an
+    // item held by the global ceiling looks identical to one held by its own
+    // repository's setting, and only one of the two remedies works (REVL-199).
+    let config = global_config();
     let view = revlocal_daemon::approvals_view::gather(
         &pool,
-        i64::from(global_config().global.approval_ttl_hours),
+        i64::from(config.global.approval_ttl_hours),
+        config.global.mode,
         chrono::Utc::now(),
     )
     .await;

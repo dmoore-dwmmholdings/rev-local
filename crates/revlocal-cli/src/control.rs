@@ -82,10 +82,21 @@ pub async fn pause(pool: &Pool, at: Timestamp) -> Result<ControlReport, ControlE
 
     settings.set_paused(true, at).await.map_err(boxed)?;
 
-    // TODO(RL-1201): cancelling in-flight runs and holding actions needs the
-    // daemon's run registry, which arrives with `watch`. Reported as zero rather
-    // than omitted, so the shape does not change when it starts counting.
-    let report = PauseReport::default();
+    // What is waiting behind the switch, counted rather than assumed (REVL-196).
+    // Nothing is moved: §12.1's word is "holds", and an action rewritten into
+    // some held state would need migrating back on resume. The queue already
+    // refuses to drain while paused; this only reports the size of what it is
+    // refusing, because somebody who has just hit a kill switch needs to know
+    // what will go out the moment they lift it.
+    let held = revlocal_store::PublishActionStore::new(pool)
+        .list_pending(at)
+        .await
+        .map(|pending| pending.len())
+        .unwrap_or_default();
+    let report = PauseReport {
+        actions_held: held,
+        ..PauseReport::default()
+    };
 
     Ok(ControlReport {
         action: "pause".to_owned(),

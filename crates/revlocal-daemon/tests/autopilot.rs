@@ -240,6 +240,237 @@ async fn an_empty_install_is_not_a_stopped_one() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
+async fn a_repository_on_master_is_not_reported_as_a_quiet_one(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // REVL-200. `RepoConfig::branches` defaults to `["main", "release/*"]`, so a
+    // checkout on `master` matches nothing, discovers nothing, and reports "0
+    // discovered, 0 recorded" — the same sentence a repository nobody has
+    // committed to produces. Found by pointing rev-local at its own repository,
+    // which is on `master` and has hundreds of commits: it read as untouched.
+    //
+    // `repo add` now records the checkout's real branch, which fixes it for
+    // anything registered from here on. This test is the other half: rows that
+    // already exist, whose stored config nothing is going to rewrite.
+    let fixture = install().await?;
+    git(&fixture.checkout, &["branch", "-m", "main", "master"])?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    let report = tick(&fixture, 1).await?;
+
+    let pass = report
+        .passes
+        .iter()
+        .find(|pass| pass.repo == "acme")
+        .ok_or("no pass for acme")?;
+    assert_eq!(pass.discovered, 0, "the premise: nothing matches {pass:?}");
+    let error = pass
+        .error
+        .as_deref()
+        .ok_or_else(|| format!("silence is what made this invisible: {pass:?}"))?;
+    assert!(
+        error.contains("branch"),
+        "the report must name the reason, not just the absence: {error}"
+    );
+    assert!(error.contains("try:"), "and what to do about it: {error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_repository_with_no_commits_is_explained_not_blamed(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // REVL-201, found by pointing the loop at all 27 repositories on a real
+    // machine: four were `git init` with nothing committed, and each was told
+    // "no branch matches [...] — try: adjust the repository's `branches`
+    // patterns". That advice cannot work. `refs/heads/` is empty until the first
+    // commit however HEAD reads, so the patterns were already right and editing
+    // them changes nothing. Somebody follows it, sees the same message, and
+    // stops believing the screen.
+    let fixture = install().await?;
+    let empty = fixture.dir.path().join("not-started-yet");
+    std::fs::create_dir_all(&empty)?;
+    git(&empty, &["init", "-q", "-b", "main", "."])?;
+    revlocal_daemon::repos::add(
+        &fixture.pool,
+        &empty.display().to_string(),
+        "git",
+        Some("not-started-yet"),
+        "mock",
+        None,
+        at(0),
+    )
+    .await?;
+
+    let report = tick(&fixture, 1).await?;
+
+    let pass = report
+        .passes
+        .iter()
+        .find(|pass| pass.repo == "not-started-yet")
+        .ok_or("no pass for the empty repository")?;
+    assert!(
+        pass.error.is_none(),
+        "nothing is wrong with it, so nothing should read as FAILED: {pass:?}"
+    );
+    let note = pass
+        .note
+        .as_deref()
+        .ok_or_else(|| format!("silence hides why it is always empty: {pass:?}"))?;
+    assert!(
+        note.contains("no commits"),
+        "the reason has to be the real one: {note}"
+    );
+    assert!(
+        !note.contains("branches` patterns"),
+        "advice that cannot work is worse than none: {note}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_discovery_failure_is_reported_once() -> Result<(), Box<dyn std::error::Error>> {
+    // REVL-202. Every pass error was copied into `notes` as well, so `watch`
+    // printed each one twice — once as `repo — FAILED: …` and once as
+    // `held: repo: …`. Invisible while pass errors were rare; four of
+    // twenty-seven repositories said everything twice as soon as they were not.
+    let fixture = install().await?;
+    git(&fixture.checkout, &["branch", "-m", "main", "master"])?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    let report = tick(&fixture, 1).await?;
+
+    let pass = report
+        .passes
+        .iter()
+        .find(|pass| pass.repo == "acme")
+        .ok_or("no pass for acme")?;
+    assert!(pass.error.is_some(), "the premise: {pass:?}");
+    assert!(
+        !report.notes.iter().any(|note| note.contains("acme:")),
+        "the same sentence, twice, for the same repository: {:?}",
+        report.notes
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_genuinely_quiet_repository_is_not_called_broken(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // The other side of the same line. A repository that has been reviewed and
+    // has had no new commits since must not be reported as a fault, or the loop
+    // cries wolf on every install and the message above stops being read.
+    let fixture = install().await?;
+
+    // The first pass takes what is there and moves the cursor.
+    let first = tick(&fixture, 1).await?;
+    assert!(
+        first
+            .passes
+            .iter()
+            .any(|pass| pass.repo == "acme" && pass.discovered > 0),
+        "the premise: something was there to find {first:?}"
+    );
+
+    // The second finds nothing, because there is nothing — not because it is
+    // looking in the wrong place.
+    let second = tick(&fixture, 2).await?;
+
+    let pass = second
+        .passes
+        .iter()
+        .find(|pass| pass.repo == "acme")
+        .ok_or("no pass for acme")?;
+    assert_eq!(pass.discovered, 0);
+    assert!(
+        pass.error.is_none(),
+        "a quiet repository is not a broken one: {pass:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_paused_install_delivers_nothing_and_says_why() -> Result<(), Box<dyn std::error::Error>>
+{
+    // §12.1: an engaged kill switch "holds the publish queue (does not lose it)".
+    //
+    // The kill-switch suite asserts that by asking `may_dispatch` itself and
+    // dispatching only if allowed — which tests the helper rather than the
+    // caller, and would keep passing if `tick` stopped asking. These two tests go
+    // through `tick`, so they fail if the loop ever delivers past the switch.
+    let fixture = install().await?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    // One tick reviews and delivers, so there is a working loop to stop.
+    let first = tick(&fixture, 1).await?;
+    assert!(first.published > 0, "nothing was ever delivered: {first:?}");
+
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n    let y = 2;\n}\n",
+        "bind another",
+    )?;
+    SettingStore::new(&fixture.pool)
+        .set_paused(true, at(2))
+        .await?;
+
+    let paused = tick(&fixture, 3).await?;
+
+    assert!(paused.paused, "the tick must see the switch: {paused:?}");
+    assert_eq!(
+        paused.published, 0,
+        "a paused install delivered work: {paused:?}"
+    );
+    assert!(
+        paused
+            .stopped
+            .as_deref()
+            .is_some_and(|line| line.contains("kill switch")),
+        "being stopped must not render as having nothing to do: {paused:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn what_the_switch_held_goes_out_on_resume() -> Result<(), Box<dyn std::error::Error>> {
+    // Held, not lost. Some of those actions were approved by a person, and a
+    // pause that quietly dropped them would make the switch unusable.
+    let fixture = install().await?;
+    SettingStore::new(&fixture.pool)
+        .set_paused(true, at(0))
+        .await?;
+    commit(
+        &fixture.checkout,
+        "fn main() {\n    let x = 1;\n}\n",
+        "bind a value",
+    )?;
+
+    let held = tick(&fixture, 1).await?;
+    assert_eq!(held.published, 0, "{held:?}");
+
+    SettingStore::new(&fixture.pool)
+        .set_paused(false, at(2))
+        .await?;
+    let resumed = tick(&fixture, 3).await?;
+
+    assert!(
+        resumed.published > 0,
+        "resuming must deliver what was waiting: {resumed:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_finding_is_written_to_disk_with_no_tracker_configured(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // "GitHub issues, Andare issues, **or local reports**" — the third one never

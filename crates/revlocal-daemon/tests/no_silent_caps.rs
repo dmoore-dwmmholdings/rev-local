@@ -47,6 +47,18 @@ const ACCOUNTED_FOR: &[(&str, &str)] = &[
          very long time can notify again, which is the right way to fail.",
     ),
     (
+        "crates/revlocal-daemon/src/repos.rs",
+        "`free_name` tries at most three ancestors before giving up on a name for \
+         a discovered checkout (`api`, `acme-api`, `work-acme-api`). What is cut \
+         is not lost: the scan records that path as skipped with the reason, so a \
+         repository passed over for want of a free name appears in the report \
+         rather than merely being absent from it, and `--name` registers it. The \
+         scan's own two caps — the depth bound and directories it could not read \
+         — are carried on `ScanReport` as `not_descended` and `unreadable` and \
+         printed, because a scan cut off one level above thirty checkouts and a \
+         scan of an empty tree otherwise read identically.",
+    ),
+    (
         "crates/revlocal-daemon/src/repository_view.rs",
         "RECENT_RUNS bounds the recent-runs list on §15's repository screen. One \
          more run than the list needs is fetched so `more_runs` is a fact rather \

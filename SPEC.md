@@ -1066,6 +1066,8 @@ acceptance-test API.
 ```
 revlocal doctor                     # prerequisites, engines, MCP targets, capabilities
 revlocal repo add <path|url> --kind git|github|svn [--name N] [--engine E]
+revlocal repo scan <dir> [--depth N] [--engine E] [--autonomy A] [--dry-run]
+revlocal repo defaults [autonomy=A]  # what a repository added without --autonomy gets
 revlocal repo list | show <name> | remove <name> | set <name> key=value...
 revlocal watch [--repo N]           # run the daemon in the foreground
 revlocal review --repo N --rev <ref> [--depth D] [--dry-run]

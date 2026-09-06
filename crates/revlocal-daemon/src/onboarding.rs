@@ -242,7 +242,7 @@ pub async fn add_repo(
         draft.kind.as_str(),
         name,
         draft.engine.as_str(),
-        draft.autonomy.as_str(),
+        Some(draft.autonomy.as_str()),
         at,
     )
     .await

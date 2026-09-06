@@ -14,6 +14,10 @@ function action(overrides: Partial<QueuedAction> = {}): QueuedAction {
       title: 'SQL injection in find_user',
       body: 'name is interpolated straight into the query.',
     }),
+    held_by: {
+      reason: 'high risk, and the global autonomy is `auto_low_ask_high`',
+      remedy: 'set the global mode to `auto`',
+    },
     has_finding: true,
     ...overrides,
   };
@@ -22,6 +26,24 @@ function action(overrides: Partial<QueuedAction> = {}): QueuedAction {
 const noop = vi.fn();
 
 describe('approvals', () => {
+  it('says which setting is holding an item, not only how risky it is', () => {
+    // REVL-199. The class on its own is a label. A repository already set to
+    // `autonomy = auto` sat here with its issues waiting, and nothing on the
+    // screen said the *global* half of `min(global, repo)` was the one that
+    // applied — so the reasonable conclusion was that the setting had not taken.
+    render(
+      <Approvals
+        view={{ waiting: [action()] }}
+        onApprove={noop}
+        onReject={noop}
+        onEdit={noop}
+      />,
+    );
+
+    expect(screen.getByText(/global autonomy/)).toBeTruthy();
+    expect(screen.getByText(/set the global mode/)).toBeTruthy();
+  });
+
   it('shows how long an item has left, and marks it when nearly up', () => {
     // RL-1541, found on the live install: three real findings had waited 70 of
     // their 72 hours and the inbox said nothing. Two hours later the daemon

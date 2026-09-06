@@ -451,6 +451,16 @@ export type QueuedAction = {
   unsendable?: string;
   /** How long before it is discarded, in words; absent when it waits forever. */
   deadline?: string | null;
+  /**
+   * What is holding this action, and what would release it (REVL-199).
+   *
+   * The risk class alone left the rest to be inferred, so a repository already
+   * set to `autonomy = auto` sat here with its issues waiting and nothing said
+   * that the *global* half of `min(global, repo)` was the one that applied.
+   * `remedy` is absent when there is nothing useful to say — advice that cannot
+   * work is worse than none.
+   */
+  held_by: { reason: string; remedy?: string | null };
   has_finding: boolean;
 };
 

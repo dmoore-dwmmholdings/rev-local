@@ -200,6 +200,7 @@ pub fn select(probes: &TransportProbes) -> TransportSelection {
             rung: "mcp",
             available: false,
             problem: Some(ProbeProblem {
+                fault: true,
                 problem: format!("the `{server}` MCP server did not answer"),
                 remediation: format!(
                     "check the `mcpServers.{server}` entry in config.toml, and that \
@@ -211,6 +212,7 @@ pub fn select(probes: &TransportProbes) -> TransportSelection {
             rung: "mcp",
             available: false,
             problem: Some(ProbeProblem {
+                fault: true,
                 problem: "no GitHub MCP server is configured".to_owned(),
                 remediation: "add an `mcpServers.github` entry to config.toml".to_owned(),
             }),
@@ -220,11 +222,13 @@ pub fn select(probes: &TransportProbes) -> TransportSelection {
     // (b) the gh CLI, if authenticated.
     let gh_problem = if !probes.gh_installed {
         Some(ProbeProblem {
+            fault: true,
             problem: "`gh` is not on PATH".to_owned(),
             remediation: "install the GitHub CLI, then run `gh auth login`".to_owned(),
         })
     } else if !probes.gh_authenticated {
         Some(ProbeProblem {
+            fault: true,
             problem: "`gh` is installed but not authenticated".to_owned(),
             remediation: "run `gh auth login`; rev-local uses your existing CLI login \
                           and stores no credentials of its own"
@@ -251,6 +255,7 @@ pub fn select(probes: &TransportProbes) -> TransportSelection {
         None
     } else if probes.repo_is_public.is_none() {
         Some(ProbeProblem {
+            fault: true,
             problem: "the repository's visibility is unknown, so unauthenticated \
                       access cannot be assumed"
                 .to_owned(),
@@ -260,6 +265,7 @@ pub fn select(probes: &TransportProbes) -> TransportSelection {
         })
     } else {
         Some(ProbeProblem {
+            fault: true,
             problem: "the repository is private, and unauthenticated access cannot \
                       read it"
                 .to_owned(),

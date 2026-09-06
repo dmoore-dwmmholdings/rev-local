@@ -163,7 +163,11 @@ pub struct ExportedRun {
 }
 
 /// One finding, as exported.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` but not `Eq`: `confidence` is a float, and a float has no total
+/// equality. Carrying the number the engine actually gave is worth more than a
+/// derive nothing in this crate uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExportedFinding {
     /// The finding's id.
     pub id: i64,
@@ -188,6 +192,28 @@ pub struct ExportedFinding {
     pub line_start: Option<u32>,
     /// One line.
     pub title: String,
+    /// What it actually says (REVL-207).
+    ///
+    /// This command exists so findings can be "kept before `db vacuum` deletes
+    /// the rows", and an export of titles and locations is a filing card: the
+    /// mechanism, the input that breaks, and the fix are what RL-1550 added
+    /// because a title and a line were not enough to act on. Dropped here, they
+    /// are unrecoverable — the rows they came from are the ones being deleted.
+    pub body: String,
+    /// The concrete input or state that goes wrong, when the engine gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_scenario: Option<String>,
+    /// What to do instead, when the engine offered something.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_fix: Option<String>,
+    /// Where the problem is in its life: open, published, resolved.
+    ///
+    /// Kept because an export read months later is a record of what was found
+    /// *and what happened to it*, and "we knew and did nothing" is a different
+    /// document from "we knew and fixed it".
+    pub state: String,
+    /// How sure the engine was, on its own scale (§10.2).
+    pub confidence: f64,
 }
 
 /// A table left out, with the reason.
@@ -200,7 +226,9 @@ pub struct Excluded {
 }
 
 /// The whole document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` only, following `ExportedFinding` above.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Export {
     /// The format version. See [`SCHEMA_VERSION`].
     pub schema_version: u32,
@@ -309,6 +337,11 @@ pub async fn export(
                 file: finding.file.clone(),
                 line_start: finding.line_start,
                 title: finding.title.clone(),
+                body: finding.body.clone(),
+                failure_scenario: finding.failure_scenario.clone(),
+                suggested_fix: finding.suggested_fix.clone(),
+                state: finding.state.as_str().to_owned(),
+                confidence: finding.confidence,
             });
         }
     }

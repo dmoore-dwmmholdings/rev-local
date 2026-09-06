@@ -27,6 +27,7 @@ pub mod prompt;
 pub mod repos;
 pub mod repository_view;
 pub mod run_view;
+pub mod scan;
 pub mod scheduler;
 pub mod settings_view;
 pub mod startup;

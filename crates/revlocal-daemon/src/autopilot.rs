@@ -107,6 +107,14 @@ pub struct RepoPass {
     /// What went wrong, if anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Something worth saying that is not a fault (REVL-201).
+    ///
+    /// A repository with no commits yet will never be reviewed and nobody needs
+    /// to do anything about it. Saying nothing hides why it is always empty;
+    /// saying it under the word FAILED puts an alarm against a repository that
+    /// is perfectly fine, and a screen that does that stops being read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// What one tick did, in the order it did it.
@@ -356,11 +364,12 @@ pub async fn tick(
         for repo in &repos {
             report.passes.push(discover_one(pool, repo, at).await);
         }
-        for pass in &report.passes {
-            if let Some(error) = &pass.error {
-                report.notes.push(format!("{}: {error}", pass.repo));
-            }
-        }
+        // Deliberately not copied into `notes` (REVL-202). `TickReport` carries
+        // `passes` and `notes` together, so every consumer already has the
+        // error; the copy only made `watch` print each discovery failure twice,
+        // once as `repo — FAILED: …` and once as `held: repo: …`. Teaching each
+        // renderer to de-duplicate instead is how two lists come to disagree
+        // about which one is authoritative — RL-1536 was the same shape.
     }
 
     for repo in &repos {
@@ -691,6 +700,7 @@ pub async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
         skipped: Vec::new(),
         cursor: None,
         error: None,
+        note: None,
     };
 
     for change in &changes {
@@ -718,7 +728,54 @@ pub async fn discover_one(pool: &Pool, repo: &Repo, at: Timestamp) -> RepoPass {
         }
     }
 
+    // Nothing found, and nothing ever found: the case where a repository is
+    // configured for branches it does not have (REVL-200).
+    //
+    // `branches` defaults to `["main", "release/*"]`, so a checkout on `master`
+    // discovered nothing and said "0 discovered, 0 recorded" — which is exactly
+    // what a repository nobody has committed to says. The adapter's own `probe`
+    // already knows the difference and nothing in the loop was asking it.
+    //
+    // Only when the cursor has never moved. A repository that has discovered
+    // something before is quiet for ordinary reasons, and probing it every tick
+    // would be a git invocation per repository per pass to re-learn that.
+    //
+    // The known hole in that condition (REVL-212): a repository that worked and
+    // then had its branch renamed has a cursor, matches nothing, and goes silent
+    // again — this same bug by another route. The fix is not to drop the
+    // condition, which would probe every quiet repository every tick, but to
+    // have discovery say it matched no branches, which it already knows and
+    // currently throws away.
+    if changes.is_empty() && cursor.is_none() {
+        match nothing_to_discover(repo).await {
+            Some((problem, true)) => pass.error = Some(problem),
+            Some((problem, false)) => pass.note = Some(problem),
+            None => {}
+        }
+    }
+
     pass
+}
+
+/// Why a repository that has never discovered anything found nothing, and
+/// whether anybody should be alarmed about it.
+///
+/// Returns `None` for a repository that is merely quiet — a checkout with
+/// nothing new on it is not a fault, and reporting one would make the loop cry
+/// wolf on every fresh install.
+///
+/// The boolean is the difference between "your branch patterns match nothing
+/// here", which somebody can fix, and "this has no commits yet", which nobody
+/// needs to (REVL-201). Both mean nothing will be reviewed; only one is wrong.
+async fn nothing_to_discover(repo: &Repo) -> Option<(String, bool)> {
+    let adapter = revlocal_vcs::adapter_for(repo).ok()?;
+    let probe = adapter.probe(repo).await.ok()?;
+    let problem = probe.problems.first()?;
+
+    Some((
+        format!("{}\n  try: {}", problem.problem, problem.remediation),
+        problem.fault,
+    ))
 }
 
 fn failed_pass(repo: &Repo, error: String) -> RepoPass {
@@ -728,6 +785,7 @@ fn failed_pass(repo: &Repo, error: String) -> RepoPass {
         recorded: 0,
         skipped: Vec::new(),
         cursor: None,
+        note: None,
         error: Some(error),
     }
 }

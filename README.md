@@ -15,6 +15,11 @@ review engine is a process you control.
 
 Working today:
 
+- **Every repository you already have.** `revlocal repo scan ~/code` walks a
+  directory, finds each git or Subversion working copy in it, and registers the
+  ones that are not configured yet — with `--dry-run` to see the list first. What
+  a scan's repositories are allowed to do unattended is one setting
+  (`revlocal repo defaults autonomy=auto`) rather than one command per repository.
 - **The loop, unattended.** Turn on Autopilot and the app checks every enabled
   repository on a timer, reviews what it finds, and delivers the findings without
   anybody pressing anything. Optionally starting itself at login, because the

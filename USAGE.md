@@ -25,15 +25,48 @@ A repository is added in `dry_run` autonomy, and `repo add` says so:
 
 ```
 $ revlocal repo add ~/code/acme --kind git --name acme --database ~/rl.db
-added acme (git), engine claude, autonomy dry_run — nothing is published until you widen it
+added acme (git), engine claude, autonomy dry_run — findings are recorded, nothing is published until you widen it
 ```
+
+## Every repository on the machine
+
+Adding them one at a time is the wrong shape for what rev-local is for. `repo
+scan` walks a directory, recognises each git or Subversion working copy, and
+registers the ones that are not configured already:
+
+```
+$ revlocal repo scan ~/code --dry-run --database ~/rl.db
+would add /Users/you/code/acme as acme
+would add /Users/you/code/beta as beta
+skipped  /Users/you/code/old — already configured
+
+2 to add, 1 skipped, autonomy dry_run — nothing was written; run it again without --dry-run
+```
+
+It stops at a repository rather than walking its contents, never descends into
+`node_modules`, `target` or a hidden directory, and looks four levels below the
+root unless `--depth` says otherwise. Two checkouts with the same directory name
+are disambiguated by the directory above them (`acme-api`, `beta-api`).
+
+`dry_run` is the right default for the first repository somebody adds by hand and
+the wrong one for thirty found by a scan, because every one of them would review
+and publish nothing until it was widened individually. Set it once instead:
+
+```
+$ revlocal repo defaults autonomy=auto --database ~/rl.db
+repositories added without --autonomy get `auto` — findings are published without asking
+```
+
+That applies to repositories added from then on — `repo scan` and `repo add`
+both honour it, and `--autonomy` on either still wins. Repositories that already
+exist are left alone; `repo set <name> autonomy=auto` changes one of those.
 
 ## The command surface
 
 | group | what it does |
 |---|---|
 | `revlocal doctor` | prerequisites, engines, publish targets |
-| `revlocal repo` | add, list, show, remove and configure repositories |
+| `revlocal repo` | add, scan for, list, show, remove and configure repositories |
 | `revlocal review` | review one change now |
 | `revlocal watch` | run the daemon in the foreground |
 | `revlocal backfill` | review history, behind live work |

@@ -80,6 +80,14 @@ pub struct QueuedAction {
     /// lets a real finding be thrown away by somebody who thought they had time
     /// (RL-1541).
     pub deadline: Option<String>,
+    /// What is holding this action, and what would release it (REVL-199).
+    ///
+    /// The screen showed the risk class and left the rest to be inferred, so a
+    /// repository somebody had already set to `autonomy = auto` sat here with
+    /// its issues waiting and nothing saying that the *global* half of
+    /// `min(global, repo)` was the one that applied. The CLI's inbox says it;
+    /// two inboxes that explain different amounts is the same defect twice.
+    pub held_by: crate::gating::Held,
     /// Whether this action carries a finding that could be suppressed.
     ///
     /// §12.4's "reject and suppress this finding" is only meaningful when there is
@@ -123,10 +131,12 @@ impl ApprovalsView {
 /// Read the inbox (SPEC §12.4).
 ///
 /// `ttl_hours` is §13.1's `approval_ttl_hours` and `now` the moment to measure
-/// against, so each item can say how long it has left.
+/// against, so each item can say how long it has left. `mode` is the install's
+/// global autonomy — half of what decided that each of these waits at all.
 pub async fn gather(
     pool: &Pool,
     ttl_hours: i64,
+    mode: revlocal_core::AutonomyMode,
     now: revlocal_core::Timestamp,
 ) -> Result<ApprovalsView, ApprovalsError> {
     let actions = PublishActionStore::new(pool)
@@ -150,6 +160,7 @@ pub async fn gather(
                 target: action.target,
                 capability: action.capability.as_str().to_owned(),
                 risk: action.risk.as_str().to_owned(),
+                held_by: crate::gating::held_by(action.risk, mode),
                 deadline: crate::approvals::time_left(action.created_at, ttl_hours, now),
                 payload_json: action.payload_json,
                 has_finding: action.finding_id.is_some(),
@@ -186,6 +197,10 @@ mod tests {
             target: target.to_owned(),
             capability: "post_review".to_owned(),
             risk: "high".to_owned(),
+            held_by: crate::gating::held_by(
+                revlocal_core::RiskClass::High,
+                revlocal_core::AutonomyMode::AutoLowAskHigh,
+            ),
             payload_json: r#"{"body":"hello"}"#.to_owned(),
             unsendable: None,
             deadline: None,

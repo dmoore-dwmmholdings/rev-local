@@ -25,7 +25,8 @@ pub use adapter::{
     ProbeProblem, ProbeReport, Result, VcsAdapter, VcsError,
 };
 pub use git::{
-    origin_url, CursorState, DiscoveryEvent, GitAdapter, GitError, GitOutput, GitRunner, EMPTY_TREE,
+    head_branch, origin_url, CursorState, DiscoveryEvent, GitAdapter, GitError, GitOutput,
+    GitRunner, EMPTY_TREE,
 };
 pub use github::{GitHubTransport, GitHubWrite, TransportSelection, WriteRefused};
 pub use scratch::{RunOutcome, ScratchDir};

@@ -1102,6 +1102,164 @@ mod inspect_commands {
     }
 
     #[tokio::test]
+    async fn a_repository_can_be_named_the_way_every_screen_names_it() -> Result<(), String> {
+        // REVL-213. `--repo` took a numeric id on `findings list`, `runs list`
+        // and `budget show`, a name on `backfill` and `watch`, and a path on
+        // `review`. The name is what every *output* prints; the id appears on no
+        // screen at all — so narrowing findings to the repository in front of you
+        // meant looking up a number the product never showed you.
+        //
+        // For an agent it was worse than inconvenient: `findings list --json`
+        // hands back `"repo": "acme-api"`, and that value could not be fed into
+        // the command it came from.
+        let (pool, _dir, repo_id) = store().await?;
+        seed_one_finding(&pool, repo_id).await?;
+
+        let by_name = revlocal_cli::inspect::resolve_repo(&pool, "acme-api")
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(by_name, repo_id);
+
+        // A bare number is still an id, so anything already written keeps working.
+        let by_id = revlocal_cli::inspect::resolve_repo(&pool, &repo_id.get().to_string())
+            .await
+            .map_err(|e| e.to_string())?;
+        assert_eq!(by_id, repo_id);
+
+        // And a name nothing has says so, rather than being read as an id or
+        // silently narrowing to nothing.
+        let missing = revlocal_cli::inspect::resolve_repo(&pool, "not-a-repo")
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(missing.contains("no repository named"), "{missing}");
+        assert!(
+            missing.contains("repo show"),
+            "must offer a way to see which exist: {missing}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_listed_finding_says_which_run_explains_it() -> Result<(), String> {
+        // REVL-205. The row carries the claim and the location; `body`,
+        // `failure_scenario` and `suggested_fix` live on `runs show <run_id>`,
+        // and the row named no run. An agent that wanted to act on a finding had
+        // to walk the run list looking for one containing the fingerprint —
+        // 1,295 runs on the install this was found on.
+        let (pool, _dir, repo_id) = store().await?;
+        let run_id = seed_one_finding(&pool, repo_id).await?;
+
+        let report = findings(&pool, None, None, 10)
+            .await
+            .map_err(|e| e.to_string())?;
+        let row = report.findings.first().ok_or("no findings listed")?;
+
+        assert_eq!(
+            row.run_id,
+            run_id.get(),
+            "the row must name the run that explains it: {row:?}"
+        );
+
+        // And the detail really is reachable from it, rather than the field
+        // merely being present.
+        let detail = run_detail(&pool, revlocal_core::RunId::new(row.run_id))
+            .await
+            .map_err(|e| e.to_string())?;
+        assert!(
+            detail
+                .findings
+                .iter()
+                .any(|found| found.row.fingerprint == row.fingerprint),
+            "the named run does not contain the finding it was named for"
+        );
+
+        let human = report.render_human();
+        assert!(human.contains("runs show"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_queue_of_waiting_runs_does_not_hide_the_findings() -> Result<(), String> {
+        // REVL-204, found on the 27-repository install: 16 findings in the
+        // database and `findings list --json` answering `{"findings": [],
+        // "from_runs": 20}`.
+        //
+        // The listing read the newest `limit` runs of *any* status, and the
+        // newest runs on a busy install are queued ones — 1,147 of them there,
+        // with the runs that had findings hundreds of ids further back. A queued
+        // run has no findings by definition, so the limit was being spent on rows
+        // that could not contribute, and the one command an agent asks "what
+        // should I fix" said "nothing" with no hint it was looking in the wrong
+        // place.
+        let (pool, _dir, repo_id) = store().await?;
+        seed_one_finding(&pool, repo_id).await?;
+
+        // Twenty runs queued after it, exactly as a backlog leaves them.
+        let changes = revlocal_store::ChangeStore::new(&pool);
+        let runs = revlocal_store::RunStore::new(&pool);
+        let now = chrono::Utc::now();
+        for n in 0..20 {
+            let change = changes
+                .upsert(&revlocal_core::Change {
+                    id: revlocal_core::ChangeId::new(0),
+                    repo_id,
+                    kind: revlocal_core::ChangeKind::Commit,
+                    external_id: format!("queued-{n}"),
+                    title: None,
+                    author_name: None,
+                    author_email: None,
+                    authored_at: None,
+                    branch: Some("main".to_owned()),
+                    base_ref: None,
+                    head_ref: None,
+                    url: None,
+                    diff_stat: revlocal_core::DiffStat::default(),
+                    detected_at: now,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            runs.insert(&revlocal_core::Run {
+                id: revlocal_core::RunId::new(0),
+                change_id: change.id,
+                attempt: 1,
+                status: revlocal_core::RunStatus::Queued,
+                engine: revlocal_core::EngineKind::Mock,
+                depth: revlocal_core::Depth::Summary,
+                trigger: revlocal_core::TriggerSource::Poll,
+                skip_reason: None,
+                error: None,
+                error_detail: None,
+                degraded: None,
+                usage: Usage::default(),
+                started_at: None,
+                finished_at: None,
+                transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
+                created_at: now,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        // The default limit, which is what anybody actually runs.
+        let report = findings(&pool, None, None, 20)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "the queue hid the findings again: {report:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn a_listed_finding_names_its_repository_and_its_line() -> Result<(), String> {
         // RL-1549. This is the surface an autonomous loop reads, and a row of it
         // carried neither. The premise is one app watching every local
@@ -1133,13 +1291,66 @@ mod inspect_commands {
         // An empty list rendered as nothing is indistinguishable from a command
         // that failed to read anything.
         let (pool, _dir, _repo_id) = store().await?;
-        let report = approvals(&pool, 72, chrono::Utc::now())
-            .await
-            .map_err(|e| e.to_string())?;
+        let report = approvals(
+            &pool,
+            72,
+            revlocal_core::AutonomyMode::AutoLowAskHigh,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         assert!(report.waiting.is_empty());
         let human = report.render_human();
         assert!(human.contains("Nothing is waiting"), "{human}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_inbox_says_which_setting_is_holding_each_item() -> Result<(), String> {
+        // Found by running the loop end to end (REVL-198). A repository set to
+        // `autonomy = auto` still had its GitHub issues waiting, because the
+        // effective mode is `min(global, repo)` and the *global* default is
+        // `auto_low_ask_high`. The inbox said what was waiting and never why, so
+        // the reasonable conclusion was that the setting had not taken.
+        //
+        // The remedy has to name the half that applies. Sending somebody to
+        // `repo set autonomy=auto` when that is already what it says is worse
+        // than saying nothing: they change it, nothing happens, and they stop
+        // believing the screen.
+        let (pool, _dir, _repo_id) = store().await?;
+        let report = approvals(
+            &pool,
+            72,
+            revlocal_core::AutonomyMode::AutoLowAskHigh,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        // The listing is empty here; the judgement itself is what is under test,
+        // and it is reached through the same public surface the CLI uses.
+        assert!(report.waiting.is_empty());
+
+        let held = ApprovalsReport {
+            waiting: vec![WaitingAction {
+                id: 1,
+                run_id: 1,
+                target: "github".to_owned(),
+                capability: "create_issue".to_owned(),
+                deadline: Some("2d left".to_owned()),
+                risk: "high".to_owned(),
+                held_by: "high risk, and the global mode is `auto_low_ask_high`\n      \
+                          try: set `mode = \"auto\"` under [global]"
+                    .to_owned(),
+            }],
+        }
+        .render_human();
+
+        assert!(held.contains("high risk"), "{held}");
+        assert!(
+            held.contains("global mode"),
+            "the half that is holding it must be named: {held}"
+        );
         Ok(())
     }
 
@@ -1157,6 +1368,8 @@ mod inspect_commands {
                     target: "andare".to_owned(),
                     capability: "create_issue".to_owned(),
                     deadline: Some("2h left".to_owned()),
+                    risk: "high".to_owned(),
+                    held_by: "high risk, and the global mode is `auto_low_ask_high`".to_owned(),
                 },
                 WaitingAction {
                     id: 2,
@@ -1164,6 +1377,8 @@ mod inspect_commands {
                     target: "github".to_owned(),
                     capability: "create_issue".to_owned(),
                     deadline: None,
+                    risk: "high".to_owned(),
+                    held_by: "high risk, and the global mode is `auto_low_ask_high`".to_owned(),
                 },
             ],
         };
@@ -1356,7 +1571,7 @@ mod repo_commands {
             "git",
             None,
             "claude",
-            "dry_run",
+            Some("dry_run"),
             now(),
         )
         .await
@@ -1383,7 +1598,7 @@ mod repo_commands {
             "git",
             None,
             "claude",
-            "dry_run",
+            Some("dry_run"),
             now(),
         )
         .await
@@ -1395,7 +1610,7 @@ mod repo_commands {
             "git",
             None,
             "claude",
-            "dry_run",
+            Some("dry_run"),
             now(),
         )
         .await;
@@ -1414,11 +1629,19 @@ mod repo_commands {
         // A message saying only "invalid engine" makes somebody go and find the
         // list. The list is three words long.
         let (pool, _dir) = store().await?;
-        let error = add(&pool, "/w/x", "git", None, "nonsense", "dry_run", now())
-            .await
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+        let error = add(
+            &pool,
+            "/w/x",
+            "git",
+            None,
+            "nonsense",
+            Some("dry_run"),
+            now(),
+        )
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
 
         assert!(error.contains("claude"), "{error}");
         assert!(error.contains("codex"), "{error}");
@@ -1437,7 +1660,7 @@ mod repo_commands {
             "github",
             None,
             "claude",
-            "dry_run",
+            Some("dry_run"),
             now(),
         )
         .await
@@ -1458,9 +1681,17 @@ mod repo_commands {
     #[tokio::test]
     async fn set_changes_what_it_names_and_says_what_it_changed() -> Result<(), String> {
         let (pool, _dir) = store().await?;
-        add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
-            .await
-            .map_err(|e| e.to_string())?;
+        add(
+            &pool,
+            "/w/acme",
+            "git",
+            None,
+            "claude",
+            Some("dry_run"),
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         let report = set(
             &pool,
@@ -1489,9 +1720,17 @@ mod repo_commands {
         // Applying the good half of a bad command leaves the repository in a state
         // nobody asked for, and the user cannot tell which half took.
         let (pool, _dir) = store().await?;
-        add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
-            .await
-            .map_err(|e| e.to_string())?;
+        add(
+            &pool,
+            "/w/acme",
+            "git",
+            None,
+            "claude",
+            Some("dry_run"),
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         let failed = set(
             &pool,
@@ -1520,9 +1759,17 @@ mod repo_commands {
         // repository and finds their commits still firing a hook deserves to have
         // been told.
         let (pool, _dir) = store().await?;
-        add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
-            .await
-            .map_err(|e| e.to_string())?;
+        add(
+            &pool,
+            "/w/acme",
+            "git",
+            None,
+            "claude",
+            Some("dry_run"),
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         let report = remove(&pool, "acme").await.map_err(|e| e.to_string())?;
         assert!(report.detail.contains("hooks"), "{}", report.detail);
@@ -1539,9 +1786,17 @@ mod repo_commands {
     #[tokio::test]
     async fn a_write_report_round_trips_as_json() -> Result<(), String> {
         let (pool, _dir) = store().await?;
-        let report = add(&pool, "/w/acme", "git", None, "claude", "dry_run", now())
-            .await
-            .map_err(|e| e.to_string())?;
+        let report = add(
+            &pool,
+            "/w/acme",
+            "git",
+            None,
+            "claude",
+            Some("dry_run"),
+            now(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         let json = render_write(&report, true).map_err(|e| e.to_string())?;
         let parsed: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
 
@@ -1644,6 +1899,7 @@ mod runs_and_findings {
 
         let with_rows = revlocal_cli::inspect::RunsReport {
             runs: vec![revlocal_cli::inspect::RunRow {
+                repo: "acme-api".to_owned(),
                 id: 1,
                 change_id: 1,
                 attempt: 1,
@@ -1669,6 +1925,7 @@ mod runs_and_findings {
         // scanning a list, which is when the question actually gets asked.
         let report = revlocal_cli::inspect::RunsReport {
             runs: vec![revlocal_cli::inspect::RunRow {
+                repo: "acme-api".to_owned(),
                 id: 7,
                 change_id: 3,
                 attempt: 2,
@@ -3524,6 +3781,129 @@ mod export_command {
         assert_eq!(
             revlocal_cli::export::render(&first).map_err(|e| e.to_string())?,
             revlocal_cli::export::render(&second).map_err(|e| e.to_string())?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_exported_finding_carries_what_it_said() -> Result<(), String> {
+        // REVL-207. The README's reason for this command is that findings can be
+        // "kept before `db vacuum` deletes the rows". A finding exported as a
+        // title and a location is a filing card: `body`, `failure_scenario` and
+        // `suggested_fix` are the parts RL-1550 added *because* a title and a
+        // line were not enough to act on, and dropping them here is
+        // unrecoverable — the rows they came from are the ones being deleted.
+        //
+        // Asserted on the rendered document, like the local-path test above, so
+        // this is about what a reader elsewhere actually receives.
+        let (pool, dir) = store().await?;
+        let at = now();
+        let repo = revlocal_store::RepoStore::new(&pool)
+            .insert(&revlocal_core::Repo {
+                id: revlocal_core::RepoId::new(0),
+                name: "acme".to_owned(),
+                kind: revlocal_core::RepoKind::Git,
+                local_path: Some(dir.path().join("acme").display().to_string()),
+                remote_url: None,
+                default_branch: Some("main".to_owned()),
+                engine: revlocal_core::EngineKind::Mock,
+                autonomy: revlocal_core::AutonomyMode::DryRun,
+                enabled: true,
+                config_json: "{}".to_owned(),
+                created_at: at,
+                updated_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        let change = revlocal_store::ChangeStore::new(&pool)
+            .upsert(&revlocal_core::Change {
+                id: revlocal_core::ChangeId::new(0),
+                repo_id: repo.id,
+                kind: revlocal_core::ChangeKind::Commit,
+                external_id: "c1".to_owned(),
+                title: None,
+                author_name: None,
+                author_email: None,
+                authored_at: None,
+                branch: Some("main".to_owned()),
+                base_ref: None,
+                head_ref: None,
+                url: None,
+                diff_stat: revlocal_core::DiffStat::default(),
+                detected_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        let run = revlocal_store::RunStore::new(&pool)
+            .insert(&revlocal_core::Run {
+                id: revlocal_core::RunId::new(0),
+                change_id: change.id,
+                attempt: 1,
+                status: revlocal_core::RunStatus::Done,
+                engine: revlocal_core::EngineKind::Mock,
+                depth: revlocal_core::Depth::Summary,
+                trigger: revlocal_core::TriggerSource::Poll,
+                skip_reason: None,
+                error: None,
+                error_detail: None,
+                degraded: None,
+                usage: revlocal_core::Usage::default(),
+                started_at: Some(at),
+                finished_at: Some(at),
+                transcript_path: None,
+                truncated: false,
+                omitted_files: Vec::new(),
+                verdict: None,
+                summary: None,
+                created_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        revlocal_store::FindingStore::new(&pool)
+            .insert(&revlocal_core::Finding {
+                id: revlocal_core::FindingId::new(0),
+                run_id: run.id,
+                fingerprint: "abc123".to_owned(),
+                severity: revlocal_core::Severity::High,
+                category: revlocal_core::Category::Correctness,
+                confidence: 0.9,
+                file: Some("src/pager.rs".to_owned()),
+                line_start: Some(74),
+                line_end: Some(76),
+                title: "Inclusive range walks one past the last index".to_owned(),
+                body: "The loop uses `..=len`, so the last iteration indexes out of range."
+                    .to_owned(),
+                failure_scenario: Some("len == 3 panics".to_owned()),
+                suggested_fix: Some("Use `..len`.".to_owned()),
+                state: revlocal_core::FindingState::Open,
+                created_at: at,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let document = export(&pool, "json", at).await.map_err(|e| e.to_string())?;
+        let finding = document
+            .findings
+            .first()
+            .ok_or("the export carries no findings")?;
+
+        assert!(
+            !finding.body.is_empty(),
+            "the mechanism is what makes it worth keeping: {finding:?}"
+        );
+        assert!(
+            finding.failure_scenario.is_some(),
+            "the input that breaks: {finding:?}"
+        );
+        assert!(
+            finding.suggested_fix.is_some(),
+            "and what to do instead: {finding:?}"
+        );
+
+        let rendered = revlocal_cli::export::render(&document).map_err(|e| e.to_string())?;
+        assert!(
+            rendered.contains("out of range"),
+            "the reader elsewhere receives the words, not only the fields:\n{rendered}"
         );
         Ok(())
     }

@@ -46,6 +46,16 @@ pub enum InspectError {
         run_id: i64,
     },
 
+    /// No repository by that name, when `--repo` was given one.
+    ///
+    /// Its own variant for `NoSuchRun`'s reason: the database is fine and the
+    /// name is not, so `db migrate` is the wrong remedy to offer.
+    #[error("no repository named {name}\n  try: revlocal repo show, to see which exist")]
+    NoSuchRepo {
+        /// What was asked for.
+        name: String,
+    },
+
     /// A value that is not one of the ones that exist.
     #[error("{what} `{given}` is not one of: {valid}\n  try: one of those")]
     NotAValue {
@@ -72,6 +82,38 @@ fn boxed(source: revlocal_store::StoreError) -> InspectError {
     }
 }
 
+/// Resolve what somebody typed after `--repo` into a repository id (REVL-213).
+///
+/// # Why a name has to work here
+///
+/// The name is what every output prints — `repo show`, a findings row, the
+/// dashboard, `watch`. The id appears on no screen at all. Accepting only the id
+/// meant "narrow this to the repository you are looking at" required going and
+/// finding a number the product never showed you, and an agent that had just
+/// read `"repo": "rev-local"` out of `findings list --json` could not feed that
+/// value back into the command it came from.
+///
+/// A bare number is still an id, so anything already written against this flag
+/// keeps working. A repository *named* like a number resolves as an id first;
+/// that is a name nobody has, and the alternative — guessing which the user
+/// meant — is worse than a rule that can be stated in one line.
+pub async fn resolve_repo(pool: &Pool, given: &str) -> Result<RepoId, InspectError> {
+    if let Ok(id) = given.parse::<i64>() {
+        return Ok(RepoId::new(id));
+    }
+
+    revlocal_store::RepoStore::new(pool)
+        .list()
+        .await
+        .map_err(boxed)?
+        .into_iter()
+        .find(|repo| repo.name == given)
+        .map(|repo| repo.id)
+        .ok_or_else(|| InspectError::NoSuchRepo {
+            name: given.to_owned(),
+        })
+}
+
 /// One action waiting for a human (§12.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaitingAction {
@@ -85,6 +127,16 @@ pub struct WaitingAction {
     pub capability: String,
     /// How long before it is discarded, in words; `None` when it waits forever.
     pub deadline: Option<String>,
+    /// What §12.3 classified this action as: `low` or `high`.
+    pub risk: String,
+    /// Why it is waiting, and which setting would release it (REVL-198).
+    ///
+    /// The inbox named what was waiting and never why, so a repository set to
+    /// `autonomy = auto` whose issues still sat there read as a setting that
+    /// had not taken. The effective mode is `min(global, repo)`, and the two
+    /// halves have different remedies — naming the wrong one sends somebody to
+    /// change a setting that was already right.
+    pub held_by: String,
 }
 
 /// The approvals inbox (§12.4).
@@ -115,9 +167,13 @@ impl ApprovalsReport {
                 None => String::new(),
                 Some(words) => format!("   {words}"),
             };
+            // The risk class is a field on the JSON and not a word on this line:
+            // `held_by` already names it where it is the reason, and "high risk ·
+            // high risk, and the global mode is…" is the shape that gets read as
+            // noise and then not read at all.
             out.push_str(&format!(
-                "  #{:<5} run {:<5} {} → {}{}\n",
-                item.id, item.run_id, item.capability, item.target, deadline
+                "  #{:<5} run {:<5} {} → {}{}\n      {}\n",
+                item.id, item.run_id, item.capability, item.target, deadline, item.held_by
             ));
         }
         out.push_str("\nApprove with: revlocal approvals approve <id>\n");
@@ -129,9 +185,12 @@ impl ApprovalsReport {
 ///
 /// `ttl_hours` is §13.1's `approval_ttl_hours`, and `now` the moment to measure
 /// against, so the list can say how long each item has before it is discarded.
+/// `mode` is the install's global autonomy, which is half of what decided that
+/// each of these waits.
 pub async fn approvals(
     pool: &Pool,
     ttl_hours: i64,
+    mode: revlocal_core::AutonomyMode,
     now: revlocal_core::Timestamp,
 ) -> Result<ApprovalsReport, InspectError> {
     let actions = PublishActionStore::new(pool)
@@ -148,6 +207,17 @@ pub async fn approvals(
                 target: action.target.clone(),
                 capability: action.capability.to_string(),
                 deadline: revlocal_daemon::approvals::time_left(action.created_at, ttl_hours, now),
+                risk: action.risk.as_str().to_owned(),
+                held_by: {
+                    // The shared judgement, in this surface's spelling: the CLI
+                    // puts a remedy after "try:", which is the shape every other
+                    // message in this binary uses.
+                    let held = revlocal_daemon::gating::held_by(action.risk, mode);
+                    match held.remedy {
+                        None => held.reason,
+                        Some(remedy) => format!("{}\n      try: {remedy}", held.reason),
+                    }
+                },
             })
             .collect(),
     })
@@ -158,6 +228,13 @@ pub async fn approvals(
 pub struct BudgetReport {
     /// Which repository.
     pub repo_id: i64,
+    /// Its name, which is what the user typed and what every other surface
+    /// prints (REVL-213).
+    ///
+    /// `--repo` accepts a name, and answering "repo 22 on 2026-09-05" to
+    /// somebody who asked about `rev-local` hands back an identifier they did
+    /// not use and cannot see anywhere else.
+    pub repo: String,
     /// The day, `YYYY-MM-DD`.
     pub day: String,
     /// Runs executed.
@@ -192,7 +269,7 @@ impl BudgetReport {
             }
         };
 
-        let mut out = format!("repo {} on {}\n", self.repo_id, self.day);
+        let mut out = format!("{} on {}\n", self.repo, self.day);
         out.push_str(&format!(
             "  runs    {} of {}\n",
             self.runs,
@@ -242,6 +319,13 @@ pub async fn budget(
     settings: &BudgetSettings,
 ) -> Result<BudgetReport, InspectError> {
     let day = revlocal_daemon::budgets::day_of(at);
+    // The name, so the answer speaks the way the question did (REVL-213). A
+    // repository removed since its ledger row was written keeps the id, because
+    // "repo 22" is still a true thing to say about a row that outlived it.
+    let name = revlocal_store::RepoStore::new(pool)
+        .get(repo_id)
+        .await
+        .map_or_else(|_| format!("repo {}", repo_id.get()), |repo| repo.name);
     let entry: Option<BudgetLedgerEntry> = BudgetLedgerStore::new(pool)
         .get(repo_id, &day)
         .await
@@ -263,6 +347,7 @@ pub async fn budget(
 
     Ok(BudgetReport {
         repo_id: repo_id.get(),
+        repo: name,
         day,
         runs: entry.as_ref().map_or(0, |e| e.runs),
         daily_runs: settings.daily_runs_per_repo,
@@ -300,6 +385,18 @@ use revlocal_store::{ChangeStore, FindingStore, RepoStore, RunStore};
 pub struct RunRow {
     /// Its id, for `runs show <id>`.
     pub id: i64,
+    /// Which repository it is in (REVL-214).
+    ///
+    /// RL-1549's reasoning, applied to the command next door: the premise is one
+    /// install watching every repository on the machine, so "run #1295 is
+    /// queued" answers nothing on its own, and `change_id` is a second internal
+    /// number that names no repository either. Finding out whose run it was
+    /// meant `runs show <id>`, once per row.
+    ///
+    /// `(unknown)` when the change cannot be read and `(removed)` when the
+    /// repository is gone — the run is still real and still worth listing, which
+    /// is the same call `findings` makes.
+    pub repo: String,
     /// Which change.
     pub change_id: i64,
     /// Which attempt this is.
@@ -355,8 +452,8 @@ impl RunsReport {
 
         for run in &self.runs {
             out.push_str(&format!(
-                "  #{:<5} change {:<5} attempt {}  {:<10} {}",
-                run.id, run.change_id, run.attempt, run.status, run.engine
+                "  #{:<5} {:<18} change {:<5} attempt {}  {:<10} {}",
+                run.id, run.repo, run.change_id, run.attempt, run.status, run.engine
             ));
             if let Some(verdict) = &run.verdict {
                 out.push_str(&format!("  {verdict}"));
@@ -380,9 +477,10 @@ impl RunsReport {
     }
 }
 
-fn row(run: &revlocal_core::Run) -> RunRow {
+fn row(run: &revlocal_core::Run, repo: String) -> RunRow {
     RunRow {
         id: run.id.get(),
+        repo,
         change_id: run.change_id.get(),
         attempt: run.attempt,
         status: run.status.as_str().to_owned(),
@@ -408,8 +506,32 @@ pub async fn runs(
         .map_err(boxed)?;
     let matched = store.count_matching(repo_id, status).await.map_err(boxed)?;
 
+    // One lookup per repository rather than per run, the way `findings` does it:
+    // twenty rows on a busy install are usually a handful of repositories.
+    let changes = revlocal_store::ChangeStore::new(pool);
+    let repos = revlocal_store::RepoStore::new(pool);
+    let mut names: std::collections::BTreeMap<i64, String> = std::collections::BTreeMap::new();
+    let mut rows = Vec::with_capacity(found.len());
+    for run in &found {
+        let name = match changes.get(run.change_id).await {
+            Err(_) => "(unknown)".to_owned(),
+            Ok(change) => match names.get(&change.repo_id.get()) {
+                Some(name) => name.clone(),
+                None => {
+                    let name = repos
+                        .get(change.repo_id)
+                        .await
+                        .map_or_else(|_| "(removed)".to_owned(), |repo| repo.name);
+                    names.insert(change.repo_id.get(), name.clone());
+                    name
+                }
+            },
+        };
+        rows.push(row(run, name));
+    }
+
     Ok(RunsReport {
-        runs: found.iter().map(row).collect(),
+        runs: rows,
         matched,
         limit,
     })
@@ -487,6 +609,17 @@ pub struct FindingRow {
     /// got a file and a sentence and had to search for the site itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    /// The run that said it, so the detail is reachable (REVL-205).
+    ///
+    /// `body`, `failure_scenario` and `suggested_fix` live on `runs show
+    /// <run_id>`, and without this an agent holding a row it wants to act on had
+    /// to walk the run list looking for one that contained the fingerprint —
+    /// 1,295 runs on the install this was found on. One field turns the agent
+    /// path into two commands.
+    ///
+    /// The *latest* run to say it, matching `state` and `occurrences`, which are
+    /// also about the problem rather than about one sighting of it.
+    pub run_id: i64,
     /// The claim.
     pub title: String,
     /// Where it is in its life.
@@ -507,6 +640,7 @@ fn finding_row(finding: &revlocal_core::Finding, repo: &str) -> FindingRow {
         severity: finding.severity.as_str().to_owned(),
         category: finding.category.as_str().to_owned(),
         repo: repo.to_owned(),
+        run_id: finding.run_id.get(),
         file: finding.file.clone(),
         line: finding.line_start,
         title: finding.title.clone(),
@@ -623,7 +757,9 @@ pub async fn run_detail(pool: &Pool, run_id: RunId) -> Result<RunDetail, Inspect
     };
 
     Ok(RunDetail {
-        run: row(&run),
+        // The detail view has known the repository all along, for its findings.
+        // The row it renders above them did not (REVL-214).
+        run: row(&run, repo_name.clone()),
         tokens: run.usage.total_tokens(),
         tokens_known: run.usage.tokens_are_known(),
         truncated: run.truncated,
@@ -675,18 +811,26 @@ impl FindingsReport {
             } else {
                 String::new()
             };
+            // The fingerprint suppresses it; the run says what it means. Both,
+            // because "what is this exactly" and "stop telling me" are the two
+            // things somebody does with a row, and each needed a different
+            // identifier they did not have (REVL-205).
             out.push_str(&format!(
-                "  {:<8} {:<12} {}  {}{}\n           {}\n           {}\n",
+                "  {:<8} {:<12} {}  {}{}\n           {}\n           {}  ·  run #{}\n",
                 finding.severity,
                 finding.category,
                 finding.repo,
                 where_,
                 seen,
                 finding.title,
-                finding.fingerprint
+                finding.fingerprint,
+                finding.run_id
             ));
         }
-        out.push_str("\nSuppress one with: revlocal findings suppress <fingerprint>\n");
+        out.push_str(
+            "\nRead one in full with: revlocal runs show <run>\nSuppress one with: \
+             revlocal findings suppress <fingerprint>\n",
+        );
         out
     }
 }
@@ -708,8 +852,16 @@ pub async fn findings(
     severity: Option<Severity>,
     limit: u32,
 ) -> Result<FindingsReport, InspectError> {
+    // Finished runs only (REVL-204). Reading the newest rows of *any* status
+    // meant reading the queue: on an install with 1,147 runs waiting, the twenty
+    // newest were all `queued`, the sixteen findings that existed sat hundreds of
+    // ids further back, and this command — the one an agent asks "what should I
+    // fix" — answered "No findings across 20 run(s)".
+    //
+    // A queued run has no findings by definition, so spending the limit on them
+    // is spending it on rows that cannot contribute.
     let runs = RunStore::new(pool)
-        .list_recent(repo_id, None, limit)
+        .list_recent(repo_id, Some(RunStatus::Done), limit)
         .await
         .map_err(boxed)?;
     let store = FindingStore::new(pool);

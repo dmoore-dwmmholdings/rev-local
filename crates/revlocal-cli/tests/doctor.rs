@@ -203,6 +203,62 @@ mod doctor {
     }
 
     #[tokio::test]
+    async fn the_subversion_count_comes_from_the_install_not_from_a_flag() -> Result<(), String> {
+        // `--svn-repos` was a hand-typed number that defaulted to 0, so on an
+        // install with Subversion repositories and no `svn` binary, doctor said
+        // "not installed, and no SVN repositories are configured; git is
+        // unaffected" — the reassuring line, on the machine where every
+        // Subversion review was failing (REVL-195).
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let pool = revlocal_store::open(&dir.path().join("rl.db"))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let now = chrono::Utc::now();
+        for (name, kind) in [
+            ("trunk-thing", revlocal_core::RepoKind::Svn),
+            ("git-thing", revlocal_core::RepoKind::Git),
+        ] {
+            revlocal_store::RepoStore::new(&pool)
+                .insert(&revlocal_core::Repo {
+                    id: revlocal_core::RepoId::new(0),
+                    name: name.to_owned(),
+                    kind,
+                    local_path: Some(dir.path().join(name).display().to_string()),
+                    remote_url: None,
+                    default_branch: None,
+                    engine: revlocal_core::EngineKind::Mock,
+                    autonomy: revlocal_core::AutonomyMode::DryRun,
+                    enabled: true,
+                    config_json: "{}".to_owned(),
+                    created_at: now,
+                    updated_at: now,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Zero, the way the CLI passes it when nobody types the flag.
+        let mut report = gather(0);
+        revlocal_daemon::doctor::apply_svn_count(&mut report, &pool).await;
+
+        let svn = report
+            .prerequisites
+            .iter()
+            .find(|check| check.name == "svn")
+            .ok_or("no svn check in the report")?;
+        assert!(
+            svn.detail.contains('1'),
+            "the one Subversion repository is not in the report: {svn:?}"
+        );
+        assert!(
+            !svn.detail.contains("no SVN repositories are configured"),
+            "the reassuring line, on an install that has one: {svn:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn a_stopped_install_is_not_a_healthy_one() -> Result<(), String> {
         // RL-1551. Doctor's own help calls it "the thing to run again when
         // reviews have quietly stopped", and it checked binaries on PATH and

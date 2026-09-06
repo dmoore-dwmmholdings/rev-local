@@ -106,6 +106,7 @@ impl VcsAdapter for GitAdapter {
                     tool_version: None,
                     default_branch: None,
                     problems: vec![ProbeProblem {
+                        fault: true,
                         problem: "git is not on PATH".to_owned(),
                         remediation: "install git and make sure it is on PATH".to_owned(),
                     }],
@@ -123,6 +124,7 @@ impl VcsAdapter for GitAdapter {
             Ok(branches) => branches,
             Err(GitError::NotARepository { path }) => {
                 problems.push(ProbeProblem {
+                    fault: true,
                     problem: format!("{} is not a git repository", path.display()),
                     remediation: "check the repository's local path".to_owned(),
                 });
@@ -132,12 +134,42 @@ impl VcsAdapter for GitAdapter {
         };
 
         if problems.is_empty() && branches.is_empty() {
-            problems.push(ProbeProblem {
-                problem: format!(
-                    "no branch matches {:?}, so nothing would ever be reviewed",
-                    config.branches
-                ),
-                remediation: "adjust the repository's `branches` patterns".to_owned(),
+            // Told apart from "your patterns match nothing" (REVL-201). A
+            // repository somebody has run `git init` in and not committed to has
+            // no branches *at all* — `refs/heads/` is empty until the first
+            // commit, however HEAD reads — so the patterns are not the problem
+            // and editing them cannot help. Four of the twenty-seven checkouts on
+            // the machine this was found on were in exactly that state, being
+            // told to adjust a setting that already listed the right branch.
+            let has_any_branch = git::resolve_branches(&self.runner, &dir, &["*".to_owned()])
+                .await
+                .map(|all| !all.is_empty())
+                .unwrap_or(true);
+
+            problems.push(if has_any_branch {
+                ProbeProblem {
+                    fault: true,
+                    problem: format!(
+                        "no branch matches {:?}, so nothing would ever be reviewed",
+                        config.branches
+                    ),
+                    remediation: "adjust the repository's `branches` patterns".to_owned(),
+                }
+            } else {
+                ProbeProblem {
+                    // Not a fault: nothing is wrong with it and nothing needs
+                    // fixing. It is the repository equivalent of a quiet one.
+                    fault: false,
+                    problem: "this repository has no commits yet, so there is \
+                              nothing to review"
+                        .to_owned(),
+                    // Not a fault and not something to fix in rev-local. Saying
+                    // "adjust your patterns" here is advice that cannot work, and
+                    // advice that cannot work is how a screen stops being read.
+                    remediation: "commit something; it will be reviewed on the \
+                                  next pass"
+                        .to_owned(),
+                }
             });
         }
 
