@@ -794,6 +794,16 @@ async fn execute_one(
         .omitted_files
         .clone_from(&outcome.report.omitted_files);
     finished.degraded.clone_from(&outcome.report.degraded);
+    // §9.3 picks the depth inside the pipeline, after this row was created with a
+    // placeholder. Without this the row said `standard` for every run that ever
+    // executed, and `runs show` answered "was this reviewed deeply?" with a value
+    // that was right only by coincidence (REVL-228).
+    //
+    // An unparseable value keeps what the row had rather than failing the run: the
+    // review happened, and the depth is a label on it.
+    if let Ok(reviewed_at) = outcome.report.depth.parse() {
+        finished.depth = reviewed_at;
+    }
     finished.started_at = Some(at);
     finished.finished_at = Some(at);
     runs.record_result(&finished).await.map_err(boxed)?;

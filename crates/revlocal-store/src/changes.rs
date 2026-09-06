@@ -518,14 +518,21 @@ impl<'a> RunStore<'a> {
         let transcript = run.transcript_path.as_deref();
         let started = run.started_at.map(format_time);
         let finished = run.finished_at.map(format_time);
+        let depth = run.depth.as_str();
 
         sqlx::query!(
+            // `depth` is written here, not only at insert: §9.3 chooses it while
+            // the pipeline runs, long after the row exists, and a row created
+            // with the placeholder said `standard` for every executed run
+            // whatever was actually reviewed (REVL-228).
             "UPDATE run
-                SET tokens_in = ?, tokens_out = ?, tokens_known = ?, cost_usd = ?,
+                SET depth = ?,
+                    tokens_in = ?, tokens_out = ?, tokens_known = ?, cost_usd = ?,
                     truncated = ?, omitted_files_json = ?, verdict = ?, summary = ?,
                     degraded = ?, error = ?, error_detail = ?, transcript_path = ?,
                     started_at = ?, finished_at = ?
               WHERE id = ?",
+            depth,
             tokens_in,
             tokens_out,
             tokens_known,
