@@ -49,10 +49,19 @@
 //! similar is outside what this can assert, and a reviewer should not read a
 //! passing run as "every public function has a caller".
 //!
-//! Resolving it properly needs call-graph information rather than text — `cargo
-//! +nightly rustc -Zunpretty=expanded` or a `syn`-based pass — which is a bigger
-//! tool than this file is trying to be. The narrow check earns its keep by
-//! catching the distinctive names, which is where nine of the ten instances were.
+//! The second blind spot is **transitive**: this asks whether a function has a
+//! caller, not whether that caller has one. `EngineRunner::probe` calls
+//! `withheld_credentials`, so both look reachable — and nothing calls `probe`
+//! outside its own crate's tests, so the §8.5 diagnostic that explains a withheld
+//! `ANTHROPIC_API_KEY` reaches no screen at all (REVL-224). A chain of live-looking
+//! functions hanging off a dead root is invisible here by construction.
+//!
+//! Resolving either properly needs call-graph information rather than text —
+//! `cargo +nightly rustc -Zunpretty=expanded` or a `syn`-based pass, reachability
+//! computed from the binaries' entry points rather than from name counts — which
+//! is a bigger tool than this file is trying to be. The narrow check earns its
+//! keep by catching the distinctive names, which is where nine of the eleven
+//! instances were.
 //!
 //! Helpers return `Result` (ADR 0003); only the `#[test]` functions panic.
 
