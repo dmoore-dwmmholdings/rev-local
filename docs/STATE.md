@@ -1,19 +1,44 @@
 # Build state
 
 - current_milestone: M15 — the unattended loop (epic REVL-127)
-- current_item: none in flight
-- item_status: n/a
-- last_gate_command: cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; (ui) npx tsc --noEmit && npx vitest run
-- last_gate_result: PASS — clippy clean, 1454 Rust tests passing, 139 UI tests passing
-- last_visual: end-to-end run of the built CLI against a scratch install, 2026-09-03
-  — two commits reviewed, two reports delivered, two audit rows, the commit named
-  in each report
-- next_action: nothing in REVL-127 is in flight. REVL-184 (GitHub pull-request
-  adapter) sits in the backlog and is **not** blocked on a decision — it is
-  blocked on an unexplained `git_hooks` timing failure, bisected and written up on
-  that issue. Read those comments before starting it.
+- current_item: REVL-223 — `revlocal watch` had no tracker target wired into it
+- item_status: done, gates observed
+- last_gate_command: cargo fmt --all; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace --no-fail-fast
+- last_gate_result: PASS — clippy clean, 1510 Rust tests passing, 0 failed
+- last_visual: n/a this item — nothing it changes renders. The desktop binary
+  changed only in which code builds its publish targets, and the screens that
+  show the result are unchanged.
+- next_action: REVL-209 (`backfill` enumerates history and enqueues none of it)
+  is the next unblocked item by priority. Take **design 2** from its comment —
+  drive reviews inline in the `backfill` process, asking `next_step` between
+  items — not design 1, which would quietly invert §7.4's "behind live work".
 - blocked_on: nothing
 - adrs_open: none
+
+## REVL-184 is no longer blocked, and it was never the adapter
+
+The `git_hooks` timing failure that parked the GitHub pull-request adapter for
+four iterations reproduced today on a tree containing no adapter at all. Same
+commit, minutes apart:
+
+| run | conditions | `git_hooks` |
+|---|---|---|
+| 1 | started right after `cargo clippy --workspace --all-targets`, so every test binary was still compiling | FAILED — 21.3s and 21.6s |
+| 2 | same tree, already built, nothing else running | ok, 15 passed, **0.67s** |
+
+Clippy produces no test binaries, so run 1 ran its early suites while the rest of
+the workspace compiled — I/O plus the target-directory lock, the one condition
+REVL-184's investigation flagged as untested and never tested. Every failing run
+in that write-up was a first run after a build; every passing one was a re-run.
+
+So the defect is the 8-second wall-clock budget at `git_hooks.rs:117`, not any
+adapter. Written up on REVL-184 with the recommendation: raise the budget past
+plausible contention and say in the assertion message that a failure means the
+hook blocked. **If you resume the adapter, do not repeat the bisect.**
+
+The wider lesson is the one that issue already paid for twice: being unable to
+explain a mechanism is not evidence about the correlation, and a first-run-vs-
+re-run difference is a confound that looks exactly like a code difference.
 
 ## What M15 was
 

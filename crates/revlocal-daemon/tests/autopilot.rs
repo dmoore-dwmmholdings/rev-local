@@ -124,7 +124,7 @@ async fn tick(fixture: &Fixture, minute: u32) -> Result<autopilot::TickReport, S
         // spend tokens and touch the network, both forbidden by the ground rules.
         // The local report target is registered by `tick` itself and writes into
         // the fixture's own data directory.
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(minute),
         &CancellationToken::new(),
     )
@@ -223,7 +223,7 @@ async fn an_empty_install_is_not_a_stopped_one() -> Result<(), Box<dyn std::erro
         &config(),
         &NullSink,
         &dir.path().join("data"),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(1),
         &CancellationToken::new(),
     )
@@ -757,7 +757,7 @@ async fn a_recent_run_is_left_alone() -> Result<(), Box<dyn std::error::Error>> 
         &config(),
         &NullSink,
         &fixture.data_dir(),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(1) + chrono::Duration::days(2),
         &CancellationToken::new(),
     )
@@ -835,7 +835,7 @@ async fn an_approval_nobody_answered_expires() -> Result<(), Box<dyn std::error:
         &config(),
         &NullSink,
         &fixture.data_dir(),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         later,
         &CancellationToken::new(),
     )
@@ -861,7 +861,7 @@ async fn an_expiry_is_told_apart_from_somebody_declining() -> Result<(), Box<dyn
         &config(),
         &NullSink,
         &fixture.data_dir(),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(1) + chrono::Duration::days(5),
         &CancellationToken::new(),
     )
@@ -894,7 +894,7 @@ async fn an_approval_still_inside_its_window_is_left_alone(
         &config(),
         &NullSink,
         &fixture.data_dir(),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(1) + chrono::Duration::hours(2),
         &CancellationToken::new(),
     )
@@ -1122,7 +1122,7 @@ async fn the_configured_concurrency_ceiling_is_the_one_that_applies(
         &config,
         &NullSink,
         &fixture.data_dir(),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(1),
         &CancellationToken::new(),
     )
@@ -1160,7 +1160,7 @@ async fn a_ceiling_of_zero_falls_back_rather_than_stopping_everything(
         &config,
         &NullSink,
         &fixture.data_dir(),
-        &[],
+        &revlocal_publish::TargetSet::default(),
         at(1),
         &CancellationToken::new(),
     )

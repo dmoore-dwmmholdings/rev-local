@@ -209,21 +209,28 @@ fn short(id: &str) -> &str {
 /// Separate from any `loop {}` so it can be called once, from a test or from
 /// `--once`, without waiting for a real interval.
 ///
-/// The only target wired here is the local report, which needs no configuration.
-/// `revlocal publish` is what delivers to a tracker; a pass that has actions for
-/// one says so rather than leaving findings that look filed.
+/// Targets are built from the config, the same way the desktop app builds them and
+/// with the same builder (`revlocal_publish::targets_from_config`).
+///
+/// This used to pass no targets at all, on the reasoning that `revlocal publish`
+/// is what delivers to a tracker. The reasoning was defensible and the result was
+/// not: `revlocal publish replay` takes one run and one target, so "deliver
+/// everything waiting" was not a command anybody could put on a timer, and the
+/// headless daemon — the whole unattended half of the product — could reach
+/// exactly one of the three destinations the README advertises (REVL-223).
 pub async fn tick(
     pool: &Pool,
     config: &GlobalConfig,
     data_dir: &Path,
     at: Timestamp,
 ) -> Result<WatchReport, WatchError> {
+    let targets = revlocal_publish::targets_from_config(config);
     let report = revlocal_daemon::autopilot::tick(
         pool,
         config,
         &NullSink,
         data_dir,
-        &[],
+        &targets,
         at,
         &CancellationToken::new(),
     )

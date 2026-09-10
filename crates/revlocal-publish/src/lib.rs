@@ -12,6 +12,7 @@ pub mod gh;
 pub mod github;
 pub mod local;
 pub mod queue;
+pub mod registry;
 pub mod report;
 pub mod retry;
 pub mod target;
@@ -43,6 +44,7 @@ pub use local::{ReportPayload, ReportTarget, TARGET_ID as REPORT_TARGET};
 pub use queue::{
     DispatchReport, PublishQueue, QueueConfig, QueueError, AUDIT_KIND_SENT, DEFAULT_CONCURRENCY,
 };
+pub use registry::{from_config as targets_from_config, TargetSet, Unavailable};
 pub use report::{RunPublishReport, TargetOutcome, TargetState};
 pub use retry::{RetryPolicy, BASE_DELAY, JITTER_FRACTION, MAX_ATTEMPTS, MAX_DELAY};
 pub use target::{PublishError, PublishTarget};

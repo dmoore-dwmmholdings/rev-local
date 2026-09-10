@@ -117,23 +117,41 @@ repositories are quiet.
 
 ### What `watch` delivers
 
-The **local markdown report**, into `{data_dir}/reports/{repo}/`. That target
-needs no configuration, which is why it is the one wired here.
+Everything the config makes deliverable — the same destinations the desktop app
+reaches, built by the same code:
 
-Andare, GitHub and Trama are not wired into `watch`. Findings for them are still
-recorded and still queued as publish actions — the tick counts them and says so —
-but a pass will report them as naming a target that is not configured rather than
-sending them. Delivering to a tracker today means the desktop app, or
-`revlocal publish retry`/`replay` for a specific action.
+| Destination | What it needs in `config.toml` |
+|---|---|
+| Local markdown report | nothing; written under `{data_dir}/reports/{repo}/` |
+| GitHub issue | nothing here — `gh` holds the credentials, and the repository's remote names the project |
+| Andare issue | `[mcpServers.andare]` with its endpoint or command |
+| Trama page | `[mcpServers.trama]` with its endpoint or command |
 
-Worth knowing before leaving `watch` on a timer and expecting issues to appear.
+Both MCP transports work: `type = "http"` with a `url`, or `type = "stdio"` with a
+`command`. Nothing is contacted while the targets are built, so a config problem is
+reported by `revlocal targets list` and a reachability problem by the delivery that
+hit it.
+
+A repository only publishes to the destinations named in its own `targets`, so
+configuring Andare does not start filing issues for every repository — it makes the
+ones that asked for Andare able to get there.
+
+An action whose destination is not configured is still counted and still explained,
+now with the destination named:
+
+```
+held: 1 action(s) name a target that is not configured, so nothing was sent
+  trama: no [mcpServers.trama] in your config, so nothing can be filed there
+    try: add the server and its bearer, then `revlocal targets list`
+```
 
 ## Leaving the app running
 
-The desktop app runs the same discovery-and-review pass, on a timer, **and wires
-the tracker targets that `watch` does not**. Turn **Autopilot** on at the top of
-the dashboard; it then checks every enabled repository once a minute, reviews what
-it finds, and delivers whatever is ready to go — no button presses.
+The desktop app runs the same discovery-and-review pass, on a timer, wiring the
+same destinations from the same config. Turn **Autopilot** on at the top of the
+dashboard; it then checks every enabled repository once a minute, reviews what it
+finds, and delivers whatever is ready to go — no button presses. `revlocal watch`
+on a timer or a launchd job does the same thing without the window.
 
 The panel says what the last pass did in one sentence, and lists anything that did
 *not* happen and why.
@@ -182,8 +200,9 @@ The filename is the finding's fingerprint, so re-reviewing a change that still h
 the same problem rewrites one file rather than accumulating duplicates. Drop
 `report` from a repository's `targets` to turn it off.
 
-`revlocal watch` runs the identical pass from a terminal and writes the same local
-reports; `revlocal publish` is what delivers to a tracker there.
+`revlocal watch` runs the identical pass from a terminal, writes the same local
+reports, and delivers to the same trackers. `revlocal publish status`/`replay` are
+for inspecting and retrying one run's actions, not for delivery the loop skipped.
 
 ### What it reviews
 

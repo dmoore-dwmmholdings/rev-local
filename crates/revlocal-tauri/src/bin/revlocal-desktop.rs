@@ -106,81 +106,29 @@ fn global_config() -> revlocal_core::GlobalConfig {
         )
 }
 
-/// Build the real Andare target from the configured HTTP MCP endpoint.
-///
-/// The bearer remains a deferred Keychain reference until `HttpClient` connects;
-/// this wiring never reads or logs it itself.
-fn andare_target(
-    config: &revlocal_core::GlobalConfig,
-) -> Result<Arc<dyn revlocal_publish::PublishTarget>, String> {
-    let server = config.mcp_servers.get("andare").ok_or_else(|| {
-        "Andare MCP is not configured; add the suite bearer in Settings".to_owned()
-    })?;
-    if server.transport != "http" {
-        return Err("Andare MCP must use the HTTP transport".to_owned());
-    }
-    let url = server
-        .url
-        .as_deref()
-        .filter(|url| !url.is_empty())
-        .ok_or_else(|| "Andare MCP has no endpoint URL".to_owned())?;
-    let endpoint = revlocal_mcp::HttpEndpoint {
-        id: "andare".to_owned(),
-        url: url.to_owned(),
-        headers: server.headers.clone(),
-    };
-    let client = revlocal_mcp::HttpClient::new(endpoint).map_err(|error| error.to_string())?;
-    let writer = revlocal_publish::McpAndareWriter::new(
-        revlocal_mcp::McpClient::from(client),
-        Arc::new(revlocal_mcp::MacKeychain),
-        revlocal_publish::AndareToolNames::default(),
-    );
-    Ok(Arc::new(revlocal_publish::AndareTarget::new(writer)))
-}
-
-/// Build the Trama target from the configured HTTP MCP endpoint.
-///
-/// Same shape as `andare_target`, and separate for the same reason the two
-/// targets are separate: a repository can want a wiki page and no issue, or the
-/// reverse, and one failing to build must not take the other with it.
-fn trama_target(
-    config: &revlocal_core::GlobalConfig,
-) -> Result<Arc<dyn revlocal_publish::PublishTarget>, String> {
-    let server = config
-        .mcp_servers
-        .get("trama")
-        .ok_or_else(|| "Trama MCP is not configured".to_owned())?;
-    if server.transport != "http" {
-        return Err("Trama MCP must use the HTTP transport".to_owned());
-    }
-    let url = server
-        .url
-        .as_deref()
-        .filter(|url| !url.is_empty())
-        .ok_or_else(|| "Trama MCP has no endpoint URL".to_owned())?;
-    let endpoint = revlocal_mcp::HttpEndpoint {
-        id: "trama".to_owned(),
-        url: url.to_owned(),
-        headers: server.headers.clone(),
-    };
-    let client = revlocal_mcp::HttpClient::new(endpoint).map_err(|error| error.to_string())?;
-    let writer = revlocal_publish::McpTramaWriter::new(
-        revlocal_mcp::McpClient::from(client),
-        Arc::new(revlocal_mcp::MacKeychain),
-        revlocal_publish::TramaToolNames::default(),
-    );
-    Ok(Arc::new(revlocal_publish::TramaTarget::new(writer)))
-}
-
 /// Deliver pending and approved Andare actions, leaving durable receipts/errors
 /// on their individual queue rows.
 async fn dispatch_andare(
     pool: revlocal_store::Pool,
     config: &revlocal_core::GlobalConfig,
 ) -> Result<revlocal_publish::DispatchReport, String> {
+    let targets = revlocal_publish::targets_from_config(config);
+    // Approving an Andare action and then finding Andare unbuildable is the one
+    // case this function must report as an error, because the caller's message is
+    // about that approval. Every other destination is registered anyway: a
+    // dispatch pass that deliberately dropped the GitHub actions sitting beside
+    // it would leave them for a tick that may be an hour away.
+    if !targets.has("andare") {
+        return Err(targets
+            .reason("andare")
+            .unwrap_or("Andare is not configured")
+            .to_owned());
+    }
     let mut queue =
         revlocal_publish::PublishQueue::new(pool, revlocal_publish::QueueConfig::default());
-    queue.register(andare_target(config)?);
+    for target in &targets.targets {
+        queue.register(std::sync::Arc::clone(target));
+    }
     queue
         .dispatch_pending(chrono::Utc::now())
         .await
@@ -1861,15 +1809,16 @@ async fn autopilot_tick(app: &tauri::AppHandle) {
 
         // A missing bearer is not a reason to skip reviewing, or to skip
         // publishing: the local report target needs no configuration and is
-        // registered by the tick itself. This adds Andare when it can be built,
-        // and the pass reports any action it could not route.
-        // Each target built independently: one that cannot be configured must not
-        // stop the others delivering. A repository can want a wiki page and no
-        // issue, or the reverse.
-        let targets: Vec<Arc<dyn revlocal_publish::PublishTarget>> = andare_target(&config)
-            .into_iter()
-            .chain(trama_target(&config))
-            .collect();
+        // registered by the tick itself. Each destination is built independently,
+        // so one that cannot be configured does not stop the others delivering —
+        // a repository can want a wiki page and no issue, or the reverse — and
+        // each failure carries its reason to the pass's notes.
+        //
+        // Built by the shared builder rather than by this file, which is where
+        // the two builders used to live. While they lived here, the app could
+        // file to Andare and Trama and the headless daemon could not, and GitHub
+        // was constructed by nothing at all (REVL-223).
+        let targets = revlocal_publish::targets_from_config(&config);
 
         let sink =
             revlocal_tauri::events::EventBridge::new(Arc::new(WindowSink { app: app.clone() }));

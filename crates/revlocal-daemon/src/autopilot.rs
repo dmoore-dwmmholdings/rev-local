@@ -239,17 +239,21 @@ impl TickReport {
 
 /// Run one pass of the whole loop.
 ///
-/// `targets` are the ones only the caller can build — the app's MCP-backed Andare
-/// target, say, which needs a bearer this crate must never read. The local report
-/// target is always registered here rather than being passed in: it needs no
-/// configuration, and making it the caller's job is how `revlocal watch` ended up
-/// reviewing commits and writing nothing anywhere.
+/// `targets` is what `revlocal_publish::targets_from_config` made of the config —
+/// the destinations that need credentials this crate must never read, plus the
+/// reason each one that could not be built could not be built. Both halves are
+/// load-bearing: the built targets are what deliver, and the reasons are what
+/// turn the queue's `unroutable` count into a sentence somebody can act on.
+///
+/// The local report target is always registered here rather than being passed in:
+/// it needs no configuration, and making it the caller's job is how
+/// `revlocal watch` ended up reviewing commits and writing nothing anywhere.
 pub async fn tick(
     pool: &Pool,
     config: &GlobalConfig,
     sink: &dyn RunEventSink,
     data_dir: &Path,
-    targets: &[std::sync::Arc<dyn revlocal_publish::PublishTarget>],
+    targets: &revlocal_publish::TargetSet,
     at: Timestamp,
     cancel: &CancellationToken,
 ) -> Result<TickReport, AutopilotError> {
@@ -415,7 +419,7 @@ pub async fn tick(
     queue.register(std::sync::Arc::new(revlocal_publish::ReportTarget::beside(
         data_dir,
     )));
-    for target in targets {
+    for target in &targets.targets {
         queue.register(std::sync::Arc::clone(target));
     }
 
@@ -426,10 +430,24 @@ pub async fn tick(
             if dispatch.unroutable > 0 {
                 // §18: an action nobody can route is not delivered, and a count
                 // that said nothing would read as a queue that had caught up.
-                report.notes.push(format!(
-                    "{} action(s) name a target that is not configured, so nothing was sent\n  try: add the suite bearer in Settings",
+                //
+                // The count alone sent people to Settings whatever the cause —
+                // including the cause that was really "this binary never built
+                // any target at all" (REVL-223). `TargetSet` carries the reason
+                // per destination, so the note names the destination and what to
+                // do about it, and falls back to the count only when the config
+                // has nothing to say about why.
+                let mut note = format!(
+                    "{} action(s) name a target that is not configured, so nothing was sent",
                     dispatch.unroutable
-                ));
+                );
+                for line in targets.notes() {
+                    note.push_str(&format!("\n  {line}"));
+                }
+                if targets.unavailable.is_empty() {
+                    note.push_str("\n  try: add the suite bearer in Settings");
+                }
+                report.notes.push(note);
             }
         }
         Err(error) => report.notes.push(format!("could not deliver: {error}")),

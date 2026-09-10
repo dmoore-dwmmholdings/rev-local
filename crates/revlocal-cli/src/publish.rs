@@ -71,9 +71,14 @@ pub async fn replay(
     // The local report is the one target this process can build with no
     // configuration, so a replay of one is actually delivered here. GitHub,
     // Andare and Trama need credentials this command does not read: requeuing
-    // still does the useful half — the failed actions become pending again and
-    // the daemon's next dispatch pass sends them — and the report says which
+    // does the other half — the failed actions become pending again and the
+    // daemon's next dispatch pass sends them — and the report says which
     // happened rather than implying a delivery.
+    //
+    // "The daemon will send them" is load-bearing and was, until REVL-223, false:
+    // `revlocal watch` built no tracker target either, so a replayed Andare action
+    // was requeued into a queue nothing could route. `watch` now builds its
+    // destinations from the same config this command reads.
     let mut queue = PublishQueue::new(pool.clone(), QueueConfig::default());
     queue.register(std::sync::Arc::new(revlocal_publish::ReportTarget::beside(
         database.parent().unwrap_or(Path::new(".")),
