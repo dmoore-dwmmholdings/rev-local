@@ -204,6 +204,45 @@ the same problem rewrites one file rather than accumulating duplicates. Drop
 reports, and delivers to the same trackers. `revlocal publish status`/`replay` are
 for inspecting and retrying one run's actions, not for delivery the loop skipped.
 
+## Reviewing history
+
+```
+revlocal backfill --repo <NAME> --since <REF> [--limit N] [--dry-run]
+```
+
+`--since` is a starting point in the repository's own terms — a sha, a date, an
+svn revision. Everything after it is reviewed oldest first.
+
+```
+$ revlocal backfill --repo legacy --since 6563307 --limit 5
+backfill:commits:main: 5 change(s) to review
+  5 more match --since and were excluded by --limit
+  reviewed 2a43ab43b7 — comment (1 finding(s), 1 action(s), done)
+  reviewed 9f21c0e4aa — approve (0 finding(s), 0 action(s), done)
+  skipped: 4c9182bbd1: merge commit
+  ...
+```
+
+Three things make it safe to point at four years of history:
+
+- **It goes behind live work, at every step.** Not throttled — strictly behind. A
+  single commit you push mid-sweep stops the sweep, and it resumes when that
+  commit has been reviewed. A history of twenty thousand commits can never make
+  today's commit wait.
+- **It respects the daily budget**, checked before each item rather than at the
+  start, and stops naming the budget when it runs out.
+- **It is resumable.** The `backfill:` cursor advances after every item, so a
+  sweep interrupted at 9,000 of 10,000 resumes at 9,000. Run the same command
+  again to continue; you do not need to work out a new `--since`.
+
+Skip rules apply to history exactly as they apply to new commits — a merge commit
+from 2019 is skipped for the same reason this morning's is, and the decision is
+recorded so a second sweep does not re-decide it.
+
+**`--dry-run` costs nothing.** It takes no engine and cannot reach one, which is
+the point: the reason to dry-run a backfill is to find out what it would spend
+before spending it.
+
 ### What it reviews
 
 `review_commits` and `review_prs` decide which kinds of change are eligible. Both

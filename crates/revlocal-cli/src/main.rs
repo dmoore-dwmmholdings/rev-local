@@ -60,15 +60,21 @@ enum Command {
         /// How many changes to take.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
-        /// Enumerate without enqueueing anything.
+        /// Enumerate without reviewing anything.
         ///
-        /// The default today, because execution needs the run registry. Kept as a
-        /// flag so the invocation does not change when it starts doing more.
+        /// The reason to dry-run a backfill is to find out what it would cost
+        /// before spending it, so this path takes no engine and cannot reach one.
         #[arg(long)]
         dry_run: bool,
         /// The database to read.
         #[arg(long, value_name = "PATH")]
         database: PathBuf,
+        /// §13.1's config. Defaults apply when omitted.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+        /// Where transcripts and reports are written. Beside the database when omitted.
+        #[arg(long, value_name = "PATH")]
+        data_dir: Option<PathBuf>,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -893,9 +899,52 @@ fn main() -> ExitCode {
     }
 }
 
+/// Read §13.1's config from `path`, or take its documented defaults.
+///
+/// Absent is not an error: a fresh install has no file and the defaults *are* the
+/// document. A file that is there and unreadable, or there and malformed, is —
+/// silently falling back to defaults would review with settings nobody chose.
+///
+/// Shared rather than repeated per command. `watch` grew this block first and
+/// `backfill` needed the same three sentences; two copies of "which config am I
+/// running under" is how two commands start disagreeing about it.
+fn load_global_config(path: Option<&Path>) -> Result<revlocal_core::GlobalConfig, CliError> {
+    let Some(path) = path else {
+        return Ok(revlocal_core::GlobalConfig::default());
+    };
+    let text = std::fs::read_to_string(path).map_err(|source| CliError::Config {
+        detail: format!(
+            "could not read {}: {source}\n  try: check the path, or omit --config to use \
+             §13.1's defaults",
+            path.display()
+        ),
+    })?;
+    let (parsed, warnings) =
+        revlocal_core::GlobalConfig::parse(&text).map_err(|source| CliError::Config {
+            detail: format!(
+                "{}: {source}\n  try: revlocal config check --config {}",
+                path.display(),
+                path.display()
+            ),
+        })?;
+    // §18: unknown keys are surfaced rather than dropped, and on stderr so a
+    // `--json` stdout stays exactly one document.
+    for warning in &warnings {
+        eprintln!("revlocal: {}", warning.message());
+    }
+    Ok(parsed)
+}
+
 /// Anything a command can fail with.
 #[derive(Debug, thiserror::Error)]
 enum CliError {
+    /// §13.1's config could not be read or parsed.
+    #[error("{detail}")]
+    Config {
+        /// What is wrong and what to try.
+        detail: String,
+    },
+
     /// The store could not be opened or migrated.
     #[error(transparent)]
     Store(#[from] revlocal_store::StoreError),
@@ -1101,14 +1150,36 @@ async fn run(command: Command) -> Result<(), CliError> {
             limit,
             dry_run,
             database,
+            config,
+            data_dir,
             json,
         } => {
-            let _ = dry_run;
             let pool = revlocal_store::open(&database).await?;
-            let report =
-                backfill::plan_backfill(&pool, &repo, &since, limit, chrono::Utc::now()).await?;
+            let at = chrono::Utc::now();
+            let report = if dry_run {
+                backfill::plan_backfill(&pool, &repo, &since, limit, at).await
+            } else {
+                let global = load_global_config(config.as_deref())?;
+                let data_dir = data_dir.unwrap_or_else(|| {
+                    database
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .to_path_buf()
+                });
+                backfill::run_backfill(
+                    &pool,
+                    &global,
+                    &data_dir,
+                    &repo,
+                    &since,
+                    limit,
+                    at,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            };
             pool.close().await;
-            println!("{}", backfill::render(&report, json)?);
+            println!("{}", backfill::render(&report?, json)?);
             Ok(())
         }
 

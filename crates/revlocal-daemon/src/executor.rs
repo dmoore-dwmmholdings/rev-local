@@ -179,6 +179,28 @@ pub async fn enqueue_manual(
     change: &Change,
     at: Timestamp,
 ) -> Result<Run, ExecutorError> {
+    enqueue_one(pool, repo, change, TriggerSource::Manual, at).await
+}
+
+/// Queue one named change under `trigger`, without running it.
+///
+/// The body of [`enqueue_manual`], with the trigger as a parameter. Backfill
+/// needs the same "this exact change, even though it may already have a run"
+/// semantics and a *different* trigger: §7.4 gives backfill its own source so a
+/// history sweep is distinguishable from a human asking, and §5's CHECK
+/// constraint on `run.trigger` lists both.
+///
+/// Sharing the body rather than copying it is not tidiness. The attempt counter,
+/// the upsert and the overflow refusal are three things that must agree between
+/// the two callers, and the version that was copied would have been the one that
+/// stopped agreeing.
+pub async fn enqueue_one(
+    pool: &Pool,
+    repo: &Repo,
+    change: &Change,
+    trigger: TriggerSource,
+    at: Timestamp,
+) -> Result<Run, ExecutorError> {
     let change = ChangeStore::new(pool).upsert(change).await.map_err(boxed)?;
     let runs = RunStore::new(pool);
     let attempt = runs
@@ -203,7 +225,7 @@ pub async fn enqueue_manual(
         status: RunStatus::Queued,
         engine: repo.engine,
         depth: Depth::Standard,
-        trigger: TriggerSource::Manual,
+        trigger,
         skip_reason: None,
         error: None,
         error_detail: None,

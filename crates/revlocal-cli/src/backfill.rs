@@ -115,6 +115,12 @@ pub struct BackfillReport {
     /// §18 one level up: if this is true, `excluded_by_limit` is itself a lower
     /// bound, and saying nothing would make a capped count read as a total.
     pub truncated_enumeration: bool,
+    /// What the sweep actually did, when it ran (REVL-209).
+    ///
+    /// Absent under `--dry-run`, which is the whole difference between the two
+    /// modes: one says what it *would* review and one says what it reviewed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<revlocal_daemon::backfill::BackfillOutcome>,
 }
 
 impl BackfillReport {
@@ -133,10 +139,31 @@ impl BackfillReport {
             out.push('\n');
         }
         if !self.executed {
+            // §7.4 makes execution the default and `--dry-run` the opt-out, so
+            // this line is now what a dry run says rather than an apology for a
+            // half-built command. It names the invocation that would spend,
+            // because the reason to dry-run is to decide whether to.
             out.push_str(
-                "\nNothing was enqueued. Reviews are not executed from here yet; \
-                 `revlocal review --repo <path> --rev <ref>` reviews one change today.\n",
+                "\nNothing was reviewed — this was a dry run. Drop --dry-run to \
+                 review these changes.\n",
             );
+            return out;
+        }
+        match &self.outcome {
+            Some(outcome) => {
+                for line in outcome.summary_lines() {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+                if outcome.finished_the_plan() && outcome.reviewed.is_empty() {
+                    // "Nothing to do" is a result, and a command that printed a
+                    // header and stopped would read as one that failed quietly.
+                    out.push_str("  nothing to review\n");
+                }
+            }
+            // Marked executed with nothing to show is a contradiction, and saying
+            // so beats printing the plan as though it had run.
+            None => out.push_str("  (no outcome was recorded for this run)\n"),
         }
         out
     }
@@ -172,6 +199,49 @@ impl BackfillReport {
     }
 }
 
+/// A planned backfill, with everything execution needs alongside it.
+///
+/// `changes` is carried rather than re-derived. A [`BackfillItem`] has an id and
+/// a summary — enough to *list*, not enough to review: materialisation needs the
+/// branch and refs that only the adapter's own `Change` rows carry. Enumerating
+/// twice would also mean a repository could gain a commit between the two walks
+/// and the plan could name something the execution never saw.
+pub struct Planned {
+    /// The repository, resolved.
+    pub repo: revlocal_core::Repo,
+    /// What would be reviewed, after `--since`, resume and `--limit`.
+    pub plan: BackfillPlan,
+    /// The adapter's rows for those items, and for everything else enumerated.
+    ///
+    /// Kept in the adapter's own shape rather than the stored one: §9.4's skip
+    /// rules need the parents and paths that a `change` row does not carry, and
+    /// the execution evaluates them exactly as discovery does.
+    pub changes: Vec<revlocal_vcs::DetectedChange>,
+    /// Whether enumeration itself hit [`ENUMERATION_CAP`].
+    pub truncated_enumeration: bool,
+}
+
+impl Planned {
+    /// The report for this plan, before anything has run.
+    pub fn report(&self) -> BackfillReport {
+        BackfillReport {
+            repo: self.repo.name.clone(),
+            scope: self.plan.scope.clone(),
+            resumed_from: self.plan.resumed_from.clone(),
+            items: self
+                .plan
+                .items
+                .iter()
+                .map(|item| format!("{} {}", item.external_id, item.summary))
+                .collect(),
+            excluded_by_limit: self.plan.excluded_by_limit,
+            executed: false,
+            truncated_enumeration: self.truncated_enumeration,
+            outcome: None,
+        }
+    }
+}
+
 /// Plan a backfill without running anything (§7.4).
 ///
 /// Takes no engine and cannot reach one.
@@ -180,8 +250,27 @@ pub async fn plan_backfill(
     repo_name: &str,
     since: &str,
     limit: Option<usize>,
-    _at: Timestamp,
+    at: Timestamp,
 ) -> Result<BackfillReport, BackfillError> {
+    Ok(enumerate(pool, repo_name, since, limit, at).await?.report())
+}
+
+/// Walk history and decide what a backfill would review.
+///
+/// Shared by the dry run and the execution, which is the point: a `--dry-run`
+/// that answered a different question from the run it precedes would be a worse
+/// than useless preview, and two copies of this walk would eventually answer
+/// differently.
+///
+/// Takes no engine and cannot reach one, so the dry-run path still cannot spend
+/// anything (RL-1007 criterion 3).
+pub async fn enumerate(
+    pool: &Pool,
+    repo_name: &str,
+    since: &str,
+    limit: Option<usize>,
+    _at: Timestamp,
+) -> Result<Planned, BackfillError> {
     let repo = RepoStore::new(pool)
         .list()
         .await
@@ -264,18 +353,11 @@ pub async fn plan_backfill(
 
     let planned: BackfillPlan = plan(repo.id, &scope, &candidates, resume.as_deref(), limit);
 
-    Ok(BackfillReport {
-        repo: repo.name.clone(),
-        scope: planned.scope.clone(),
-        resumed_from: planned.resumed_from.clone(),
-        items: planned
-            .items
-            .iter()
-            .map(|item| format!("{} {}", item.external_id, item.summary))
-            .collect(),
-        excluded_by_limit: planned.excluded_by_limit,
-        executed: false,
+    Ok(Planned {
         truncated_enumeration: candidates.len() >= ENUMERATION_CAP,
+        repo,
+        plan: planned,
+        changes,
     })
 }
 
@@ -291,4 +373,53 @@ pub fn render(report: &BackfillReport, json: bool) -> Result<String, BackfillErr
             .map_err(|source| BackfillError::Unrenderable { source });
     }
     Ok(report.render_human())
+}
+
+/// Run a backfill: enumerate, then review, oldest first (§7.4).
+///
+/// The command §7.4 describes — `--dry-run` is the opt-out, not the only mode.
+/// Until REVL-209 this function did not exist and `plan_backfill` hardcoded
+/// `executed: false`, so the spec clause "enqueues them at low priority behind
+/// live work" was answered by a line of output apologising for not doing it.
+///
+/// Everything about ordering, fairness and resumption lives in
+/// `revlocal_daemon::backfill::execute`. This resolves the config, the engine and
+/// the data directory — the three things a review needs that enumeration does
+/// not — and hands over.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_backfill(
+    pool: &Pool,
+    config: &revlocal_core::GlobalConfig,
+    data_dir: &std::path::Path,
+    repo_name: &str,
+    since: &str,
+    limit: Option<usize>,
+    at: Timestamp,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<BackfillReport, BackfillError> {
+    let planned = enumerate(pool, repo_name, since, limit, at).await?;
+    let mut report = planned.report();
+
+    let outcome = revlocal_daemon::backfill::execute(
+        pool,
+        config,
+        &revlocal_daemon::state_machine::NullSink,
+        data_dir,
+        &planned.repo,
+        planned.plan,
+        &planned.changes,
+        at,
+        cancel,
+    )
+    .await
+    .map_err(|error| BackfillError::Enumerate {
+        since: since.to_owned(),
+        detail: error.to_string(),
+        hint: "check `revlocal doctor` — a backfill needs the same engine a live review does"
+            .to_owned(),
+    })?;
+
+    report.executed = true;
+    report.outcome = Some(outcome);
+    Ok(report)
 }

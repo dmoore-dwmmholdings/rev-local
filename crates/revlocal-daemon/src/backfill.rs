@@ -306,3 +306,386 @@ impl ManualReview {
         false
     }
 }
+
+// --- the driver (REVL-209, §7.4) --------------------------------------------
+
+/// What one backfill actually did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BackfillOutcome {
+    /// Reviews that finished, oldest first.
+    pub reviewed: Vec<crate::executor::RunOutcome>,
+    /// Items recorded this run — the cursor has advanced past each of them.
+    pub completed: usize,
+    /// Items still ahead of the cursor when this stopped.
+    pub remaining: usize,
+    /// Why it stopped before finishing, when it did.
+    ///
+    /// §18: standing aside for live work, running out of budget and finishing the
+    /// plan are three different outcomes, and a command that reported the item
+    /// count alone would make the first two look like the third.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<String>,
+    /// Where the `backfill:` cursor now points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Reviews that did not go ahead, and why — never dropped in silence (§18).
+    pub held: Vec<String>,
+    /// Changes §9.4 said not to review, with the reason.
+    ///
+    /// Separate from `held`: a skipped change is a *decision* that was made and
+    /// recorded, and a held one is work that still wants doing. Collapsing them
+    /// would make "we deliberately ignored 400 merge commits" read like "400
+    /// reviews failed".
+    pub skipped: Vec<String>,
+}
+
+impl BackfillOutcome {
+    /// Whether the plan was worked to its end.
+    pub const fn finished_the_plan(&self) -> bool {
+        self.stopped.is_none()
+    }
+
+    /// The lines a terminal prints after a backfill.
+    pub fn summary_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for outcome in &self.reviewed {
+            lines.push(format!(
+                "  reviewed {} — {} ({} finding(s), {} action(s), {})",
+                outcome.change,
+                outcome.verdict.as_deref().unwrap_or("no verdict"),
+                outcome.findings,
+                outcome.actions,
+                outcome.status
+            ));
+        }
+        for skipped in &self.skipped {
+            lines.push(format!("  skipped: {skipped}"));
+        }
+        for held in &self.held {
+            lines.push(format!("  held: {held}"));
+        }
+        if let Some(stopped) = &self.stopped {
+            lines.push(format!("  stopped: {stopped}"));
+            // The resume instruction, next to the reason it is needed. A backfill
+            // that stood aside for live work is *not* abandoned, and somebody who
+            // is not told that will re-run it with a fresh `--since` and review
+            // everything twice.
+            lines.push(format!(
+                "  {} item(s) left; run the same command again to continue from the cursor",
+                self.remaining
+            ));
+        }
+        lines
+    }
+}
+
+/// Whether this repository has live work waiting.
+///
+/// "Live" is everything a human or a trigger produced — anything whose source is
+/// not a backfill. §7.4 puts backfill strictly behind it, so this is asked before
+/// **every** item rather than once at the start: a sweep of twenty thousand
+/// commits takes hours, and a commit pushed during hour two must not wait for
+/// hour six.
+///
+/// Runs already in flight count, not only queued ones. A run that is `reviewing`
+/// is live work in progress, and a backfill that started an engine beside it
+/// would put two engines on one repository — which `max_concurrent_runs` exists
+/// to prevent and which this would route around.
+pub async fn live_work_pending(
+    pool: &revlocal_store::Pool,
+    repo_id: RepoId,
+) -> Result<bool, revlocal_store::StoreError> {
+    use revlocal_core::RunStatus;
+
+    let store = revlocal_store::RunStore::new(pool);
+    for status in [
+        RunStatus::Queued,
+        RunStatus::Preparing,
+        RunStatus::Reviewing,
+        RunStatus::Synthesizing,
+    ] {
+        let runs = store.list_recent(Some(repo_id), Some(status), 200).await?;
+        if runs.iter().any(|run| run.trigger != BACKFILL_TRIGGER) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Review a planned backfill, oldest first, yielding to live work at every step.
+///
+/// # Why this drives reviews rather than filling the ordinary queue
+///
+/// Recording the changes and letting the normal loop enqueue them is smaller —
+/// `enqueue` already picks up changes with no run. It is also wrong: the executor
+/// takes the **oldest** queued run first, so history would run *ahead* of live
+/// work, which is precisely what §7.4 and [`Yielded::LiveWorkPending`] exist to
+/// prevent. The cheaper design quietly inverts the guarantee, which is worse than
+/// not having it, because the code would still contain a fairness check that
+/// looks like it is holding.
+///
+/// So the sweep owns its own loop and asks [`Backfill::next_step`] between items.
+///
+/// # `changes` is what the adapter found, not what the plan says
+///
+/// A [`BackfillItem`] carries an id and a summary — enough to *list*, not enough
+/// to review. The adapter's own [`DetectedChange`](revlocal_vcs::DetectedChange)
+/// carries the branch, the refs, the parents and the paths that materialisation
+/// and §9.4's skip rules need, so they are passed alongside and matched by
+/// `external_id`. An item with no matching change is reported rather than
+/// skipped: it means enumeration and planning disagree, and silently reviewing
+/// fewer commits than were listed is the failure §18 is about.
+///
+/// # A backfill obeys the same skip rules as discovery
+///
+/// §9.4 is about the change, not about when it was found. A merge commit is a
+/// merge commit whether it landed this morning or in 2019, and a sweep that
+/// reviewed the ones discovery skips would spend real tokens producing findings
+/// the live loop had already decided nobody wants. The skipped run is recorded
+/// with its reason, exactly as discovery records it, so `--since` twice over the
+/// same history does not re-decide anything.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute(
+    pool: &revlocal_store::Pool,
+    config: &revlocal_core::GlobalConfig,
+    sink: &dyn crate::state_machine::RunEventSink,
+    data_dir: &std::path::Path,
+    repo: &revlocal_core::Repo,
+    plan: BackfillPlan,
+    changes: &[revlocal_vcs::DetectedChange],
+    at: Timestamp,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<BackfillOutcome, crate::executor::ExecutorError> {
+    let scope = plan.scope.clone();
+    let repo_config =
+        serde_json::from_str::<revlocal_core::RepoConfig>(&repo.config_json).unwrap_or_default();
+    let mut driver = Backfill::new(plan);
+    let mut outcome = BackfillOutcome::default();
+
+    loop {
+        if cancel.is_cancelled() {
+            // Ctrl-C during a long backfill is the expected way to stop one, not
+            // an exceptional case. The cursor is already at the last recorded
+            // item, so this is a pause rather than a loss.
+            outcome.stopped = Some("cancelled; the cursor is at the last item reviewed".to_owned());
+            break;
+        }
+
+        let live = live_work_pending(pool, repo.id).await.map_err(|source| {
+            crate::executor::ExecutorError::Store {
+                source: Box::new(source),
+            }
+        })?;
+        let verdict = repo_budget(pool, config, repo.id, at).await?;
+
+        match driver.next_step(live, &verdict) {
+            Step::Done => break,
+            Step::Yield(Yielded::LiveWorkPending) => {
+                outcome.stopped =
+                    Some("live work is waiting, and backfill goes behind it (§7.4)".to_owned());
+                break;
+            }
+            Step::Yield(Yielded::BudgetExhausted { reason }) => {
+                outcome.stopped = Some(reason);
+                break;
+            }
+            Step::Review(item) => {
+                let Some(change) = changes
+                    .iter()
+                    .find(|change| change.external_id == item.external_id)
+                else {
+                    // Reported, never skipped past: this means the plan and the
+                    // enumeration disagree, and a sweep that quietly reviewed
+                    // fewer commits than it listed would be indistinguishable
+                    // from one that reviewed them all.
+                    outcome.held.push(format!(
+                        "{}: planned but not among the enumerated changes, so there is nothing to review",
+                        item.external_id
+                    ));
+                    driver.recorded(&item);
+                    continue;
+                };
+
+                let stored = record_change(pool, repo, change, at).await?;
+
+                // §9.4, evaluated here for the same reason discovery evaluates it
+                // there: the rules need the parents and paths that only the
+                // adapter's row carries, and re-deriving the answer later from
+                // less information is how two answers to one question start
+                // disagreeing.
+                if let Some(skip) = revlocal_vcs::skip_rules::evaluate(change, &repo_config) {
+                    record_skipped(pool, repo, stored.id, &skip.detail, at).await?;
+                    outcome
+                        .skipped
+                        .push(format!("{}: {}", item.external_id, skip.detail));
+                    driver.recorded(&item);
+                    advance(pool, repo, &scope, &driver, &mut outcome, at).await?;
+                    continue;
+                }
+
+                let run =
+                    crate::executor::enqueue_one(pool, repo, &stored, BACKFILL_TRIGGER, at).await?;
+
+                match crate::executor::execute_run(pool, config, sink, data_dir, run.id, at, cancel)
+                    .await?
+                {
+                    Ok(finished) => outcome.reviewed.push(finished),
+                    // A refusal, not a crash: the checkout is gone, the kill
+                    // switch went on, the repository was disabled. The run row
+                    // carries the reason and so does this report.
+                    Err(reason) => outcome.held.push(reason),
+                }
+
+                // Per item, after the attempt, never batched at the end. An
+                // interrupt at nine thousand of ten thousand resumes at nine
+                // thousand.
+                //
+                // Advanced even when the attempt was held or failed, because the
+                // run row now exists and carries the outcome: the change is
+                // *covered*. Not advancing would make one broken commit a wall
+                // the sweep could never get past, re-reviewing it on every run
+                // and never reaching the ten thousand behind it.
+                driver.recorded(&item);
+                advance(pool, repo, &scope, &driver, &mut outcome, at).await?;
+            }
+        }
+    }
+
+    outcome.completed = driver.completed();
+    outcome.remaining = driver.remaining();
+    Ok(outcome)
+}
+
+/// This repository's budget verdict right now (§13.1).
+///
+/// Read before every item rather than once, for the same reason `live_pending` is:
+/// a sweep long enough to matter is long enough to cross the line, and a budget
+/// checked at the start is a budget that bounds nothing.
+async fn repo_budget(
+    pool: &revlocal_store::Pool,
+    config: &revlocal_core::GlobalConfig,
+    repo_id: RepoId,
+    at: Timestamp,
+) -> Result<BudgetVerdict, crate::executor::ExecutorError> {
+    let day = crate::budgets::day_of(at);
+    let spent = revlocal_store::BudgetLedgerStore::new(pool)
+        .get(repo_id, &day)
+        .await
+        .map_err(|source| crate::executor::ExecutorError::Store {
+            source: Box::new(source),
+        })?;
+    Ok(crate::budgets::check(spent.as_ref(), &config.budgets))
+}
+
+/// Store the adapter's row for one change, returning the stored form.
+///
+/// The same upsert discovery does, for the same reason: a backfill and a live
+/// pass can reach the same commit, and two rows for one change would give it two
+/// review histories.
+async fn record_change(
+    pool: &revlocal_store::Pool,
+    repo: &revlocal_core::Repo,
+    change: &revlocal_vcs::DetectedChange,
+    at: Timestamp,
+) -> Result<revlocal_core::Change, crate::executor::ExecutorError> {
+    revlocal_store::ChangeStore::new(pool)
+        .upsert(&revlocal_core::Change {
+            id: revlocal_core::ChangeId::new(0),
+            repo_id: repo.id,
+            kind: change.kind,
+            external_id: change.external_id.clone(),
+            title: change.title.clone(),
+            author_name: change.author_name.clone(),
+            author_email: change.author_email.clone(),
+            authored_at: change.authored_at,
+            branch: change.branch.clone(),
+            base_ref: change.base_ref.clone(),
+            head_ref: change.head_ref.clone(),
+            url: change.url.clone(),
+            diff_stat: change.diff_stat,
+            detected_at: at,
+        })
+        .await
+        .map_err(|source| crate::executor::ExecutorError::Store {
+            source: Box::new(source),
+        })
+}
+
+/// Record the decision not to review one change (§9.4).
+///
+/// Only once. A change discovery already skipped keeps that run rather than
+/// gaining a second identical one, so a backfill over history the live loop has
+/// already walked adds nothing to the run table.
+async fn record_skipped(
+    pool: &revlocal_store::Pool,
+    repo: &revlocal_core::Repo,
+    change_id: revlocal_core::ChangeId,
+    reason: &str,
+    at: Timestamp,
+) -> Result<(), crate::executor::ExecutorError> {
+    let runs = revlocal_store::RunStore::new(pool);
+    let existing = runs.list_for_change(change_id).await.map_err(|source| {
+        crate::executor::ExecutorError::Store {
+            source: Box::new(source),
+        }
+    })?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
+
+    runs.insert(&revlocal_core::Run {
+        id: revlocal_core::RunId::new(0),
+        change_id,
+        attempt: 1,
+        status: revlocal_core::RunStatus::Skipped,
+        engine: repo.engine,
+        depth: revlocal_core::Depth::Summary,
+        trigger: BACKFILL_TRIGGER,
+        skip_reason: Some(reason.to_owned()),
+        error: None,
+        error_detail: None,
+        degraded: None,
+        usage: revlocal_core::Usage::default(),
+        started_at: None,
+        finished_at: Some(at),
+        transcript_path: None,
+        truncated: false,
+        omitted_files: Vec::new(),
+        verdict: None,
+        summary: None,
+        created_at: at,
+    })
+    .await
+    .map(|_| ())
+    .map_err(|source| crate::executor::ExecutorError::Store {
+        source: Box::new(source),
+    })
+}
+
+/// Move the `backfill:` cursor to the last recorded item.
+///
+/// Called after **every** item, reviewed or skipped, never batched at the end.
+/// §7.4's resumability is the whole reason the scope exists, and a cursor written
+/// once at the end would make an interrupted sweep of ten thousand commits resume
+/// at zero.
+async fn advance(
+    pool: &revlocal_store::Pool,
+    repo: &revlocal_core::Repo,
+    scope: &str,
+    driver: &Backfill,
+    outcome: &mut BackfillOutcome,
+    at: Timestamp,
+) -> Result<(), crate::executor::ExecutorError> {
+    outcome.completed = driver.completed();
+    let Some(value) = driver.cursor_value() else {
+        return Ok(());
+    };
+    revlocal_store::CursorStore::new(pool)
+        .advance(repo.id, scope, value, at)
+        .await
+        .map_err(|source| crate::executor::ExecutorError::Store {
+            source: Box::new(source),
+        })?;
+    outcome.cursor = Some(value.to_owned());
+    Ok(())
+}

@@ -2435,8 +2435,11 @@ mod backfill_command {
             resumed_from: None,
             items: (0..items).map(|i| format!("sha{i} commit {i}")).collect(),
             excluded_by_limit: excluded,
+            // The dry-run shape: `--dry-run` is the mode that reports a plan and
+            // no outcome, and these assertions are about how a plan reads.
             executed: false,
             truncated_enumeration: truncated,
+            outcome: None,
         }
     }
 
@@ -2473,15 +2476,59 @@ mod backfill_command {
     }
 
     #[test]
-    fn a_plan_says_it_enqueued_nothing_rather_than_implying_it_did() {
+    fn a_dry_run_says_it_reviewed_nothing_rather_than_implying_it_did() {
         // Same rule as `watch`: a command that lists work and silently does none
         // of it is indistinguishable from one that did it all.
+        //
+        // This test used to assert "Nothing was enqueued … `revlocal review`
+        // reviews one change today", which was `backfill` being honest about
+        // being half built. REVL-209 built the other half, so the premise is
+        // gone — but the rule is not, and it now applies to `--dry-run`, which is
+        // the mode that deliberately does nothing. Retargeted rather than
+        // deleted: the assertion was never about the missing feature, it was
+        // about not letting a list read as a result.
         let human = report(3, 0, false).render_human();
 
-        assert!(human.contains("Nothing was enqueued"), "{human}");
+        assert!(human.contains("dry run"), "{human}");
         assert!(
-            human.contains("revlocal review"),
-            "must name what works: {human}"
+            human.contains("--dry-run"),
+            "must name the flag that made it do nothing, so it can be dropped: {human}"
+        );
+        assert!(
+            !human
+                .lines()
+                .any(|line| line.trim_start().starts_with("reviewed ")),
+            "a dry run must not print per-item review results: {human}"
+        );
+    }
+
+    #[test]
+    fn a_sweep_that_ran_reports_what_it_did_and_why_it_stopped() {
+        // The other half of the same rule (REVL-209). A backfill that stood aside
+        // for live work, one that ran out of budget, and one that finished are
+        // three different outcomes, and an item count alone makes the first two
+        // look like the third.
+        let mut ran = report(3, 0, false);
+        ran.executed = true;
+        ran.outcome = Some(revlocal_daemon::backfill::BackfillOutcome {
+            stopped: Some("live work is waiting, and backfill goes behind it (§7.4)".to_owned()),
+            remaining: 3,
+            ..revlocal_daemon::backfill::BackfillOutcome::default()
+        });
+
+        let human = ran.render_human();
+        assert!(
+            human.contains("stopped: live work is waiting"),
+            "standing aside must be reported, never silent: {human}"
+        );
+        assert!(
+            human.contains("3 item(s) left"),
+            "and it must say the plan survives, or somebody re-runs it with a \
+             fresh --since and reviews everything twice: {human}"
+        );
+        assert!(
+            !human.contains("dry run"),
+            "a sweep that ran is not a dry run: {human}"
         );
     }
 
