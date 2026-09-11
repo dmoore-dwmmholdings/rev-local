@@ -35,6 +35,7 @@ describe('approvals', () => {
       <Approvals
         view={{ waiting: [action()] }}
         onApprove={noop}
+        onApproveRun={noop}
         onReject={noop}
         onEdit={noop}
       />,

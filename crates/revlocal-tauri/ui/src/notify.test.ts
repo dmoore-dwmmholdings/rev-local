@@ -44,6 +44,7 @@ describe('notification reasons', () => {
       capability: 'post_review',
       risk: 'high',
       payload_json: '{}',
+      held_by: { reason: 'high risk, and the global autonomy is `auto_low_ask_high`' },
       has_finding: true,
     };
 
